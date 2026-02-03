@@ -46,20 +46,15 @@ impl MemoryIndex {
                 size INTEGER NOT NULL
             );
 
-            -- Chunked content with embeddings
+            -- Chunked content (embedding columns added via migration)
             CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY,
                 file_path TEXT NOT NULL,
                 line_start INTEGER NOT NULL,
                 line_end INTEGER NOT NULL,
                 content TEXT NOT NULL,
-                embedding TEXT,
-                embedding_model TEXT,
                 FOREIGN KEY (file_path) REFERENCES files(path) ON DELETE CASCADE
             );
-
-            -- Index for finding chunks without embeddings
-            CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks(embedding_model);
 
             -- Full-text search index
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
@@ -256,10 +251,16 @@ impl MemoryIndex {
             .is_ok();
 
         if !has_embedding {
-            debug!("Migrating: adding embedding column to chunks");
+            debug!("Migrating: adding embedding columns to chunks");
             conn.execute("ALTER TABLE chunks ADD COLUMN embedding TEXT", [])?;
             conn.execute("ALTER TABLE chunks ADD COLUMN embedding_model TEXT", [])?;
         }
+
+        // Create index (safe to run even if exists due to IF NOT EXISTS)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks(embedding_model)",
+            [],
+        )?;
 
         Ok(())
     }
