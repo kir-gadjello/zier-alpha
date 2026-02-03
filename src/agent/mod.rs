@@ -1,6 +1,7 @@
 mod providers;
 mod session;
 mod session_store;
+mod system_prompt;
 mod tools;
 
 pub use providers::{
@@ -10,6 +11,10 @@ pub use session::{
     get_sessions_dir_for_agent, get_state_dir, Session, SessionStatus, DEFAULT_AGENT_ID,
 };
 pub use session_store::{SessionEntry, SessionStore};
+pub use system_prompt::{
+    build_heartbeat_prompt, is_heartbeat_ok, is_silent_reply, HEARTBEAT_OK_TOKEN,
+    SILENT_REPLY_TOKEN,
+};
 pub use tools::{Tool, ToolResult};
 
 use anyhow::Result;
@@ -63,11 +68,26 @@ impl Agent {
     pub async fn new_session(&mut self) -> Result<()> {
         self.session = Session::new();
 
-        // Load memory context
+        // Build system prompt with identity, safety, workspace info
+        let tool_names: Vec<&str> = self.tools.iter().map(|t| t.name()).collect();
+        let system_prompt_params = system_prompt::SystemPromptParams::new(
+            self.memory.workspace(),
+            &self.config.model,
+        )
+        .with_tools(tool_names);
+        let system_prompt = system_prompt::build_system_prompt(system_prompt_params);
+
+        // Load memory context (SOUL.md, MEMORY.md, daily logs, HEARTBEAT.md)
         let memory_context = self.build_memory_context().await?;
-        if !memory_context.is_empty() {
-            self.session.set_system_context(memory_context);
-        }
+
+        // Combine system prompt with memory context
+        let full_context = if memory_context.is_empty() {
+            system_prompt
+        } else {
+            format!("{}\n\n---\n\n# Workspace Context\n\n{}", system_prompt, memory_context)
+        };
+
+        self.session.set_system_context(full_context);
 
         info!("Created new session: {}", self.session.id());
         Ok(())
@@ -241,13 +261,16 @@ impl Agent {
     }
 
     async fn memory_flush(&mut self) -> Result<()> {
-        let flush_prompt = r#"Pre-compaction memory flush.
-Store durable memories now (use memory/YYYY-MM-DD.md).
-If nothing to store, reply: NO_REPLY"#;
+        let flush_prompt = format!(
+            "Pre-compaction memory flush.\n\
+             Store durable memories now (use memory/YYYY-MM-DD.md).\n\
+             If nothing to store, reply: {}",
+            SILENT_REPLY_TOKEN
+        );
 
         let messages = vec![Message {
             role: Role::System,
-            content: flush_prompt.to_string(),
+            content: flush_prompt,
             tool_calls: None,
             tool_call_id: None,
         }];
@@ -255,7 +278,7 @@ If nothing to store, reply: NO_REPLY"#;
         let response = self.provider.chat(&messages, None).await?;
 
         if let LLMResponse::Text(text) = response {
-            if text.trim() != "NO_REPLY" {
+            if !is_silent_reply(&text) {
                 debug!("Memory flush response: {}", text);
             }
         }

@@ -8,13 +8,9 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
-use crate::agent::{Agent, AgentConfig};
+use crate::agent::{build_heartbeat_prompt, is_heartbeat_ok, Agent, AgentConfig, HEARTBEAT_OK_TOKEN};
 use crate::config::{parse_duration, parse_time, Config};
 use crate::memory::MemoryManager;
-
-const HEARTBEAT_PROMPT: &str = r#"Read HEARTBEAT.md if it exists. Follow it strictly.
-Do not infer old tasks from prior conversations.
-If nothing needs attention, reply exactly: HEARTBEAT_OK"#;
 
 pub struct HeartbeatRunner {
     config: Config,
@@ -72,7 +68,7 @@ impl HeartbeatRunner {
             // Run heartbeat
             match self.run_once().await {
                 Ok(response) => {
-                    if response == "HEARTBEAT_OK" {
+                    if is_heartbeat_ok(&response) {
                         debug!("Heartbeat: OK");
                     } else {
                         info!("Heartbeat response: {}", response);
@@ -92,13 +88,13 @@ impl HeartbeatRunner {
 
         if !heartbeat_path.exists() {
             debug!("No HEARTBEAT.md found");
-            return Ok("HEARTBEAT_OK".to_string());
+            return Ok(HEARTBEAT_OK_TOKEN.to_string());
         }
 
         let content = fs::read_to_string(&heartbeat_path)?;
         if content.trim().is_empty() {
             debug!("HEARTBEAT.md is empty");
-            return Ok("HEARTBEAT_OK".to_string());
+            return Ok(HEARTBEAT_OK_TOKEN.to_string());
         }
 
         // Create agent for heartbeat
@@ -113,7 +109,8 @@ impl HeartbeatRunner {
         agent.new_session().await?;
 
         // Send heartbeat prompt
-        let response = agent.chat(HEARTBEAT_PROMPT).await?;
+        let heartbeat_prompt = build_heartbeat_prompt();
+        let response = agent.chat(&heartbeat_prompt).await?;
 
         Ok(response)
     }
