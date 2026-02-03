@@ -1,6 +1,7 @@
 //! HTTP server for LocalGPT
 //!
-//! The chat endpoint uses a shared Agent with session persistence across requests.
+//! Supports multiple sessions with session ID-based routing.
+//! Sessions are created on demand and cached for reuse.
 
 use anyhow::Result;
 use axum::{
@@ -19,9 +20,11 @@ use axum::{
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info};
@@ -30,13 +33,24 @@ use crate::agent::{Agent, AgentConfig, StreamEvent};
 use crate::config::Config;
 use crate::memory::MemoryManager;
 
+/// Session timeout (30 minutes of inactivity)
+const SESSION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Maximum number of concurrent sessions
+const MAX_SESSIONS: usize = 100;
+
 pub struct Server {
     config: Config,
 }
 
+struct SessionEntry {
+    agent: Agent,
+    last_accessed: Instant,
+}
+
 struct AppState {
     config: Config,
-    agent: Arc<Mutex<Agent>>,
+    sessions: Mutex<HashMap<String, SessionEntry>>,
 }
 
 impl Server {
@@ -47,19 +61,19 @@ impl Server {
     }
 
     pub async fn run(&self) -> Result<()> {
-        // Create shared agent at startup
-        let memory = MemoryManager::new(&self.config.memory)?;
-        let agent_config = AgentConfig {
-            model: self.config.agent.default_model.clone(),
-            context_window: self.config.agent.context_window,
-            reserve_tokens: self.config.agent.reserve_tokens,
-        };
-        let mut agent = Agent::new(agent_config, &self.config, memory).await?;
-        agent.new_session().await?;
-
         let state = Arc::new(AppState {
             config: self.config.clone(),
-            agent: Arc::new(Mutex::new(agent)),
+            sessions: Mutex::new(HashMap::new()),
+        });
+
+        // Spawn session cleanup task
+        let cleanup_state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                cleanup_expired_sessions(&cleanup_state).await;
+            }
         });
 
         let cors = CorsLayer::new()
@@ -69,6 +83,8 @@ impl Server {
 
         let app = Router::new()
             .route("/health", get(health_check))
+            .route("/api/sessions", post(create_session))
+            .route("/api/sessions", get(list_sessions))
             .route("/api/chat", post(chat))
             .route("/api/chat/stream", post(chat_stream))
             .route("/api/ws", get(websocket_handler))
@@ -99,6 +115,89 @@ impl IntoResponse for AppError {
     }
 }
 
+// Session cleanup task
+async fn cleanup_expired_sessions(state: &Arc<AppState>) {
+    let mut sessions = state.sessions.lock().await;
+    let before_count = sessions.len();
+
+    sessions.retain(|id, entry| {
+        let expired = entry.last_accessed.elapsed() > SESSION_TIMEOUT;
+        if expired {
+            debug!("Expiring session: {}", id);
+        }
+        !expired
+    });
+
+    let removed = before_count - sessions.len();
+    if removed > 0 {
+        info!("Cleaned up {} expired sessions", removed);
+    }
+}
+
+// Get or create a session
+async fn get_or_create_session(
+    state: &Arc<AppState>,
+    session_id: Option<String>,
+) -> Result<String, AppError> {
+    let mut sessions = state.sessions.lock().await;
+
+    // If session_id provided, try to use existing session
+    if let Some(ref id) = session_id {
+        if sessions.contains_key(id) {
+            // Update last accessed time
+            if let Some(entry) = sessions.get_mut(id) {
+                entry.last_accessed = Instant::now();
+            }
+            return Ok(id.clone());
+        }
+    }
+
+    // Check session limit
+    if sessions.len() >= MAX_SESSIONS {
+        // Try to remove oldest session
+        if let Some(oldest_id) = sessions
+            .iter()
+            .min_by_key(|(_, e)| e.last_accessed)
+            .map(|(id, _)| id.clone())
+        {
+            sessions.remove(&oldest_id);
+            info!("Removed oldest session {} to make room", oldest_id);
+        }
+    }
+
+    // Create new session
+    let new_id = session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let memory = MemoryManager::new(&state.config.memory)
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let agent_config = AgentConfig {
+        model: state.config.agent.default_model.clone(),
+        context_window: state.config.agent.context_window,
+        reserve_tokens: state.config.agent.reserve_tokens,
+    };
+
+    let mut agent = Agent::new(agent_config, &state.config, memory)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    agent
+        .new_session()
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    sessions.insert(
+        new_id.clone(),
+        SessionEntry {
+            agent,
+            last_accessed: Instant::now(),
+        },
+    );
+
+    info!("Created new session: {}", new_id);
+    Ok(new_id)
+}
+
 // Health check endpoint
 async fn health_check() -> &'static str {
     "OK"
@@ -110,15 +209,71 @@ struct StatusResponse {
     version: String,
     model: String,
     memory_chunks: usize,
+    active_sessions: usize,
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
     let memory = MemoryManager::new(&state.config.memory).ok();
+    let sessions = state.sessions.lock().await;
 
     Json(StatusResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
         model: state.config.agent.default_model.clone(),
         memory_chunks: memory.and_then(|m| m.chunk_count().ok()).unwrap_or(0),
+        active_sessions: sessions.len(),
+    })
+}
+
+// Session management endpoints
+#[derive(Deserialize)]
+struct CreateSessionRequest {
+    session_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SessionResponse {
+    session_id: String,
+    model: String,
+}
+
+async fn create_session(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<CreateSessionRequest>,
+) -> Response {
+    match get_or_create_session(&state, request.session_id).await {
+        Ok(session_id) => Json(SessionResponse {
+            session_id,
+            model: state.config.agent.default_model.clone(),
+        })
+        .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+#[derive(Serialize)]
+struct SessionInfo {
+    session_id: String,
+    idle_seconds: u64,
+}
+
+#[derive(Serialize)]
+struct ListSessionsResponse {
+    sessions: Vec<SessionInfo>,
+}
+
+async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<ListSessionsResponse> {
+    let sessions = state.sessions.lock().await;
+
+    let session_list: Vec<SessionInfo> = sessions
+        .iter()
+        .map(|(id, entry)| SessionInfo {
+            session_id: id.clone(),
+            idle_seconds: entry.last_accessed.elapsed().as_secs(),
+        })
+        .collect();
+
+    Json(ListSessionsResponse {
+        sessions: session_list,
     })
 }
 
@@ -126,6 +281,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
 #[derive(Deserialize)]
 struct ChatRequest {
     message: String,
+    session_id: Option<String>,
     #[allow(dead_code)] // TODO: implement model switching per request
     model: Option<String>,
 }
@@ -133,18 +289,33 @@ struct ChatRequest {
 #[derive(Serialize)]
 struct ChatResponse {
     response: String,
+    session_id: String,
     model: String,
 }
 
 async fn chat(State(state): State<Arc<AppState>>, Json(request): Json<ChatRequest>) -> Response {
-    let mut agent = state.agent.lock().await;
+    // Get or create session
+    let session_id = match get_or_create_session(&state, request.session_id).await {
+        Ok(id) => id,
+        Err(e) => return e.into_response(),
+    };
 
-    // TODO: Handle model change if request.model differs from current
+    // Get agent from session
+    let mut sessions = state.sessions.lock().await;
+    let entry = match sessions.get_mut(&session_id) {
+        Some(e) => e,
+        None => {
+            return AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response()
+        }
+    };
 
-    match agent.chat(&request.message).await {
+    entry.last_accessed = Instant::now();
+
+    match entry.agent.chat(&request.message).await {
         Ok(response) => Json(ChatResponse {
             response,
-            model: agent.model().to_string(),
+            session_id,
+            model: entry.agent.model().to_string(),
         })
         .into_response(),
         Err(e) => AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -155,14 +326,33 @@ async fn chat(State(state): State<Arc<AppState>>, Json(request): Json<ChatReques
 async fn chat_stream(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ChatRequest>,
-) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
-    let agent = state.agent.clone();
+) -> Response {
+    // Get or create session first (outside the stream)
+    let session_id = match get_or_create_session(&state, request.session_id).await {
+        Ok(id) => id,
+        Err(e) => return e.into_response(),
+    };
+
+    let state_clone = state.clone();
+    let message = request.message.clone();
 
     let stream = async_stream::stream! {
-        let mut agent = agent.lock().await;
+        // Send session_id first
+        yield Ok::<Event, Infallible>(Event::default().data(json!({"type": "session", "session_id": session_id}).to_string()));
+
+        let mut sessions = state_clone.sessions.lock().await;
+        let entry = match sessions.get_mut(&session_id) {
+            Some(e) => e,
+            None => {
+                yield Ok(Event::default().data(json!({"error": "Session not found"}).to_string()));
+                return;
+            }
+        };
+
+        entry.last_accessed = Instant::now();
 
         // Use streaming with tools
-        match agent.chat_stream_with_tools(&request.message).await {
+        match entry.agent.chat_stream_with_tools(&message).await {
             Ok(event_stream) => {
                 use futures::StreamExt;
 
@@ -207,7 +397,7 @@ async fn chat_stream(
         yield Ok(Event::default().data("[DONE]"));
     };
 
-    Sse::new(stream)
+    Sse::new(stream).into_response()
 }
 
 // Memory search endpoint
@@ -311,6 +501,9 @@ async fn websocket_handler(
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum WsIncoming {
+    /// Start or resume a session
+    #[serde(rename = "session")]
+    Session { session_id: Option<String> },
     /// Chat message
     #[serde(rename = "chat")]
     Chat { message: String },
@@ -353,18 +546,10 @@ enum WsOutgoing {
 async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
 
-    // Send connected message
-    let session_id = {
-        let agent = state.agent.lock().await;
-        agent.session_status().id
-    };
-
-    let connected = WsOutgoing::Connected { session_id };
-    if let Ok(json) = serde_json::to_string(&connected) {
-        let _ = sender.send(WsMessage::Text(json.into())).await;
-    }
-
     debug!("WebSocket client connected");
+
+    // Track current session for this connection
+    let mut current_session_id: Option<String> = None;
 
     // Process incoming messages
     while let Some(msg) = receiver.next().await {
@@ -372,13 +557,78 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
             Ok(WsMessage::Text(text)) => {
                 // Parse incoming message
                 match serde_json::from_str::<WsIncoming>(&text) {
+                    Ok(WsIncoming::Session { session_id }) => {
+                        // Create or resume session
+                        match get_or_create_session(&state, session_id).await {
+                            Ok(id) => {
+                                current_session_id = Some(id.clone());
+                                let connected = WsOutgoing::Connected { session_id: id };
+                                if let Ok(json) = serde_json::to_string(&connected) {
+                                    let _ = sender.send(WsMessage::Text(json.into())).await;
+                                }
+                            }
+                            Err(e) => {
+                                let error = WsOutgoing::Error {
+                                    message: format!("Failed to create session: {}", e.1),
+                                };
+                                if let Ok(json) = serde_json::to_string(&error) {
+                                    let _ = sender.send(WsMessage::Text(json.into())).await;
+                                }
+                            }
+                        }
+                    }
                     Ok(WsIncoming::Chat { message }) => {
-                        debug!("WebSocket chat: {}", message);
+                        // Ensure we have a session
+                        let session_id = match &current_session_id {
+                            Some(id) => id.clone(),
+                            None => {
+                                // Auto-create session if none exists
+                                match get_or_create_session(&state, None).await {
+                                    Ok(id) => {
+                                        current_session_id = Some(id.clone());
+                                        // Notify client of new session
+                                        let connected = WsOutgoing::Connected {
+                                            session_id: id.clone(),
+                                        };
+                                        if let Ok(json) = serde_json::to_string(&connected) {
+                                            let _ = sender.send(WsMessage::Text(json.into())).await;
+                                        }
+                                        id
+                                    }
+                                    Err(e) => {
+                                        let error = WsOutgoing::Error {
+                                            message: format!("Failed to create session: {}", e.1),
+                                        };
+                                        if let Ok(json) = serde_json::to_string(&error) {
+                                            let _ = sender.send(WsMessage::Text(json.into())).await;
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                        };
 
-                        // Process chat (with tool support)
-                        let mut agent = state.agent.lock().await;
+                        debug!("WebSocket chat [{}]: {}", session_id, message);
 
-                        match agent.chat(&message).await {
+                        // Process chat
+                        let mut sessions = state.sessions.lock().await;
+                        let entry = match sessions.get_mut(&session_id) {
+                            Some(e) => e,
+                            None => {
+                                let error = WsOutgoing::Error {
+                                    message: "Session not found".to_string(),
+                                };
+                                if let Ok(json) = serde_json::to_string(&error) {
+                                    let _ = sender.send(WsMessage::Text(json.into())).await;
+                                }
+                                current_session_id = None;
+                                continue;
+                            }
+                        };
+
+                        entry.last_accessed = Instant::now();
+
+                        match entry.agent.chat(&message).await {
                             Ok(response) => {
                                 // Send response as content
                                 let content = WsOutgoing::Content { delta: response };

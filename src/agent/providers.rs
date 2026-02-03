@@ -44,9 +44,57 @@ pub struct ToolSchema {
     pub parameters: Value,
 }
 
-pub enum LLMResponse {
+/// Token usage statistics from API response
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+impl Usage {
+    pub fn total(&self) -> u64 {
+        self.input_tokens + self.output_tokens
+    }
+}
+
+pub struct LLMResponse {
+    pub content: LLMResponseContent,
+    pub usage: Option<Usage>,
+}
+
+pub enum LLMResponseContent {
     Text(String),
     ToolCalls(Vec<ToolCall>),
+}
+
+impl LLMResponse {
+    pub fn text(content: String) -> Self {
+        Self {
+            content: LLMResponseContent::Text(content),
+            usage: None,
+        }
+    }
+
+    pub fn text_with_usage(content: String, usage: Usage) -> Self {
+        Self {
+            content: LLMResponseContent::Text(content),
+            usage: Some(usage),
+        }
+    }
+
+    pub fn tool_calls(calls: Vec<ToolCall>) -> Self {
+        Self {
+            content: LLMResponseContent::ToolCalls(calls),
+            usage: None,
+        }
+    }
+
+    pub fn tool_calls_with_usage(calls: Vec<ToolCall>, usage: Usage) -> Self {
+        Self {
+            content: LLMResponseContent::ToolCalls(calls),
+            usage: Some(usage),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -91,9 +139,9 @@ pub trait LLMProvider: Send + Sync {
     ) -> Result<StreamResult> {
         // Default implementation: single chunk with full response
         let resp = self.chat(messages, None).await?;
-        let text = match resp {
-            LLMResponse::Text(t) => t,
-            LLMResponse::ToolCalls(_) => {
+        let text = match resp.content {
+            LLMResponseContent::Text(t) => t,
+            LLMResponseContent::ToolCalls(_) => {
                 return Err(anyhow::anyhow!("Tool calls not supported in streaming"))
             }
         };
@@ -367,6 +415,12 @@ impl LLMProvider for OpenAIProvider {
 
         let message = &choice["message"];
 
+        // Parse usage
+        let usage = response_body.get("usage").map(|u| Usage {
+            input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0),
+            output_tokens: u["completion_tokens"].as_u64().unwrap_or(0),
+        });
+
         // Check for tool calls
         if let Some(tool_calls) = message.get("tool_calls") {
             if let Some(calls) = tool_calls.as_array() {
@@ -383,14 +437,20 @@ impl LLMProvider for OpenAIProvider {
                     .collect();
 
                 if !parsed_calls.is_empty() {
-                    return Ok(LLMResponse::ToolCalls(parsed_calls));
+                    return Ok(LLMResponse {
+                        content: LLMResponseContent::ToolCalls(parsed_calls),
+                        usage,
+                    });
                 }
             }
         }
 
         let content = message["content"].as_str().unwrap_or("").to_string();
 
-        Ok(LLMResponse::Text(content))
+        Ok(LLMResponse {
+            content: LLMResponseContent::Text(content),
+            usage,
+        })
     }
 
     async fn summarize(&self, text: &str) -> Result<String> {
@@ -404,8 +464,8 @@ impl LLMProvider for OpenAIProvider {
             tool_call_id: None,
         }];
 
-        match self.chat(&messages, None).await? {
-            LLMResponse::Text(summary) => Ok(summary),
+        match self.chat(&messages, None).await?.content {
+            LLMResponseContent::Text(summary) => Ok(summary),
             _ => anyhow::bail!("Unexpected response type"),
         }
     }
@@ -552,6 +612,12 @@ impl LLMProvider for AnthropicProvider {
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("No content in response"))?;
 
+        // Parse usage (Anthropic uses input_tokens/output_tokens directly)
+        let usage = response_body.get("usage").map(|u| Usage {
+            input_tokens: u["input_tokens"].as_u64().unwrap_or(0),
+            output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
+        });
+
         // Check for tool use
         let tool_calls: Vec<ToolCall> = content
             .iter()
@@ -564,7 +630,10 @@ impl LLMProvider for AnthropicProvider {
             .collect();
 
         if !tool_calls.is_empty() {
-            return Ok(LLMResponse::ToolCalls(tool_calls));
+            return Ok(LLMResponse {
+                content: LLMResponseContent::ToolCalls(tool_calls),
+                usage,
+            });
         }
 
         // Get text content
@@ -575,7 +644,10 @@ impl LLMProvider for AnthropicProvider {
             .collect::<Vec<_>>()
             .join("");
 
-        Ok(LLMResponse::Text(text))
+        Ok(LLMResponse {
+            content: LLMResponseContent::Text(text),
+            usage,
+        })
     }
 
     async fn summarize(&self, text: &str) -> Result<String> {
@@ -589,8 +661,8 @@ impl LLMProvider for AnthropicProvider {
             tool_call_id: None,
         }];
 
-        match self.chat(&messages, None).await? {
-            LLMResponse::Text(summary) => Ok(summary),
+        match self.chat(&messages, None).await?.content {
+            LLMResponseContent::Text(summary) => Ok(summary),
             _ => anyhow::bail!("Unexpected response type"),
         }
     }
@@ -831,7 +903,20 @@ impl LLMProvider for OllamaProvider {
             .unwrap_or("")
             .to_string();
 
-        Ok(LLMResponse::Text(content))
+        // Ollama returns token counts in prompt_eval_count and eval_count
+        let usage = if response_body.get("prompt_eval_count").is_some() {
+            Some(Usage {
+                input_tokens: response_body["prompt_eval_count"].as_u64().unwrap_or(0),
+                output_tokens: response_body["eval_count"].as_u64().unwrap_or(0),
+            })
+        } else {
+            None
+        };
+
+        Ok(LLMResponse {
+            content: LLMResponseContent::Text(content),
+            usage,
+        })
     }
 
     async fn summarize(&self, text: &str) -> Result<String> {
@@ -845,8 +930,8 @@ impl LLMProvider for OllamaProvider {
             tool_call_id: None,
         }];
 
-        match self.chat(&messages, None).await? {
-            LLMResponse::Text(summary) => Ok(summary),
+        match self.chat(&messages, None).await?.content {
+            LLMResponseContent::Text(summary) => Ok(summary),
             _ => anyhow::bail!("Unexpected response type"),
         }
     }
@@ -1159,7 +1244,8 @@ impl LLMProvider for ClaudeCliProvider {
             }
         }
 
-        Ok(LLMResponse::Text(response))
+        // Claude CLI doesn't report token usage
+        Ok(LLMResponse::text(response))
     }
 
     async fn summarize(&self, text: &str) -> Result<String> {
@@ -1173,8 +1259,8 @@ impl LLMProvider for ClaudeCliProvider {
             tool_call_id: None,
         }];
 
-        match self.chat(&messages, None).await? {
-            LLMResponse::Text(summary) => Ok(summary),
+        match self.chat(&messages, None).await?.content {
+            LLMResponseContent::Text(summary) => Ok(summary),
             _ => anyhow::bail!("Unexpected response type"),
         }
     }

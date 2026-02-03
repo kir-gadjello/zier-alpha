@@ -15,12 +15,12 @@ pub struct MemoryWatcher {
     watcher: RecommendedWatcher,
     #[allow(dead_code)]
     workspace: PathBuf,
+    #[allow(dead_code)]
+    watched_paths: Vec<PathBuf>,
 }
 
 impl MemoryWatcher {
-    pub fn new(workspace: PathBuf, db_path: PathBuf, _config: MemoryConfig) -> Result<Self> {
-        let _workspace_clone = workspace.clone();
-
+    pub fn new(workspace: PathBuf, db_path: PathBuf, config: MemoryConfig) -> Result<Self> {
         // Create a channel for receiving events
         let (tx, rx) = mpsc::channel();
 
@@ -48,8 +48,34 @@ impl MemoryWatcher {
 
         // Watch the workspace directory
         watcher.watch(&workspace, RecursiveMode::Recursive)?;
+        info!("Watching memory files in: {}", workspace.display());
 
-        info!("Started watching memory files in: {}", workspace.display());
+        // Watch configured paths
+        let mut watched_paths = vec![workspace.clone()];
+        for index_path in &config.paths {
+            let base_path = if index_path.path.starts_with('~') || index_path.path.starts_with('/')
+            {
+                PathBuf::from(shellexpand::tilde(&index_path.path).to_string())
+            } else {
+                workspace.join(&index_path.path)
+            };
+
+            // Skip if already watching (subdirectory of workspace)
+            if base_path.starts_with(&workspace) {
+                continue;
+            }
+
+            if base_path.exists() {
+                if let Err(e) = watcher.watch(&base_path, RecursiveMode::Recursive) {
+                    warn!("Failed to watch {}: {}", base_path.display(), e);
+                } else {
+                    info!("Watching configured path: {}", base_path.display());
+                    watched_paths.push(base_path);
+                }
+            } else {
+                debug!("Skipping non-existent path: {}", base_path.display());
+            }
+        }
 
         // Spawn background task to handle events
         let workspace_for_task = workspace.clone();
@@ -101,6 +127,10 @@ impl MemoryWatcher {
             }
         });
 
-        Ok(Self { watcher, workspace })
+        Ok(Self {
+            watcher,
+            workspace,
+            watched_paths,
+        })
     }
 }

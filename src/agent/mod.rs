@@ -6,8 +6,8 @@ mod system_prompt;
 mod tools;
 
 pub use providers::{
-    LLMProvider, LLMResponse, Message, Role, StreamChunk, StreamEvent, StreamResult, ToolCall,
-    ToolSchema,
+    LLMProvider, LLMResponse, LLMResponseContent, Message, Role, StreamChunk, StreamEvent,
+    StreamResult, ToolCall, ToolSchema, Usage,
 };
 pub use session::{
     get_last_session_id, get_last_session_id_for_agent, get_sessions_dir_for_agent, get_state_dir,
@@ -58,6 +58,8 @@ pub struct Agent {
     session: Session,
     memory: MemoryManager,
     tools: Vec<Box<dyn Tool>>,
+    /// Cumulative token usage for this session
+    cumulative_usage: Usage,
 }
 
 impl Agent {
@@ -75,6 +77,7 @@ impl Agent {
             session: Session::new(),
             memory,
             tools,
+            cumulative_usage: Usage::default(),
         })
     }
 
@@ -88,6 +91,19 @@ impl Agent {
 
     pub fn has_embeddings(&self) -> bool {
         self.memory.has_embeddings()
+    }
+
+    /// Get cumulative token usage for this session
+    pub fn usage(&self) -> &Usage {
+        &self.cumulative_usage
+    }
+
+    /// Add usage from an API response to cumulative totals
+    fn add_usage(&mut self, usage: Option<Usage>) {
+        if let Some(u) = usage {
+            self.cumulative_usage.input_tokens += u.input_tokens;
+            self.cumulative_usage.output_tokens += u.output_tokens;
+        }
     }
 
     pub async fn new_session(&mut self) -> Result<()> {
@@ -172,9 +188,12 @@ impl Agent {
     }
 
     async fn handle_response(&mut self, response: LLMResponse) -> Result<String> {
-        match response {
-            LLMResponse::Text(text) => Ok(text),
-            LLMResponse::ToolCalls(calls) => {
+        // Track usage
+        self.add_usage(response.usage);
+
+        match response.content {
+            LLMResponseContent::Text(text) => Ok(text),
+            LLMResponseContent::ToolCalls(calls) => {
                 // Execute tool calls
                 let mut results = Vec::new();
 
@@ -441,7 +460,10 @@ impl Agent {
     }
 
     pub fn session_status(&self) -> SessionStatus {
-        self.session.status()
+        self.session.status_with_usage(
+            self.cumulative_usage.input_tokens,
+            self.cumulative_usage.output_tokens,
+        )
     }
 
     /// Stream chat response - returns a stream of chunks
@@ -625,21 +647,26 @@ impl Agent {
                     .await;
 
                 match response {
-                    Ok(LLMResponse::Text(text)) => {
-                        // No tool calls - yield the text and we're done
-                        yield Ok(StreamEvent::Content(text.clone()));
-                        yield Ok(StreamEvent::Done);
+                    Ok(resp) => {
+                        // Track usage
+                        self.add_usage(resp.usage);
 
-                        // Add to session
-                        self.session.add_message(Message {
-                            role: Role::Assistant,
-                            content: text,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
-                        break;
-                    }
-                    Ok(LLMResponse::ToolCalls(calls)) => {
+                        match resp.content {
+                            LLMResponseContent::Text(text) => {
+                                // No tool calls - yield the text and we're done
+                                yield Ok(StreamEvent::Content(text.clone()));
+                                yield Ok(StreamEvent::Done);
+
+                                // Add to session
+                                self.session.add_message(Message {
+                                    role: Role::Assistant,
+                                    content: text,
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                });
+                                break;
+                            }
+                            LLMResponseContent::ToolCalls(calls) => {
                         // Notify about tool calls
                         for call in &calls {
                             yield Ok(StreamEvent::ToolCallStart {
@@ -675,6 +702,8 @@ impl Agent {
                         });
 
                         // Continue loop to get next response
+                            }
+                        }
                     }
                     Err(e) => {
                         yield Err(e);

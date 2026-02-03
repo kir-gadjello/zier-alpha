@@ -3,6 +3,9 @@ use clap::{Args, Subcommand};
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use daemonize::Daemonize;
+
 use localgpt::config::Config;
 use localgpt::heartbeat::HeartbeatRunner;
 use localgpt::memory::MemoryManager;
@@ -57,16 +60,69 @@ async fn start_daemon(foreground: bool, agent_id: &str) -> Result<()> {
         fs::remove_file(&pid_file)?;
     }
 
+    // Set up log file for daemon output
+    let log_file = get_log_file()?;
+
+    #[cfg(unix)]
     if !foreground {
-        // TODO: Implement proper daemonization
-        // For now, just run in foreground
-        println!("Note: Background daemonization not yet implemented. Running in foreground.");
+        // Print startup info before daemonizing (user won't see output after fork)
+        println!(
+            "Starting LocalGPT daemon in background (agent: {})...",
+            agent_id
+        );
+        println!("  PID file: {}", pid_file.display());
+        println!("  Log file: {}", log_file.display());
+        if config.server.enabled {
+            println!(
+                "  Server: http://{}:{}",
+                config.server.bind, config.server.port
+            );
+        }
+        println!("\nUse 'localgpt daemon status' to check status");
+        println!("Use 'localgpt daemon stop' to stop\n");
+
+        // Proper Unix daemonization
+        let stdout = std::fs::File::create(&log_file)?;
+        let stderr = stdout.try_clone()?;
+
+        let daemonize = Daemonize::new()
+            .pid_file(&pid_file)
+            .working_directory(std::env::current_dir()?)
+            .stdout(stdout)
+            .stderr(stderr);
+
+        match daemonize.start() {
+            Ok(_) => {
+                // We are now running in the background
+                // Continue with daemon setup below
+            }
+            Err(e) => anyhow::bail!("Failed to daemonize: {}", e),
+        }
+    } else {
+        println!(
+            "Starting LocalGPT daemon in foreground (agent: {})...",
+            agent_id
+        );
     }
 
-    // Write PID file
-    fs::write(&pid_file, std::process::id().to_string())?;
+    #[cfg(not(unix))]
+    {
+        if !foreground {
+            println!(
+                "Note: Background daemonization not supported on this platform. Running in foreground."
+            );
+        }
+        println!("Starting LocalGPT daemon (agent: {})...", agent_id);
+    }
 
-    println!("Starting LocalGPT daemon (agent: {})...", agent_id);
+    // Write PID file (only needed for foreground mode, daemonize handles it otherwise)
+    #[cfg(unix)]
+    if foreground {
+        fs::write(&pid_file, std::process::id().to_string())?;
+    }
+
+    #[cfg(not(unix))]
+    fs::write(&pid_file, std::process::id().to_string())?;
 
     // Initialize components
     let memory = MemoryManager::new_with_agent(&config.memory, agent_id)?;
@@ -204,6 +260,13 @@ fn get_pid_file() -> Result<PathBuf> {
     // Put PID file in state dir (~/.localgpt/), not workspace
     let state_dir = localgpt::agent::get_state_dir()?;
     Ok(state_dir.join("daemon.pid"))
+}
+
+fn get_log_file() -> Result<PathBuf> {
+    let state_dir = localgpt::agent::get_state_dir()?;
+    let logs_dir = state_dir.join("logs");
+    fs::create_dir_all(&logs_dir)?;
+    Ok(logs_dir.join("daemon.log"))
 }
 
 fn is_process_running(pid: &str) -> bool {

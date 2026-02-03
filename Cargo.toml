@@ -58,6 +58,10 @@ tokio-stream = "0.1"
 async-stream = "0.3"
 shellexpand = "3.1"
 glob = "0.3"
+
+# Unix daemonization (optional, only for daemon mode)
+[target.'cfg(unix)'.dependencies]
+daemonize = "0.5"
 sha2 = "0.10"
 rustyline = "17.0.2"
 

@@ -496,8 +496,17 @@ async fn handle_command(input: &str, agent: &mut Agent, agent_id: &str) -> Comma
             println!("\nSession Status:");
             println!("  ID: {}", status.id);
             println!("  Messages: {}", status.message_count);
-            println!("  Tokens: ~{}", status.token_count);
+            println!("  Context tokens: ~{}", status.token_count);
             println!("  Compactions: {}", status.compaction_count);
+            if status.api_input_tokens > 0 || status.api_output_tokens > 0 {
+                println!("\nAPI Usage:");
+                println!("  Input tokens: {}", status.api_input_tokens);
+                println!("  Output tokens: {}", status.api_output_tokens);
+                println!(
+                    "  Total tokens: {}",
+                    status.api_input_tokens + status.api_output_tokens
+                );
+            }
             println!();
             CommandResult::Continue
         }

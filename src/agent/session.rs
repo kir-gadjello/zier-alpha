@@ -24,6 +24,10 @@ pub struct SessionStatus {
     pub message_count: usize,
     pub token_count: usize,
     pub compaction_count: u32,
+    /// Actual API input tokens used (if available)
+    pub api_input_tokens: u64,
+    /// Actual API output tokens used (if available)
+    pub api_output_tokens: u64,
 }
 
 impl Session {
@@ -235,6 +239,20 @@ impl Session {
             message_count: self.messages.len(),
             token_count: self.token_count,
             compaction_count: self.compaction_count,
+            api_input_tokens: 0,
+            api_output_tokens: 0,
+        }
+    }
+
+    /// Create status with API usage data
+    pub fn status_with_usage(&self, input_tokens: u64, output_tokens: u64) -> SessionStatus {
+        SessionStatus {
+            id: self.id.clone(),
+            message_count: self.messages.len(),
+            token_count: self.token_count,
+            compaction_count: self.compaction_count,
+            api_input_tokens: input_tokens,
+            api_output_tokens: output_tokens,
         }
     }
 }
