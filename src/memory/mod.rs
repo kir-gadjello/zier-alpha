@@ -247,6 +247,12 @@ impl MemoryManager {
             duration: Duration::default(),
         };
 
+        // First, clean up deleted files from the index
+        let files_removed = self.cleanup_deleted_files()?;
+        if files_removed > 0 {
+            info!("Removed {} deleted files from index", files_removed);
+        }
+
         // Index MEMORY.md
         let memory_file = self.workspace.join("MEMORY.md");
         if memory_file.exists() {
@@ -317,6 +323,23 @@ impl MemoryManager {
 
         info!("Reindex complete: {:?}", stats);
         Ok(stats)
+    }
+
+    /// Remove files from index that no longer exist on disk
+    fn cleanup_deleted_files(&self) -> Result<usize> {
+        let indexed_files = self.index.indexed_files()?;
+        let mut removed = 0;
+
+        for relative_path in indexed_files {
+            let full_path = self.workspace.join(&relative_path);
+            if !full_path.exists() {
+                debug!("Cleaning up deleted file: {}", relative_path);
+                self.index.remove_file(&relative_path)?;
+                removed += 1;
+            }
+        }
+
+        Ok(removed)
     }
 
     /// Get memory statistics

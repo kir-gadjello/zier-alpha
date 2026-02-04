@@ -285,6 +285,37 @@ impl MemoryIndex {
         Ok(())
     }
 
+    /// Remove a file and its chunks from the index (for deleted files)
+    pub fn remove_file(&self, relative_path: &str) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+
+        Self::delete_chunks_for_path(&conn, relative_path)?;
+        conn.execute("DELETE FROM files WHERE path = ?1", params![relative_path])?;
+
+        debug!("Removed deleted file from index: {}", relative_path);
+        Ok(())
+    }
+
+    /// Get all indexed file paths
+    pub fn indexed_files(&self) -> Result<Vec<String>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+
+        let mut stmt = conn.prepare("SELECT path FROM files")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+
+        let mut paths = Vec::new();
+        for row in rows {
+            paths.push(row?);
+        }
+        Ok(paths)
+    }
+
     /// Insert into FTS table
     #[allow(clippy::too_many_arguments)]
     fn insert_fts(
