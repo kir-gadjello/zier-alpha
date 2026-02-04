@@ -4,12 +4,13 @@ use anyhow::Result;
 use chrono::{Local, NaiveTime};
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
+use super::events::{emit_heartbeat_event, now_ms, HeartbeatEvent, HeartbeatStatus};
 use crate::agent::{
-    build_heartbeat_prompt, is_heartbeat_ok, Agent, AgentConfig, HEARTBEAT_OK_TOKEN,
+    build_heartbeat_prompt, is_heartbeat_ok, Agent, AgentConfig, SessionStore, HEARTBEAT_OK_TOKEN,
 };
 use crate::config::{parse_duration, parse_time, Config};
 use crate::memory::MemoryManager;
@@ -72,12 +73,35 @@ impl HeartbeatRunner {
             // Check active hours
             if !self.in_active_hours() {
                 debug!("Outside active hours, skipping heartbeat");
+                emit_heartbeat_event(HeartbeatEvent {
+                    ts: now_ms(),
+                    status: HeartbeatStatus::Skipped,
+                    duration_ms: 0,
+                    preview: None,
+                    reason: Some("outside active hours".to_string()),
+                });
                 continue;
             }
 
-            // Run heartbeat
-            match self.run_once().await {
-                Ok(response) => {
+            // Run heartbeat with timing
+            let start = Instant::now();
+            match self.run_once_internal().await {
+                Ok((response, status)) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    let preview = if response.len() > 200 {
+                        Some(format!("{}...", &response[..200]))
+                    } else {
+                        Some(response.clone())
+                    };
+
+                    emit_heartbeat_event(HeartbeatEvent {
+                        ts: now_ms(),
+                        status,
+                        duration_ms,
+                        preview,
+                        reason: None,
+                    });
+
                     if is_heartbeat_ok(&response) {
                         debug!("Heartbeat: OK");
                     } else {
@@ -85,26 +109,71 @@ impl HeartbeatRunner {
                     }
                 }
                 Err(e) => {
+                    let duration_ms = start.elapsed().as_millis() as u64;
+                    emit_heartbeat_event(HeartbeatEvent {
+                        ts: now_ms(),
+                        status: HeartbeatStatus::Failed,
+                        duration_ms,
+                        preview: None,
+                        reason: Some(e.to_string()),
+                    });
                     warn!("Heartbeat error: {}", e);
                 }
             }
         }
     }
 
-    /// Run a single heartbeat cycle
+    /// Run a single heartbeat cycle (public API, emits events)
     pub async fn run_once(&self) -> Result<String> {
+        let start = Instant::now();
+
+        match self.run_once_internal().await {
+            Ok((response, status)) => {
+                let duration_ms = start.elapsed().as_millis() as u64;
+                let preview = if response.len() > 200 {
+                    Some(format!("{}...", &response[..200]))
+                } else {
+                    Some(response.clone())
+                };
+
+                emit_heartbeat_event(HeartbeatEvent {
+                    ts: now_ms(),
+                    status,
+                    duration_ms,
+                    preview,
+                    reason: None,
+                });
+
+                Ok(response)
+            }
+            Err(e) => {
+                let duration_ms = start.elapsed().as_millis() as u64;
+                emit_heartbeat_event(HeartbeatEvent {
+                    ts: now_ms(),
+                    status: HeartbeatStatus::Failed,
+                    duration_ms,
+                    preview: None,
+                    reason: Some(e.to_string()),
+                });
+                Err(e)
+            }
+        }
+    }
+
+    /// Internal heartbeat execution (returns response and status)
+    async fn run_once_internal(&self) -> Result<(String, HeartbeatStatus)> {
         // Check if HEARTBEAT.md exists and has content
         let heartbeat_path = self.workspace.join("HEARTBEAT.md");
 
         if !heartbeat_path.exists() {
             debug!("No HEARTBEAT.md found");
-            return Ok(HEARTBEAT_OK_TOKEN.to_string());
+            return Ok((HEARTBEAT_OK_TOKEN.to_string(), HeartbeatStatus::Skipped));
         }
 
         let content = fs::read_to_string(&heartbeat_path)?;
         if content.trim().is_empty() {
             debug!("HEARTBEAT.md is empty");
-            return Ok(HEARTBEAT_OK_TOKEN.to_string());
+            return Ok((HEARTBEAT_OK_TOKEN.to_string(), HeartbeatStatus::Skipped));
         }
 
         // Create agent for heartbeat
@@ -122,7 +191,36 @@ impl HeartbeatRunner {
         let heartbeat_prompt = build_heartbeat_prompt();
         let response = agent.chat(&heartbeat_prompt).await?;
 
-        Ok(response)
+        // Determine status based on response
+        if is_heartbeat_ok(&response) {
+            return Ok((response, HeartbeatStatus::Ok));
+        }
+
+        // For actual alerts, check for deduplication
+        let session_key = "heartbeat"; // Use dedicated session key for heartbeat state
+
+        // Load session store to check for duplicates
+        if let Ok(mut store) = SessionStore::load_for_agent(&self.agent_id) {
+            if let Some(entry) = store.get(session_key) {
+                if entry.is_duplicate_heartbeat(&response) {
+                    debug!(
+                        "Skipping duplicate heartbeat (same text within 24h): {}",
+                        &response[..response.len().min(100)]
+                    );
+                    return Ok((response, HeartbeatStatus::Skipped));
+                }
+            }
+
+            // Record the heartbeat
+            let session_id = agent.session_status().id;
+            if let Err(e) = store.update(session_key, &session_id, |entry| {
+                entry.record_heartbeat(&response);
+            }) {
+                warn!("Failed to record heartbeat in session store: {}", e);
+            }
+        }
+
+        Ok((response, HeartbeatStatus::Sent))
     }
 
     fn in_active_hours(&self) -> bool {

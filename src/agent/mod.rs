@@ -15,6 +15,7 @@ pub use session::{
     SessionInfo, SessionSearchResult, SessionStatus, DEFAULT_AGENT_ID,
 };
 pub use session_store::{SessionEntry, SessionStore};
+pub use skills::{get_skills_summary, load_skills, parse_skill_command, Skill, SkillInvocation};
 pub use system_prompt::{
     build_heartbeat_prompt, is_heartbeat_ok, is_silent_reply, HEARTBEAT_OK_TOKEN,
     SILENT_REPLY_TOKEN,
@@ -27,6 +28,10 @@ use tracing::{debug, info};
 
 use crate::config::Config;
 use crate::memory::{MemoryChunk, MemoryManager};
+
+/// Soft threshold buffer before compaction (tokens)
+/// Memory flush runs when within this buffer of the hard limit
+const MEMORY_FLUSH_SOFT_THRESHOLD: usize = 4000;
 
 /// Generate a URL-safe slug from text (first 3-5 words, lowercased, hyphenated)
 fn generate_slug(text: &str) -> String {
@@ -231,7 +236,13 @@ impl Agent {
             images,
         });
 
-        // Check if we need to compact
+        // Check if we should run pre-compaction memory flush (soft threshold)
+        if self.should_memory_flush() {
+            info!("Running pre-compaction memory flush (soft threshold)");
+            self.memory_flush().await?;
+        }
+
+        // Check if we need to compact (hard limit)
         if self.should_compact() {
             self.compact_session().await?;
         }
@@ -332,6 +343,21 @@ impl Agent {
     async fn build_memory_context(&self) -> Result<String> {
         let mut context = String::new();
 
+        // Check if this is the first session (no existing sessions)
+        let is_first_session = list_sessions().map(|s| s.is_empty()).unwrap_or(true);
+
+        // Load BOOTSTRAP.md only on first run (OpenClaw-compatible: one-time ritual)
+        if is_first_session {
+            if let Ok(bootstrap_content) = self.memory.read_bootstrap_file() {
+                if !bootstrap_content.is_empty() {
+                    context.push_str("# First Run Setup (BOOTSTRAP.md)\n\n");
+                    context.push_str(&bootstrap_content);
+                    context.push_str("\n\n---\n\n");
+                    info!("Loaded BOOTSTRAP.md for first-run setup");
+                }
+            }
+        }
+
         // Load IDENTITY.md first (OpenClaw-compatible: agent identity context)
         if let Ok(identity_content) = self.memory.read_identity_file() {
             if !identity_content.is_empty() {
@@ -363,6 +389,15 @@ impl Agent {
             if !agents_content.is_empty() {
                 context.push_str("# Available Agents (AGENTS.md)\n\n");
                 context.push_str(&agents_content);
+                context.push_str("\n\n---\n\n");
+            }
+        }
+
+        // Load TOOLS.md (OpenClaw-compatible: local tool notes)
+        if let Ok(tools_content) = self.memory.read_tools_file() {
+            if !tools_content.is_empty() {
+                context.push_str("# Tool Notes (TOOLS.md)\n\n");
+                context.push_str(&tools_content);
                 context.push_str("\n\n---\n\n");
             }
         }
@@ -401,11 +436,21 @@ impl Agent {
         self.session.token_count() > (self.config.context_window - self.config.reserve_tokens)
     }
 
+    /// Check if we should run pre-compaction memory flush (soft threshold)
+    fn should_memory_flush(&self) -> bool {
+        let hard_limit = self.config.context_window - self.config.reserve_tokens;
+        let soft_limit = hard_limit.saturating_sub(MEMORY_FLUSH_SOFT_THRESHOLD);
+
+        self.session.token_count() > soft_limit && self.session.should_memory_flush()
+    }
+
     pub async fn compact_session(&mut self) -> Result<(usize, usize)> {
         let before = self.session.token_count();
 
-        // Trigger memory flush before compacting
-        self.memory_flush().await?;
+        // Trigger memory flush before compacting (if not already done)
+        if self.session.should_memory_flush() {
+            self.memory_flush().await?;
+        }
 
         // Compact the session
         self.session.compact(&*self.provider).await?;
@@ -417,15 +462,19 @@ impl Agent {
     }
 
     /// Pre-compaction memory flush - prompts agent to save important info
+    /// Runs before compaction to preserve important context to disk
     async fn memory_flush(&mut self) -> Result<()> {
+        // Mark as flushed for this compaction cycle (prevents running twice)
+        self.session.mark_memory_flushed();
+
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let flush_prompt = format!(
             "Pre-compaction memory flush. Session nearing token limit.\n\
-             If there's anything important to remember, use write_file or edit_file to save to:\n\
+             Store durable memories now (use memory/{}.md; create memory/ if needed).\n\
              - MEMORY.md for persistent facts (user info, preferences, key decisions)\n\
              - memory/{}.md for session notes\n\n\
              If nothing to store, reply: {}",
-            today, SILENT_REPLY_TOKEN
+            today, today, SILENT_REPLY_TOKEN
         );
 
         // Add flush prompt as user message
@@ -467,8 +516,14 @@ impl Agent {
     pub async fn save_session_to_memory(&self) -> Result<Option<PathBuf>> {
         let messages = self.session.user_assistant_messages();
 
+        debug!(
+            "save_session_to_memory: {} user/assistant messages found",
+            messages.len()
+        );
+
         // Skip if no conversation happened
         if messages.is_empty() {
+            debug!("save_session_to_memory: no messages to save, returning None");
             return Ok(None);
         }
 
@@ -512,6 +567,11 @@ impl Agent {
         let filename = format!("{}-{}.md", date_str, slug);
         let path = memory_dir.join(&filename);
 
+        debug!(
+            "save_session_to_memory: writing {} bytes to {}",
+            content.len(),
+            path.display()
+        );
         std::fs::write(&path, content)?;
         info!("Saved session to memory: {}", path.display());
 
@@ -573,7 +633,13 @@ impl Agent {
             images,
         });
 
-        // Check if we need to compact
+        // Check if we should run pre-compaction memory flush (soft threshold)
+        if self.should_memory_flush() {
+            info!("Running pre-compaction memory flush (soft threshold)");
+            self.memory_flush().await?;
+        }
+
+        // Check if we need to compact (hard limit)
         if self.should_compact() {
             self.compact_session().await?;
         }
@@ -714,7 +780,13 @@ impl Agent {
             images: Vec::new(),
         });
 
-        // Check if we need to compact
+        // Check if we should run pre-compaction memory flush (soft threshold)
+        if self.should_memory_flush() {
+            info!("Running pre-compaction memory flush (soft threshold)");
+            self.memory_flush().await?;
+        }
+
+        // Check if we need to compact (hard limit)
         if self.should_compact() {
             self.compact_session().await?;
         }

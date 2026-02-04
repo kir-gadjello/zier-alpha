@@ -1,12 +1,15 @@
 const API = '/api';
 let sessionId = null;
 let isStreaming = false;
+let statusPollInterval = null;
 
 // Initialize on DOM load
 document.addEventListener('DOMContentLoaded', () => {
     loadSessions();
     setupEventListeners();
     showEmptyState();
+    loadStatus();
+    startStatusPolling();
 });
 
 function setupEventListeners() {
@@ -34,6 +37,10 @@ function setupEventListeners() {
             showEmptyState();
         }
     };
+
+    // Status panel toggle
+    document.getElementById('status-toggle').onclick = toggleStatusPanel;
+    document.getElementById('status-close').onclick = toggleStatusPanel;
 }
 
 function showEmptyState() {
@@ -251,4 +258,107 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Status panel functions
+function toggleStatusPanel() {
+    const panel = document.getElementById('status-panel');
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) {
+        loadStatus();
+    }
+}
+
+function startStatusPolling() {
+    // Poll status every 30 seconds
+    statusPollInterval = setInterval(loadStatus, 30000);
+}
+
+async function loadStatus() {
+    try {
+        // Fetch both status and heartbeat in parallel
+        const [statusRes, heartbeatRes] = await Promise.all([
+            fetch(`${API}/status`),
+            fetch(`${API}/heartbeat/status`)
+        ]);
+
+        const status = await statusRes.json();
+        const heartbeat = await heartbeatRes.json();
+
+        updateStatusPanel(status, heartbeat);
+    } catch (err) {
+        console.error('Failed to load status:', err);
+    }
+}
+
+function updateStatusPanel(status, heartbeat) {
+    // Update general status
+    document.getElementById('status-version').textContent = status.version || '-';
+    document.getElementById('status-model').textContent = status.model || '-';
+    document.getElementById('status-sessions').textContent = status.active_sessions || '0';
+
+    // Update heartbeat status
+    const statusDot = document.getElementById('status-dot');
+    const heartbeatStatusEl = document.getElementById('heartbeat-status');
+    const heartbeatIntervalEl = document.getElementById('heartbeat-interval');
+    const heartbeatLastEl = document.getElementById('heartbeat-last');
+    const heartbeatDetailRow = document.getElementById('heartbeat-detail-row');
+    const heartbeatDetailEl = document.getElementById('heartbeat-detail');
+
+    heartbeatIntervalEl.textContent = heartbeat.interval || '-';
+
+    if (!heartbeat.enabled) {
+        statusDot.className = 'status-dot disabled';
+        heartbeatStatusEl.innerHTML = '<span class="heartbeat-badge disabled">Disabled</span>';
+        heartbeatLastEl.textContent = '-';
+        heartbeatDetailRow.style.display = 'none';
+        return;
+    }
+
+    if (!heartbeat.last_event) {
+        statusDot.className = 'status-dot';
+        heartbeatStatusEl.innerHTML = '<span class="heartbeat-badge">No events yet</span>';
+        heartbeatLastEl.textContent = '-';
+        heartbeatDetailRow.style.display = 'none';
+        return;
+    }
+
+    const event = heartbeat.last_event;
+    const statusClass = event.status;
+
+    statusDot.className = `status-dot ${statusClass}`;
+    heartbeatStatusEl.innerHTML = `<span class="heartbeat-badge ${statusClass}">${formatHeartbeatStatus(event.status)}</span>`;
+
+    // Format last run time
+    if (event.age_seconds !== undefined) {
+        heartbeatLastEl.textContent = `${formatAge(event.age_seconds)} (${event.duration_ms}ms)`;
+    } else {
+        heartbeatLastEl.textContent = `${event.duration_ms}ms`;
+    }
+
+    // Show detail if available
+    if (event.reason || event.preview) {
+        heartbeatDetailRow.style.display = 'flex';
+        const detail = event.reason || (event.preview ? event.preview.slice(0, 100) + '...' : '-');
+        heartbeatDetailEl.textContent = detail;
+    } else {
+        heartbeatDetailRow.style.display = 'none';
+    }
+}
+
+function formatHeartbeatStatus(status) {
+    const labels = {
+        'ok': 'OK',
+        'sent': 'Sent',
+        'skipped': 'Skipped',
+        'failed': 'Failed'
+    };
+    return labels[status] || status;
+}
+
+function formatAge(seconds) {
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
 }

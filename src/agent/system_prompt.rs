@@ -113,11 +113,17 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
         lines.push("## Memory Recall".to_string());
         lines.push(
             "Before answering questions about prior work, decisions, dates, people, preferences, \
-             or todos: use memory_search to check MEMORY.md and memory/*.md files first."
+             or todos: run memory_search on MEMORY.md + memory/*.md first."
                 .to_string(),
         );
+        if params.tool_names.contains(&"memory_get") {
+            lines.push(
+                "Then use memory_get to pull only the needed lines and keep context small."
+                    .to_string(),
+            );
+        }
         lines.push(
-            "If unsure after searching, mention that you checked but found no relevant notes."
+            "If low confidence after search, say you checked but found no relevant notes."
                 .to_string(),
         );
         lines.push(String::new());
@@ -226,8 +232,8 @@ fn get_tool_summary(tool_name: &str) -> &'static str {
         "read_file" => "Read file contents",
         "write_file" => "Create or overwrite files",
         "edit_file" => "Make precise edits to files",
-        "memory_search" => "Search memory files using FTS",
-        "memory_append" => "Append to daily log or memory files",
+        "memory_search" => "Semantically search MEMORY.md + memory/*.md",
+        "memory_get" => "Fetch specific lines from memory files (use after memory_search)",
         "web_fetch" => "Fetch and extract content from a URL",
         _ => "Tool",
     }

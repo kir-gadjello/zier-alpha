@@ -43,6 +43,18 @@ pub struct SessionEntry {
     /// Compaction count
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_count: Option<u32>,
+
+    /// Memory flush tracking (which compaction cycle flush ran for)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_flush_compaction_count: Option<u32>,
+
+    /// Last heartbeat text that was delivered (for deduplication)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_text: Option<String>,
+
+    /// Timestamp when last heartbeat was sent (milliseconds since epoch)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_sent_at: Option<u64>,
 }
 
 impl SessionEntry {
@@ -85,6 +97,30 @@ impl SessionEntry {
             self.claude_cli_session_id = Some(session_id.to_string());
         }
 
+        self.updated_at = chrono::Utc::now().timestamp_millis() as u64;
+    }
+
+    /// Check if a heartbeat would be a duplicate (same text within 24 hours)
+    pub fn is_duplicate_heartbeat(&self, text: &str) -> bool {
+        const DEDUP_WINDOW_MS: u64 = 24 * 60 * 60 * 1000; // 24 hours
+
+        if let (Some(ref last_text), Some(last_sent_at)) =
+            (&self.last_heartbeat_text, self.last_heartbeat_sent_at)
+        {
+            let now = chrono::Utc::now().timestamp_millis() as u64;
+            let within_window = now.saturating_sub(last_sent_at) < DEDUP_WINDOW_MS;
+            let same_text = last_text == text;
+
+            return within_window && same_text;
+        }
+
+        false
+    }
+
+    /// Record that a heartbeat was sent
+    pub fn record_heartbeat(&mut self, text: &str) {
+        self.last_heartbeat_text = Some(text.to_string());
+        self.last_heartbeat_sent_at = Some(chrono::Utc::now().timestamp_millis() as u64);
         self.updated_at = chrono::Utc::now().timestamp_millis() as u64;
     }
 }

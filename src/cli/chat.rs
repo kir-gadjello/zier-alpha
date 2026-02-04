@@ -8,8 +8,8 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 use localgpt::agent::{
-    get_last_session_id_for_agent, list_sessions_for_agent, search_sessions_for_agent, Agent,
-    AgentConfig, ImageAttachment,
+    get_last_session_id_for_agent, get_skills_summary, list_sessions_for_agent, load_skills,
+    parse_skill_command, search_sessions_for_agent, Agent, AgentConfig, ImageAttachment, Skill,
 };
 use localgpt::config::Config;
 use localgpt::memory::{FastEmbedProvider, MemoryManager};
@@ -170,18 +170,29 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         agent.new_session().await?;
     }
 
+    // Load skills from workspace
+    let workspace = config.workspace_path();
+    let skills = load_skills(&workspace).unwrap_or_default();
+    let skills_count = skills.iter().filter(|s| s.eligibility.is_ready()).count();
+
     let embedding_status = if agent.has_embeddings() {
         " | Embeddings: enabled"
     } else {
         ""
     };
+    let skills_status = if skills_count > 0 {
+        format!(" | Skills: {}", skills_count)
+    } else {
+        String::new()
+    };
     println!(
-        "LocalGPT v{} | Agent: {} | Model: {} | Memory: {} chunks{}\n",
+        "LocalGPT v{} | Agent: {} | Model: {} | Memory: {} chunks{}{}\n",
         env!("CARGO_PKG_VERSION"),
         agent_id,
         agent.model(),
         agent.memory_chunk_count(),
-        embedding_status
+        embedding_status,
+        skills_status
     );
     println!("Type /help for commands, /quit to exit\n");
 
@@ -335,9 +346,26 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                 continue;
             }
 
-            match handle_command(input, &mut agent, &agent_id).await {
+            match handle_command(input, &mut agent, &agent_id, &skills).await {
                 CommandResult::Continue => continue,
                 CommandResult::Quit => break,
+                CommandResult::SendMessage(msg) => {
+                    // Skill invocation - send message to agent
+                    print!("\nLocalGPT: ");
+                    stdout.flush().ok();
+                    match agent.chat(&msg).await {
+                        Ok(response) => {
+                            println!("{}\n", response);
+                            if let Err(e) = agent.auto_save_session() {
+                                eprintln!("Warning: Failed to auto-save session: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {}\n", e);
+                        }
+                    }
+                    continue;
+                }
                 CommandResult::Error(e) => {
                     eprintln!("Error: {}", e);
                     continue;
@@ -477,10 +505,16 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
 enum CommandResult {
     Continue,
     Quit,
+    SendMessage(String),
     Error(String),
 }
 
-async fn handle_command(input: &str, agent: &mut Agent, agent_id: &str) -> CommandResult {
+async fn handle_command(
+    input: &str,
+    agent: &mut Agent,
+    agent_id: &str,
+    skills: &[Skill],
+) -> CommandResult {
     let parts: Vec<&str> = input.split_whitespace().collect();
     let cmd = parts[0];
 
@@ -492,6 +526,7 @@ async fn handle_command(input: &str, agent: &mut Agent, agent_id: &str) -> Comma
             println!("  /help, /h, /?     - Show this help");
             println!("  /quit, /exit, /q  - Exit chat");
             println!("  /new              - Start a fresh session (reloads memory context)");
+            println!("  /skills           - List available skills");
             println!("  /sessions         - List available sessions");
             println!("  /search <query>   - Search across all sessions");
             println!("  /resume <id>      - Resume a specific session");
@@ -507,7 +542,29 @@ async fn handle_command(input: &str, agent: &mut Agent, agent_id: &str) -> Comma
             println!("  /reindex          - Rebuild memory index");
             println!("  /save             - Save current session");
             println!("  /status           - Show session status and API token usage");
+
+            // Show skill commands if any
+            let invocable: Vec<&Skill> = skills.iter().filter(|s| s.can_invoke()).collect();
+            if !invocable.is_empty() {
+                println!("\nSkill commands:");
+                for skill in invocable.iter().take(5) {
+                    let emoji = skill
+                        .emoji
+                        .as_ref()
+                        .map(|e| format!(" {}", e))
+                        .unwrap_or_default();
+                    println!("  /{}{} - {}", skill.command_name, emoji, skill.description);
+                }
+                if invocable.len() > 5 {
+                    println!("  ... use /skills to see all");
+                }
+            }
             println!();
+            CommandResult::Continue
+        }
+
+        "/skills" => {
+            println!("\n{}\n", get_skills_summary(skills));
             CommandResult::Continue
         }
 
@@ -800,9 +857,36 @@ async fn handle_command(input: &str, agent: &mut Agent, agent_id: &str) -> Comma
             }
         }
 
-        _ => CommandResult::Error(format!(
-            "Unknown command: {}. Type /help for commands.",
-            cmd
-        )),
+        _ => {
+            // Check if it's a skill command
+            if let Some(invocation) = parse_skill_command(input, skills) {
+                // Find the skill to get its path
+                if let Some(skill) = skills.iter().find(|s| s.name == invocation.skill_name) {
+                    let skill_prompt = if invocation.args.is_empty() {
+                        format!(
+                            "Use the skill at {}. Read it first, then follow its instructions.",
+                            skill.path.display()
+                        )
+                    } else {
+                        format!(
+                            "Use the skill at {} with this request: {}\n\nRead the skill file first, then follow its instructions.",
+                            skill.path.display(),
+                            invocation.args
+                        )
+                    };
+                    println!(
+                        "\nInvoking skill: {} {}",
+                        skill.name,
+                        skill.emoji.as_deref().unwrap_or("")
+                    );
+                    return CommandResult::SendMessage(skill_prompt);
+                }
+            }
+
+            CommandResult::Error(format!(
+                "Unknown command: {}. Type /help for commands.",
+                cmd
+            ))
+        }
     }
 }

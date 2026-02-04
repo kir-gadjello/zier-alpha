@@ -32,6 +32,7 @@ use tracing::{debug, info};
 
 use crate::agent::{Agent, AgentConfig, StreamEvent};
 use crate::config::Config;
+use crate::heartbeat::{get_last_heartbeat_event, HeartbeatStatus};
 use crate::memory::MemoryManager;
 
 /// Embedded UI assets
@@ -128,6 +129,7 @@ impl Server {
             .route("/api/memory/reindex", post(memory_reindex))
             .route("/api/status", get(status))
             .route("/api/config", get(get_config))
+            .route("/api/heartbeat/status", get(heartbeat_status))
             .route("/api/saved-sessions", get(list_saved_sessions))
             .layer(cors)
             .with_state(state);
@@ -857,6 +859,56 @@ async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> 
             enabled: state.config.heartbeat.enabled,
             interval: state.config.heartbeat.interval.clone(),
         },
+    })
+}
+
+// Heartbeat status endpoint
+#[derive(Serialize)]
+struct HeartbeatStatusResponse {
+    enabled: bool,
+    interval: String,
+    last_event: Option<HeartbeatEventInfo>,
+}
+
+#[derive(Serialize)]
+struct HeartbeatEventInfo {
+    ts: u64,
+    status: String,
+    duration_ms: u64,
+    preview: Option<String>,
+    reason: Option<String>,
+    age_seconds: u64,
+}
+
+async fn heartbeat_status(State(state): State<Arc<AppState>>) -> Json<HeartbeatStatusResponse> {
+    let last_event = get_last_heartbeat_event().map(|event| {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let age_seconds = (now_ms.saturating_sub(event.ts)) / 1000;
+
+        let status = match event.status {
+            HeartbeatStatus::Sent => "sent",
+            HeartbeatStatus::Ok => "ok",
+            HeartbeatStatus::Skipped => "skipped",
+            HeartbeatStatus::Failed => "failed",
+        };
+
+        HeartbeatEventInfo {
+            ts: event.ts,
+            status: status.to_string(),
+            duration_ms: event.duration_ms,
+            preview: event.preview,
+            reason: event.reason,
+            age_seconds,
+        }
+    });
+
+    Json(HeartbeatStatusResponse {
+        enabled: state.config.heartbeat.enabled,
+        interval: state.config.heartbeat.interval.clone(),
+        last_event,
     })
 }
 

@@ -29,7 +29,8 @@ pub fn create_default_tools(config: &Config) -> Result<Vec<Box<dyn Tool>>> {
         Box::new(ReadFileTool::new()),
         Box::new(WriteFileTool::new()),
         Box::new(EditFileTool::new()),
-        Box::new(MemorySearchTool::new(workspace)),
+        Box::new(MemorySearchTool::new(workspace.clone())),
+        Box::new(MemoryGetTool::new(workspace)),
         Box::new(WebFetchTool::new(config.tools.web_fetch_max_bytes)),
     ])
 }
@@ -445,6 +446,111 @@ impl Tool for MemorySearchTool {
         } else {
             Ok(results.join("\n"))
         }
+    }
+}
+
+// Memory Get Tool - efficient snippet fetching after memory_search
+pub struct MemoryGetTool {
+    workspace: PathBuf,
+}
+
+impl MemoryGetTool {
+    pub fn new(workspace: PathBuf) -> Self {
+        Self { workspace }
+    }
+
+    fn resolve_path(&self, path: &str) -> PathBuf {
+        // Handle paths relative to workspace
+        if path.starts_with("memory/") || path == "MEMORY.md" || path == "HEARTBEAT.md" {
+            self.workspace.join(path)
+        } else {
+            PathBuf::from(shellexpand::tilde(path).to_string())
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for MemoryGetTool {
+    fn name(&self) -> &str {
+        "memory_get"
+    }
+
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "memory_get".to_string(),
+            description: "Safe snippet read from MEMORY.md or memory/*.md with optional line range; use after memory_search to pull only the needed lines and keep context small.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file (e.g., 'MEMORY.md' or 'memory/2024-01-15.md')"
+                    },
+                    "from": {
+                        "type": "integer",
+                        "description": "Starting line number (1-indexed, default: 1)"
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "Number of lines to read (default: 50)"
+                    }
+                },
+                "required": ["path"]
+            }),
+        }
+    }
+
+    async fn execute(&self, arguments: &str) -> Result<String> {
+        let args: Value = serde_json::from_str(arguments)?;
+        let path = args["path"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
+
+        let from = args["from"].as_u64().unwrap_or(1).max(1) as usize;
+        let lines_count = args["lines"].as_u64().unwrap_or(50) as usize;
+
+        let resolved_path = self.resolve_path(path);
+
+        debug!(
+            "Memory get: {} (from: {}, lines: {})",
+            resolved_path.display(),
+            from,
+            lines_count
+        );
+
+        if !resolved_path.exists() {
+            return Ok(format!("File not found: {}", path));
+        }
+
+        let content = fs::read_to_string(&resolved_path)?;
+        let lines: Vec<&str> = content.lines().collect();
+        let total_lines = lines.len();
+
+        // Convert from 1-indexed to 0-indexed
+        let start = (from - 1).min(total_lines);
+        let end = (start + lines_count).min(total_lines);
+
+        if start >= total_lines {
+            return Ok(format!(
+                "Line {} is past end of file ({} lines)",
+                from, total_lines
+            ));
+        }
+
+        let selected: Vec<String> = lines[start..end]
+            .iter()
+            .enumerate()
+            .map(|(i, line)| format!("{:4}\t{}", start + i + 1, line))
+            .collect();
+
+        let header = format!(
+            "# {} (lines {}-{} of {})\n",
+            path,
+            start + 1,
+            end,
+            total_lines
+        );
+        Ok(header + &selected.join("\n"))
     }
 }
 

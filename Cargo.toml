@@ -32,6 +32,7 @@ fastembed = "5.8"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 json5 = "0.4"
 toml = "0.8"
 

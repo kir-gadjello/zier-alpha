@@ -37,7 +37,7 @@ LocalGPT is a local-only AI assistant with persistent markdown-based memory and 
   - `session_store.rs` - Session metadata store (`sessions.json`) with CLI session ID persistence
   - `system_prompt.rs` - Builds system prompt with identity, safety, workspace info, tools, skills, and special tokens
   - `skills.rs` - Loads SKILL.md files from workspace/skills/ for specialized task handling
-  - `tools.rs` - Agent tools: `bash`, `read_file`, `write_file`, `edit_file`, `memory_search`, `memory_append`, `web_fetch`
+  - `tools.rs` - Agent tools: `bash`, `read_file`, `write_file`, `edit_file`, `memory_search`, `memory_get`, `web_fetch`
 
 - **memory/** - Markdown-based knowledge store
   - `index.rs` - SQLite FTS5 index for fast search. Chunks files (~400 tokens with 80 token overlap)
@@ -77,20 +77,54 @@ Key settings:
 - `heartbeat.active_hours` - Optional `{start, end}` in "HH:MM" format
 - `server.port` - HTTP server port (default: 31327)
 
-## Skills System
+## Skills System (OpenClaw-Compatible)
 
-Skills are SKILL.md files in `workspace/skills/<skill-name>/SKILL.md` that provide specialized instructions.
+Skills are SKILL.md files that provide specialized instructions for specific tasks.
 
+### Skill Sources (Priority Order)
+
+1. **Workspace skills**: `~/.localgpt/workspace/skills/` (highest priority)
+2. **Managed skills**: `~/.localgpt/skills/` (user-level, shared across workspaces)
+
+### SKILL.md Format
+
+```yaml
+---
+name: github-pr
+description: "Create and manage GitHub PRs"
+user-invocable: true              # Expose as /github-pr command (default: true)
+disable-model-invocation: false   # Include in model prompt (default: false)
+command-dispatch: tool            # Optional: direct tool dispatch
+command-tool: bash                # Tool name for dispatch
+metadata:
+  openclaw:
+    emoji: "🐙"
+    always: false                 # Skip eligibility checks
+    requires:
+      bins: ["gh", "git"]         # Required binaries (all must exist)
+      anyBins: ["python", "python3"]  # At least one required
+      env: ["GITHUB_TOKEN"]       # Required environment variables
+---
+
+# GitHub PR Skill
+
+Instructions for the agent on how to create PRs...
 ```
-~/.localgpt/workspace/
-└── skills/
-    ├── code-review/
-    │   └── SKILL.md
-    └── commit-message/
-        └── SKILL.md
-```
 
-When a skill applies, the agent reads the SKILL.md and follows its instructions. The system prompt includes an `<available_skills>` list with skill names, descriptions, and paths.
+### Skill Features
+
+| Feature | Description |
+|---------|-------------|
+| **Slash commands** | Invoke skills via `/skill-name [args]` |
+| **Requirements gating** | Skills blocked if missing binaries/env vars |
+| **Model prompt filtering** | `disable-model-invocation: true` hides from model but keeps command |
+| **Multiple sources** | Workspace skills override managed skills of same name |
+| **Emoji display** | Show emoji in `/skills` list and `/help` |
+
+### CLI Commands
+
+- `/skills` - List all skills with eligibility status
+- `/skill-name [args]` - Invoke a skill directly
 
 ## CLI Commands (Interactive Chat)
 
@@ -99,17 +133,20 @@ In the `chat` command, these slash commands are available:
 - `/help` - Show available commands
 - `/quit`, `/exit`, `/q` - Exit chat
 - `/new` - Start fresh session (reloads system prompt and memory context)
+- `/skills` - List available skills with status
 - `/compact` - Compact session history (summarize and truncate)
 - `/clear` - Clear session history (keeps current context)
 - `/memory <query>` - Search memory files
 - `/save` - Save current session to disk
 - `/status` - Show session info (ID, messages, tokens, compactions)
 
+Plus any skill slash commands (e.g., `/github-pr`, `/commit`) based on installed skills.
+
 ## OpenClaw Compatibility
 
-LocalGPT uses a file structure compatible with OpenClaw for easy migration.
+LocalGPT maintains strong compatibility with OpenClaw workspace files for seamless migration.
 
-### Directory Structure (matches OpenClaw)
+### Directory Structure
 
 ```
 ~/.localgpt/                          # State directory (OpenClaw: ~/.openclaw/)
@@ -117,50 +154,129 @@ LocalGPT uses a file structure compatible with OpenClaw for easy migration.
 ├── agents/
 │   └── main/                         # Default agent ID
 │       └── sessions/
-│           ├── sessions.json         # Session metadata + CLI session IDs
-│           └── <sessionId>.jsonl     # Session transcripts
-├── workspace/                        # Memory workspace
-│   ├── MEMORY.md                     # Long-term memory
-│   ├── HEARTBEAT.md                  # Pending tasks
-│   ├── SOUL.md                       # Persona/tone (optional)
-│   └── memory/
-│       └── YYYY-MM-DD.md             # Daily logs
+│           ├── sessions.json         # Session metadata (compatible format)
+│           └── <sessionId>.jsonl     # Session transcripts (Pi format)
+├── workspace/                        # Memory workspace (fully compatible)
+│   ├── MEMORY.md                     # Long-term curated memory
+│   ├── HEARTBEAT.md                  # Pending autonomous tasks
+│   ├── SOUL.md                       # Persona and tone guidance
+│   ├── USER.md                       # User profile (OpenClaw)
+│   ├── IDENTITY.md                   # Agent identity (OpenClaw)
+│   ├── TOOLS.md                      # Tool notes (OpenClaw)
+│   ├── AGENTS.md                     # Operating instructions (OpenClaw)
+│   ├── memory/
+│   │   └── YYYY-MM-DD.md             # Daily logs
+│   ├── knowledge/                    # Knowledge repository (optional)
+│   └── skills/                       # Custom skills
 └── logs/
 ```
 
-### Migrating from OpenClaw
+### Workspace Files (Full Compatibility)
 
-Best-effort migration from OpenClaw:
+OpenClaw workspace files are fully supported. Copy them directly:
 
-```bash
-# Copy OpenClaw data to LocalGPT
-cp -r ~/.openclaw/agents ~/.localgpt/agents
-cp -r ~/.openclaw/workspace ~/.localgpt/workspace
+| File | Purpose | LocalGPT Support |
+|------|---------|------------------|
+| `MEMORY.md` | Long-term curated knowledge (facts, preferences, decisions) | ✅ Full |
+| `HEARTBEAT.md` | Pending tasks for autonomous heartbeat runs | ✅ Full |
+| `SOUL.md` | Persona, tone, and behavioral boundaries | ✅ Full |
+| `USER.md` | User profile and addressing preferences | ✅ Loaded |
+| `IDENTITY.md` | Agent name, vibe, emoji | ✅ Loaded |
+| `TOOLS.md` | Notes about local tools and conventions | ✅ Loaded |
+| `AGENTS.md` | Operating instructions for the agent | ✅ Loaded |
+| `BOOTSTRAP.md` | One-time first-run ritual | ✅ First session only |
+| `memory/*.md` | Daily logs (YYYY-MM-DD.md format) | ✅ Full |
+| `knowledge/` | Structured knowledge repository | ✅ Indexed |
+| `skills/*/SKILL.md` | Specialized task instructions | ✅ Full |
 
-# sessions.json format is compatible
-# CLI session IDs (cliSessionIds, claudeCliSessionId) are preserved
+### Memory File Formats
+
+All memory files are **plain Markdown** with no required frontmatter.
+
+**MEMORY.md** - Curated long-term memory:
+```markdown
+# Long-term Memory
+
+## User Info
+- Name: Yi
+- Role: Product software engineer
+- Preference: Short, direct responses
+
+## Key Decisions
+- Using Rust for LocalGPT implementation
+- SQLite FTS5 for memory search
+
+## TODOs
+- [ ] Action items to remember
 ```
 
-**What works:**
-- `sessions.json` session store (same format)
-- CLI session ID persistence (`cliSessionIds` map)
-- Workspace files: `MEMORY.md`, `HEARTBEAT.md`, `SOUL.md`, `memory/*.md`
-- Session transcripts (`<sessionId>.jsonl`)
+**memory/YYYY-MM-DD.md** - Daily logs:
+```markdown
+# 2026-02-03
 
-**What differs:**
-- Config format: LocalGPT uses TOML, OpenClaw uses JSON5
-- No multi-channel routing (LocalGPT is local-only)
-- No bindings/agents.list (LocalGPT uses single "main" agent)
-- No subagent spawning (yet)
+## Session Notes
+- Discussed project architecture
+- Decided on Pi-compatible session format
 
-**Auto-config migration:**
-If `~/.localgpt/config.toml` doesn't exist but `~/.openclaw/config.json5` does, LocalGPT will auto-migrate:
-- `agents.defaults.workspace` → `memory.workspace`
-- `agents.defaults.model` → `agent.default_model`
-- `models.openai.apiKey` → `providers.openai.api_key`
-- `models.anthropic.apiKey` → `providers.anthropic.api_key`
+## Action Items
+- [ ] Implement web UI
+```
 
-### sessions.json Format
+**HEARTBEAT.md** - Autonomous task list:
+```markdown
+# Pending Tasks
+
+- [ ] Check for new emails and summarize
+- [ ] Review yesterday's notes
+```
+
+**SOUL.md** - Persona definition:
+```markdown
+# Persona
+
+You are a helpful assistant with a dry sense of humor.
+Keep responses concise. Avoid unnecessary pleasantries.
+```
+
+### Memory Search Compatibility
+
+LocalGPT uses the same chunking and indexing approach as OpenClaw:
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Chunk size | ~400 tokens | Same as OpenClaw |
+| Chunk overlap | 80 tokens | Same as OpenClaw |
+| Index format | SQLite FTS5 + vectors | Compatible approach |
+| Hybrid search | 0.7 vector + 0.3 BM25 | Same weights |
+
+**Indexed paths:**
+- `MEMORY.md` (or `memory.md`)
+- `memory/*.md` (daily logs)
+- `knowledge/**/*.md` (if present)
+- Session transcripts (optional)
+
+### Session Format (Pi-Compatible)
+
+Session transcripts use Pi's SessionManager JSONL format for OpenClaw compatibility:
+
+**Header** (first line):
+```json
+{"type":"session","version":1,"id":"uuid","timestamp":"2026-02-03T10:00:00Z","cwd":"/path","compactionCount":0,"memoryFlushCompactionCount":0}
+```
+
+**Messages**:
+```json
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Hello"}],"timestamp":1234567890}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}],"usage":{"input":10,"output":5,"totalTokens":15},"model":"claude-3-opus","stopReason":"end_turn","timestamp":1234567891}}
+```
+
+**Tool calls**:
+```json
+{"type":"message","message":{"role":"assistant","content":[],"toolCalls":[{"id":"call_1","name":"bash","arguments":"{\"command\":\"ls\"}"}]}}
+{"type":"message","message":{"role":"toolResult","content":[{"type":"text","text":"file1.txt\nfile2.txt"}],"toolCallId":"call_1"}}
+```
+
+### sessions.json Format (Compatible)
 
 ```json
 {
@@ -171,10 +287,51 @@ If `~/.localgpt/config.toml` doesn't exist but `~/.openclaw/config.json5` does, 
       "claude-cli": "cli-session-uuid"
     },
     "claudeCliSessionId": "cli-session-uuid",
-    "compactionCount": 0
+    "compactionCount": 0,
+    "inputTokens": 1000,
+    "outputTokens": 500,
+    "totalTokens": 1500,
+    "memoryFlushCompactionCount": 0,
+    "lastHeartbeatText": "...",
+    "lastHeartbeatSentAt": 1234567890
   }
 }
 ```
+
+### Migrating from OpenClaw
+
+```bash
+# Copy workspace files (fully compatible)
+cp -r ~/.openclaw/workspace/* ~/.localgpt/workspace/
+
+# Copy session data
+cp -r ~/.openclaw/agents ~/.localgpt/agents
+
+# Memory index will be rebuilt automatically on first run
+```
+
+**What works immediately:**
+- All workspace files (MEMORY.md, SOUL.md, USER.md, etc.)
+- Daily logs (memory/*.md)
+- Knowledge repository (knowledge/)
+- Skills (skills/*/SKILL.md)
+- Session metadata (sessions.json)
+- Session transcripts (*.jsonl)
+- CLI session IDs for resume
+
+**What differs:**
+- Config format: TOML vs JSON5 (auto-migrated)
+- No multi-channel routing (LocalGPT is local-only)
+- No remote channels (Telegram, Discord, Slack)
+- No subagent spawning (single "main" agent)
+- No plugin/extension system
+
+**Auto-config migration:**
+If `~/.localgpt/config.toml` doesn't exist but `~/.openclaw/config.json5` does:
+- `agents.defaults.workspace` → `memory.workspace`
+- `agents.defaults.model` → `agent.default_model`
+- `models.openai.apiKey` → `providers.openai.api_key`
+- `models.anthropic.apiKey` → `providers.anthropic.api_key`
 
 ## Git Version Control
 

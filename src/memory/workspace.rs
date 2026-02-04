@@ -47,6 +47,13 @@ pub fn init_workspace(workspace: &Path) -> Result<()> {
         info!("Created {}", gitignore_path.display());
     }
 
+    // Create BOOTSTRAP.md if it doesn't exist (OpenClaw-compatible: one-time first-run ritual)
+    let bootstrap_path = workspace.join("BOOTSTRAP.md");
+    if !bootstrap_path.exists() {
+        fs::write(&bootstrap_path, BOOTSTRAP_TEMPLATE)?;
+        info!("Created {}", bootstrap_path.display());
+    }
+
     Ok(())
 }
 
@@ -110,6 +117,26 @@ If you change this file, tell the user — it's your soul, and they should know.
 ---
 
 _This file is yours to evolve. As you learn who you are, update it._
+"#;
+
+const BOOTSTRAP_TEMPLATE: &str = r#"# BOOTSTRAP.md - First Run Setup
+
+This file is loaded ONLY on your first session with LocalGPT.
+Use it to introduce yourself and set up initial preferences.
+
+## First Things First
+
+Welcome! I'm your new AI assistant. Before we begin:
+
+1. **Who are you?** Tell me your name and how you'd like me to address you.
+2. **What's your style?** Do you prefer concise answers or detailed explanations?
+3. **Any preferences?** Time zone, communication style, topics you're interested in?
+
+I'll save what I learn to MEMORY.md so I remember it in future sessions.
+
+---
+
+_After our first conversation, this file won't be loaded again. Feel free to delete it or keep it as a reminder of how we started._
 "#;
 
 const GITIGNORE_TEMPLATE: &str = r#"# LocalGPT workspace .gitignore

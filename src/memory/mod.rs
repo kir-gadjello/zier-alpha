@@ -163,6 +163,26 @@ impl MemoryManager {
         }
     }
 
+    /// Read the BOOTSTRAP.md file (OpenClaw-compatible: one-time first-run ritual)
+    pub fn read_bootstrap_file(&self) -> Result<String> {
+        let path = self.workspace.join("BOOTSTRAP.md");
+        if path.exists() {
+            Ok(fs::read_to_string(&path)?)
+        } else {
+            Ok(String::new())
+        }
+    }
+
+    /// Read the TOOLS.md file (OpenClaw-compatible: local tool notes)
+    pub fn read_tools_file(&self) -> Result<String> {
+        let path = self.workspace.join("TOOLS.md");
+        if path.exists() {
+            Ok(fs::read_to_string(&path)?)
+        } else {
+            Ok(String::new())
+        }
+    }
+
     /// Read recent daily log files
     pub fn read_recent_daily_logs(&self, days: usize) -> Result<String> {
         let memory_dir = self.workspace.join("memory");
