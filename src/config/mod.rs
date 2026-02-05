@@ -63,6 +63,18 @@ pub struct ToolsConfig {
     /// e.g., ["bash", "write_file", "edit_file"]
     #[serde(default)]
     pub require_approval: Vec<String>,
+
+    /// Maximum characters for tool output (0 = unlimited)
+    #[serde(default = "default_tool_output_max_chars")]
+    pub tool_output_max_chars: usize,
+
+    /// Log warnings for suspicious injection patterns detected in tool outputs
+    #[serde(default = "default_true")]
+    pub log_injection_warnings: bool,
+
+    /// Wrap tool outputs and memory content with XML-style delimiters
+    #[serde(default = "default_true")]
+    pub use_content_delimiters: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -217,6 +229,9 @@ fn default_bash_timeout() -> u64 {
 fn default_web_fetch_max_bytes() -> usize {
     10000
 }
+fn default_tool_output_max_chars() -> usize {
+    50000 // 50k characters max for tool output by default
+}
 fn default_openai_base_url() -> String {
     "https://api.openai.com/v1".to_string()
 }
@@ -298,6 +313,9 @@ impl Default for ToolsConfig {
             bash_timeout_ms: default_bash_timeout(),
             web_fetch_max_bytes: default_web_fetch_max_bytes(),
             require_approval: Vec::new(),
+            tool_output_max_chars: default_tool_output_max_chars(),
+            log_injection_warnings: default_true(),
+            use_content_delimiters: default_true(),
         }
     }
 }

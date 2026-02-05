@@ -1900,6 +1900,8 @@ dependencies = [
  "mockall",
  "notify",
  "notify-debouncer-mini",
+ "once_cell",
+ "regex",
  "reqwest",
  "rusqlite",
  "rust-embed",

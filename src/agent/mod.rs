@@ -1,4 +1,5 @@
 mod providers;
+mod sanitize;
 mod session;
 mod session_store;
 mod skills;
@@ -8,6 +9,11 @@ mod tools;
 pub use providers::{
     ImageAttachment, LLMProvider, LLMResponse, LLMResponseContent, Message, Role, StreamChunk,
     StreamEvent, StreamResult, ToolCall, ToolSchema, Usage,
+};
+pub use sanitize::{
+    wrap_external_content, wrap_memory_content, wrap_tool_output, MemorySource, SanitizeResult,
+    EXTERNAL_CONTENT_END, EXTERNAL_CONTENT_START, MEMORY_CONTENT_END, MEMORY_CONTENT_START,
+    TOOL_OUTPUT_END, TOOL_OUTPUT_START,
 };
 pub use session::{
     get_last_session_id, get_last_session_id_for_agent, get_sessions_dir_for_agent, get_state_dir,
@@ -338,7 +344,30 @@ impl Agent {
     async fn execute_tool(&self, call: &ToolCall) -> Result<String> {
         for tool in &self.tools {
             if tool.name() == call.name {
-                return tool.execute(&call.arguments).await;
+                let raw_output = tool.execute(&call.arguments).await?;
+
+                // Apply sanitization if configured
+                if self.app_config.tools.use_content_delimiters {
+                    let max_chars = if self.app_config.tools.tool_output_max_chars > 0 {
+                        Some(self.app_config.tools.tool_output_max_chars)
+                    } else {
+                        None
+                    };
+                    let result = sanitize::wrap_tool_output(&call.name, &raw_output, max_chars);
+
+                    // Log warnings for suspicious patterns
+                    if self.app_config.tools.log_injection_warnings && !result.warnings.is_empty() {
+                        tracing::warn!(
+                            "Suspicious patterns detected in {} output: {:?}",
+                            call.name,
+                            result.warnings
+                        );
+                    }
+
+                    return Ok(result.content);
+                }
+
+                return Ok(raw_output);
             }
         }
         anyhow::bail!("Unknown tool: {}", call.name)
@@ -346,6 +375,7 @@ impl Agent {
 
     async fn build_memory_context(&self) -> Result<String> {
         let mut context = String::new();
+        let use_delimiters = self.app_config.tools.use_content_delimiters;
 
         // Show welcome message on brand new workspace (first run)
         if self.memory.is_brand_new() {
@@ -357,8 +387,16 @@ impl Agent {
         // Load IDENTITY.md first (OpenClaw-compatible: agent identity context)
         if let Ok(identity_content) = self.memory.read_identity_file() {
             if !identity_content.is_empty() {
-                context.push_str("# Identity (IDENTITY.md)\n\n");
-                context.push_str(&identity_content);
+                if use_delimiters {
+                    context.push_str(&sanitize::wrap_memory_content(
+                        "IDENTITY.md",
+                        &identity_content,
+                        sanitize::MemorySource::Identity,
+                    ));
+                } else {
+                    context.push_str("# Identity (IDENTITY.md)\n\n");
+                    context.push_str(&identity_content);
+                }
                 context.push_str("\n\n---\n\n");
             }
         }
@@ -366,8 +404,16 @@ impl Agent {
         // Load USER.md (OpenClaw-compatible: user info)
         if let Ok(user_content) = self.memory.read_user_file() {
             if !user_content.is_empty() {
-                context.push_str("# User Info (USER.md)\n\n");
-                context.push_str(&user_content);
+                if use_delimiters {
+                    context.push_str(&sanitize::wrap_memory_content(
+                        "USER.md",
+                        &user_content,
+                        sanitize::MemorySource::User,
+                    ));
+                } else {
+                    context.push_str("# User Info (USER.md)\n\n");
+                    context.push_str(&user_content);
+                }
                 context.push_str("\n\n---\n\n");
             }
         }
@@ -375,7 +421,15 @@ impl Agent {
         // Load SOUL.md (persona/tone) - this defines who the agent is
         if let Ok(soul_content) = self.memory.read_soul_file() {
             if !soul_content.is_empty() {
-                context.push_str(&soul_content);
+                if use_delimiters {
+                    context.push_str(&sanitize::wrap_memory_content(
+                        "SOUL.md",
+                        &soul_content,
+                        sanitize::MemorySource::Soul,
+                    ));
+                } else {
+                    context.push_str(&soul_content);
+                }
                 context.push_str("\n\n---\n\n");
             }
         }
@@ -383,8 +437,16 @@ impl Agent {
         // Load AGENTS.md (OpenClaw-compatible: list of connected agents)
         if let Ok(agents_content) = self.memory.read_agents_file() {
             if !agents_content.is_empty() {
-                context.push_str("# Available Agents (AGENTS.md)\n\n");
-                context.push_str(&agents_content);
+                if use_delimiters {
+                    context.push_str(&sanitize::wrap_memory_content(
+                        "AGENTS.md",
+                        &agents_content,
+                        sanitize::MemorySource::Agents,
+                    ));
+                } else {
+                    context.push_str("# Available Agents (AGENTS.md)\n\n");
+                    context.push_str(&agents_content);
+                }
                 context.push_str("\n\n---\n\n");
             }
         }
@@ -392,8 +454,16 @@ impl Agent {
         // Load TOOLS.md (OpenClaw-compatible: local tool notes)
         if let Ok(tools_content) = self.memory.read_tools_file() {
             if !tools_content.is_empty() {
-                context.push_str("# Tool Notes (TOOLS.md)\n\n");
-                context.push_str(&tools_content);
+                if use_delimiters {
+                    context.push_str(&sanitize::wrap_memory_content(
+                        "TOOLS.md",
+                        &tools_content,
+                        sanitize::MemorySource::Tools,
+                    ));
+                } else {
+                    context.push_str("# Tool Notes (TOOLS.md)\n\n");
+                    context.push_str(&tools_content);
+                }
                 context.push_str("\n\n---\n\n");
             }
         }
@@ -401,8 +471,16 @@ impl Agent {
         // Load MEMORY.md if it exists
         if let Ok(memory_content) = self.memory.read_memory_file() {
             if !memory_content.is_empty() {
-                context.push_str("# Long-term Memory (MEMORY.md)\n\n");
-                context.push_str(&memory_content);
+                if use_delimiters {
+                    context.push_str(&sanitize::wrap_memory_content(
+                        "MEMORY.md",
+                        &memory_content,
+                        sanitize::MemorySource::Memory,
+                    ));
+                } else {
+                    context.push_str("# Long-term Memory (MEMORY.md)\n\n");
+                    context.push_str(&memory_content);
+                }
                 context.push_str("\n\n");
             }
         }
@@ -410,8 +488,16 @@ impl Agent {
         // Load today's and yesterday's daily logs
         if let Ok(recent_logs) = self.memory.read_recent_daily_logs(2) {
             if !recent_logs.is_empty() {
-                context.push_str("# Recent Daily Logs\n\n");
-                context.push_str(&recent_logs);
+                if use_delimiters {
+                    context.push_str(&sanitize::wrap_memory_content(
+                        "memory/*.md",
+                        &recent_logs,
+                        sanitize::MemorySource::DailyLog,
+                    ));
+                } else {
+                    context.push_str("# Recent Daily Logs\n\n");
+                    context.push_str(&recent_logs);
+                }
                 context.push_str("\n\n");
             }
         }
@@ -419,8 +505,16 @@ impl Agent {
         // Load HEARTBEAT.md if it exists
         if let Ok(heartbeat) = self.memory.read_heartbeat_file() {
             if !heartbeat.is_empty() {
-                context.push_str("# Pending Tasks (HEARTBEAT.md)\n\n");
-                context.push_str(&heartbeat);
+                if use_delimiters {
+                    context.push_str(&sanitize::wrap_memory_content(
+                        "HEARTBEAT.md",
+                        &heartbeat,
+                        sanitize::MemorySource::Heartbeat,
+                    ));
+                } else {
+                    context.push_str("# Pending Tasks (HEARTBEAT.md)\n\n");
+                    context.push_str(&heartbeat);
+                }
                 context.push('\n');
             }
         }
