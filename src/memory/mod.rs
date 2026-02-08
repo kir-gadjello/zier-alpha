@@ -1,9 +1,11 @@
+pub mod artifact;
 mod embeddings;
 mod index;
 mod search;
 mod watcher;
 mod workspace;
 
+pub use artifact::ArtifactWriter;
 #[cfg(feature = "gguf")]
 pub use embeddings::LlamaCppProvider;
 pub use embeddings::{hash_text, EmbeddingProvider, FastEmbedProvider, OpenAIEmbeddingProvider};

@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::debug;
 
+pub mod external;
+pub mod runner;
+
 use super::providers::ToolSchema;
 use crate::config::Config;
 use crate::memory::MemoryManager;

@@ -13,7 +13,11 @@ pub mod config;
 #[cfg(feature = "desktop")]
 pub mod desktop;
 pub mod heartbeat;
+pub mod ingress;
 pub mod memory;
+pub mod prompts;
+pub mod scheduler;
+pub mod security;
 pub mod server;
 
 pub use config::Config;

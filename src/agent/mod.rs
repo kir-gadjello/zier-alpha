@@ -104,6 +104,10 @@ impl Agent {
     }
 
     /// Check if a tool requires user approval before execution
+    pub fn set_tools(&mut self, tools: Vec<Box<dyn Tool>>) {
+        self.tools = tools;
+    }
+
     pub fn requires_approval(&self, tool_name: &str) -> bool {
         self.app_config
             .tools
@@ -220,6 +224,10 @@ impl Agent {
 
         info!("Created new session: {}", self.session.id());
         Ok(())
+    }
+
+    pub fn set_system_prompt(&mut self, prompt: &str) {
+        self.session.set_system_context(prompt.to_string());
     }
 
     pub async fn resume_session(&mut self, session_id: &str) -> Result<()> {
