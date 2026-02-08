@@ -14,6 +14,10 @@ use localgpt::memory::MemoryManager;
 use localgpt::prompts::PromptRegistry;
 use localgpt::scheduler::Scheduler;
 use localgpt::server::Server;
+use localgpt::scripting::ScriptService;
+use localgpt::scripting::loader::ScriptLoader;
+use localgpt::agent::{create_default_tools, Agent, AgentConfig, ScriptTool, Tool};
+use localgpt::memory::ArtifactWriter;
 
 /// Synchronously stop the daemon (for use before Tokio runtime starts)
 pub fn stop_sync() -> Result<()> {
@@ -154,6 +158,28 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     let bus = std::sync::Arc::new(IngressBus::new(100));
     println!("  Ingress Bus: initialized");
 
+    // VIZIER: Initialize Scripting Service
+    // TODO: Load policy from config. For now, strict default.
+    let script_service = ScriptService::new(Default::default())?;
+    let script_loader = ScriptLoader::new(script_service.clone());
+
+    if let Ok(home) = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    {
+        let extensions_dir = home.home_dir().join(".localgpt/extensions");
+        if extensions_dir.exists() {
+            script_loader.load_from_dir(&extensions_dir).await?;
+            println!("  Extensions: loaded from {}", extensions_dir.display());
+        }
+    }
+
+    let script_tools_def = script_service.get_tools().await?;
+    let mut script_tools: Vec<ScriptTool> = Vec::new();
+    for def in script_tools_def {
+        script_tools.push(ScriptTool::new(def, script_service.clone()));
+    }
+    println!("  Script Tools: {} loaded", script_tools.len());
+
     // VIZIER: Initialize Scheduler
     let mut scheduler = Scheduler::new(bus.clone()).await?;
     if let Ok(home) = directories::BaseDirs::new()
@@ -189,6 +215,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     let config_clone = config.clone();
     let agent_id_clone = agent_id.to_string();
     let prompts_clone = prompt_registry.clone();
+    let script_tools_clone = script_tools.clone();
 
     tokio::spawn(async move {
         ingress_loop(
@@ -196,6 +223,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
             config_clone,
             agent_id_clone,
             prompts_clone,
+            script_tools_clone,
         )
         .await;
     });
@@ -258,14 +286,12 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     Ok(())
 }
 
-use localgpt::agent::{Agent, AgentConfig};
-use localgpt::memory::ArtifactWriter;
-
 async fn ingress_loop(
     receiver: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<IngressMessage>>>,
     config: Config,
     owner_agent_id: String,
     prompts: std::sync::Arc<PromptRegistry>,
+    script_tools: Vec<ScriptTool>,
 ) {
     let mut rx = receiver.lock().await;
 
@@ -300,6 +326,17 @@ async fn ingress_loop(
                 continue;
             }
         };
+
+        // Inject script tools
+        if !script_tools.is_empty() {
+            let memory_arc = std::sync::Arc::new(memory.clone());
+            if let Ok(mut tools) = create_default_tools(&config, Some(memory_arc)) {
+                for st in &script_tools {
+                    tools.push(Box::new(st.clone()) as Box<dyn Tool>);
+                }
+                agent.set_tools(tools);
+            }
+        }
 
         if let Err(e) = agent.new_session().await {
              tracing::error!("Failed to initialize session: {}", e);

@@ -8,10 +8,12 @@ use tracing::debug;
 
 pub mod external;
 pub mod runner;
+pub mod script;
 
 use super::providers::ToolSchema;
 use crate::config::Config;
 use crate::memory::MemoryManager;
+pub use script::ScriptTool;
 
 #[derive(Debug, Clone)]
 pub struct ToolResult {

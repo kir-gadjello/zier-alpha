@@ -118,9 +118,54 @@ When the daemon is running:
 
 [Why I Built LocalGPT in 4 Nights](https://localgpt.app/blog/why-i-built-localgpt-in-4-nights) — the full story with commit-by-commit breakdown.
 
+## VIZIER Architecture
+
+LocalGPT operates as a "Secure Cognitive Kernel" (VIZIER), decoupling input handling from execution to ensure safety and stability.
+
+```mermaid
+graph TD
+    Ingress[Ingress Sources] -->|IngressMessage| Bus[Ingress Bus]
+
+    subgraph Ingress Sources
+        Telegram[Telegram Gateway]
+        Cron[Scheduler]
+        API[HTTP API]
+    end
+
+    Bus --> ControlPlane[Control Plane Loop]
+
+    subgraph Control Plane Loop
+        TrustCheck{Check TrustLevel}
+        TrustCheck -->|OwnerCommand| RootAgent[Root Agent]
+        TrustCheck -->|TrustedEvent| JobAgent[Job Agent]
+        TrustCheck -->|UntrustedEvent| Sanitizer[Sanitizer Agent]
+    end
+
+    RootAgent -->|Full Access| Tools
+    JobAgent -->|Scoped Access| Tools
+    Sanitizer -->|No Tools| Artifacts
+
+    subgraph Tools
+        Native[Native Tools]
+        Script[Deno Script Tools]
+        Sandbox[Apple Sandbox / Deno V8]
+    end
+
+    Tools -->|Result| AgentResponse
+    AgentResponse --> Artifacts[Artifact Storage]
+```
+
+### Key Components
+
+*   **Ingress Bus** ([`src/ingress/bus.rs`](src/ingress/bus.rs)): Central event bus that decouples input sources (Telegram, Cron) from execution logic.
+*   **Control Plane** ([`src/cli/daemon.rs`](src/cli/daemon.rs)): The main loop that consumes events, determines `TrustLevel`, and initializes the appropriate Agent persona.
+*   **Scheduler** ([`src/scheduler/mod.rs`](src/scheduler/mod.rs)): `cron`-based job scheduler that emits trusted events to the bus.
+*   **Scripting Engine** ([`src/scripting/deno.rs`](src/scripting/deno.rs)): Embedded Deno runtime for executing sandboxed JS/TS tools.
+*   **Sandbox Policy** ([`src/config/sandbox.rs`](src/config/sandbox.rs)): Defines file system and network allowances for tools.
+
 ## Built With
 
-Rust, Tokio, Axum, SQLite (FTS5 + sqlite-vec), fastembed, eframe
+Rust, Tokio, Axum, SQLite (FTS5 + sqlite-vec), fastembed, eframe, Deno Core
 
 ## Contributors
 

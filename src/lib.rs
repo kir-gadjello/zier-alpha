@@ -17,6 +17,7 @@ pub mod ingress;
 pub mod memory;
 pub mod prompts;
 pub mod scheduler;
+pub mod scripting;
 pub mod security;
 pub mod server;
 
