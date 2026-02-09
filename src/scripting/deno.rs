@@ -3,6 +3,7 @@ use deno_core::{op2, OpState, JsRuntime, RuntimeOptions, ModuleSpecifier, v8};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::path::PathBuf;
 use crate::config::SandboxPolicy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +18,54 @@ pub struct SandboxState {
     pub registered_tools: Vec<DenoToolDefinition>,
 }
 
+fn check_path(path: &str, allowed_paths: &[String], is_write: bool) -> Result<PathBuf, std::io::Error> {
+    let path_expanded = shellexpand::tilde(path).to_string();
+    let path_buf = PathBuf::from(&path_expanded);
+
+    let abs_path = if path_buf.exists() {
+        path_buf.canonicalize()?
+    } else if is_write {
+        if let Some(parent) = path_buf.parent() {
+            if parent.exists() {
+                parent.canonicalize()?.join(path_buf.file_name().ok_or(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid file name"))?)
+            } else {
+                return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Parent directory does not exist for {}", path)));
+            }
+        } else {
+             // Path is root or relative to CWD and has no parent component?
+             // If relative "foo.txt", parent is "".
+             // If we use current_dir:
+             std::env::current_dir()?.join(path_buf)
+        }
+    } else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("File not found: {}", path)));
+    };
+
+    for p in allowed_paths {
+        let p_expanded = shellexpand::tilde(p).to_string();
+        let p_buf = PathBuf::from(&p_expanded);
+
+        // We only allow if the allowed path exists and can be canonicalized
+        if let Ok(abs_allowed) = p_buf.canonicalize() {
+             if abs_path.starts_with(&abs_allowed) {
+                 return Ok(abs_path);
+             }
+        } else {
+            // If allowed path ends with *, treat as glob prefix logic on the *string* representation of absolute paths?
+            // Safer to just require allowed paths to exist.
+            // But if allowed is "/tmp/*", and /tmp exists:
+            let p_clean = p_expanded.trim_end_matches('*');
+            if let Ok(abs_allowed_base) = PathBuf::from(p_clean).canonicalize() {
+                if abs_path.starts_with(&abs_allowed_base) {
+                    return Ok(abs_path);
+                }
+            }
+        }
+    }
+
+    Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("Access to {} denied by policy", path)))
+}
+
 #[op2]
 #[string]
 pub fn op_read_file(
@@ -24,22 +73,8 @@ pub fn op_read_file(
     #[string] path: String,
 ) -> Result<String, std::io::Error> {
     let sandbox = state.borrow::<SandboxState>();
-
-    let allowed = sandbox.policy.allow_read.iter().any(|p| {
-        let p_expanded = shellexpand::tilde(p).to_string();
-        let path_expanded = shellexpand::tilde(&path).to_string();
-        if p.ends_with('*') {
-            path_expanded.starts_with(&p_expanded.trim_end_matches('*'))
-        } else {
-            path_expanded == p_expanded
-        }
-    });
-
-    if !allowed {
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("Read access to {} not allowed", path)));
-    }
-
-    let content = std::fs::read_to_string(shellexpand::tilde(&path).to_string())?;
+    let abs_path = check_path(&path, &sandbox.policy.allow_read, false)?;
+    let content = std::fs::read_to_string(abs_path)?;
     Ok(content)
 }
 
@@ -50,22 +85,8 @@ pub fn op_write_file(
     #[string] content: String,
 ) -> Result<(), std::io::Error> {
     let sandbox = state.borrow::<SandboxState>();
-
-    let allowed = sandbox.policy.allow_write.iter().any(|p| {
-        let p_expanded = shellexpand::tilde(p).to_string();
-        let path_expanded = shellexpand::tilde(&path).to_string();
-        if p.ends_with('*') {
-            path_expanded.starts_with(&p_expanded.trim_end_matches('*'))
-        } else {
-            path_expanded == p_expanded
-        }
-    });
-
-    if !allowed {
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("Write access to {} not allowed", path)));
-    }
-
-    std::fs::write(shellexpand::tilde(&path).to_string(), content)?;
+    let abs_path = check_path(&path, &sandbox.policy.allow_write, true)?;
+    std::fs::write(abs_path, content)?;
     Ok(())
 }
 
