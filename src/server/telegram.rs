@@ -3,41 +3,17 @@ use axum::{
     http::{StatusCode, HeaderMap},
     response::{IntoResponse, Response},
 };
-use serde_json::Value;
 use std::sync::Arc;
 use tracing::{info, warn};
 use crate::agent::ImageAttachment;
-use crate::ingress::{IngressMessage, TelegramClient, TrustLevel};
+use crate::ingress::{IngressMessage, TelegramClient, TrustLevel, TelegramUpdate};
 use crate::server::http::AppState;
 use base64::{engine::general_purpose, Engine as _};
-
-// Telegram Update structure (partial)
-#[derive(serde::Deserialize)]
-struct Update {
-    message: Option<Message>,
-}
-
-#[derive(serde::Deserialize)]
-struct Message {
-    from: Option<User>,
-    text: Option<String>,
-    photo: Option<Vec<PhotoSize>>,
-}
-
-#[derive(serde::Deserialize)]
-struct PhotoSize {
-    file_id: String,
-}
-
-#[derive(serde::Deserialize)]
-struct User {
-    id: i64,
-}
 
 pub async fn webhook_handler(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
-    Json(update): Json<Value>,
+    Json(update): Json<TelegramUpdate>,
 ) -> Response {
     // 1. Verify Secret Token
     if let Some(expected_token) = &state.config.server.telegram_secret_token {
@@ -57,12 +33,6 @@ pub async fn webhook_handler(
     } else {
         warn!("Telegram webhook called but IngressBus is not initialized");
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-
-    // 2. Parse Update
-    let update: Update = match serde_json::from_value(update) {
-        Ok(u) => u,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
 
     if let Some(message) = update.message {

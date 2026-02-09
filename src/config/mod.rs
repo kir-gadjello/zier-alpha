@@ -210,6 +210,14 @@ pub struct MemoryIndexPath {
     pub pattern: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TelegramMode {
+    #[default]
+    Webhook,
+    Polling,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_true")]
@@ -221,6 +229,10 @@ pub struct ServerConfig {
     #[serde(default = "default_bind")]
     pub bind: String,
 
+    /// Telegram mode: "webhook" or "polling"
+    #[serde(default)]
+    pub telegram_mode: TelegramMode,
+
     /// Telegram Owner ID (for authentication)
     pub owner_telegram_id: Option<i64>,
 
@@ -229,6 +241,14 @@ pub struct ServerConfig {
 
     /// Telegram Bot Token (for outbound messages)
     pub telegram_bot_token: Option<String>,
+
+    /// Long polling timeout in seconds (default 30)
+    #[serde(default = "default_poll_timeout")]
+    pub telegram_poll_timeout: u64,
+}
+
+fn default_poll_timeout() -> u64 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -413,9 +433,11 @@ impl Default for ServerConfig {
             enabled: default_true(),
             port: default_port(),
             bind: default_bind(),
+            telegram_mode: TelegramMode::default(),
             owner_telegram_id: None,
             telegram_secret_token: None,
             telegram_bot_token: None,
+            telegram_poll_timeout: default_poll_timeout(),
         }
     }
 }

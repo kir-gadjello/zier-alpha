@@ -14,7 +14,8 @@ use zier_alpha::ingress::controller::ingress_loop;
 use zier_alpha::memory::MemoryManager;
 use zier_alpha::prompts::PromptRegistry;
 use zier_alpha::scheduler::Scheduler;
-use zier_alpha::server::Server;
+use zier_alpha::server::{Server, telegram_polling::TelegramPollingService};
+use zier_alpha::config::TelegramMode;
 use zier_alpha::scripting::ScriptService;
 use zier_alpha::scripting::loader::ScriptLoader;
 use zier_alpha::agent::ScriptTool;
@@ -230,6 +231,16 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
         .await;
     });
     println!("  Ingress Loop: started");
+
+    // Start Telegram polling if enabled
+    if config.server.enabled && config.server.telegram_mode == TelegramMode::Polling {
+        if let Some(polling_service) = TelegramPollingService::new(config.clone(), bus.clone()) {
+            tokio::spawn(async move {
+                polling_service.run().await;
+            });
+            println!("  Telegram Polling: started");
+        }
+    }
 
     // Create shared turn gate for heartbeat + HTTP concurrency control
     let turn_gate = TurnGate::new();
