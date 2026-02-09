@@ -66,7 +66,7 @@ function showEmptyState() {
     if (messages.children.length === 0) {
         messages.innerHTML = `
             <div class="empty-state">
-                <h2>Welcome to LocalGPT</h2>
+                <h2>Welcome to Zier Alpha</h2>
                 <p>Start a conversation by typing a message below.</p>
             </div>
         `;

@@ -8,7 +8,9 @@ mod workspace;
 pub use artifact::ArtifactWriter;
 #[cfg(feature = "gguf")]
 pub use embeddings::LlamaCppProvider;
-pub use embeddings::{hash_text, EmbeddingProvider, FastEmbedProvider, OpenAIEmbeddingProvider};
+#[cfg(feature = "fastembed")]
+pub use embeddings::FastEmbedProvider;
+pub use embeddings::{hash_text, EmbeddingProvider, OpenAIEmbeddingProvider};
 pub use index::{MemoryIndex, ReindexStats};
 pub use search::MemoryChunk;
 pub use watcher::MemoryWatcher;
@@ -99,6 +101,7 @@ impl MemoryManager {
             .embedding_provider
             .as_str()
         {
+            #[cfg(feature = "fastembed")]
             "local" => {
                 let model_name = if memory_config.embedding_model.is_empty()
                     || memory_config.embedding_model == "text-embedding-3-small"
@@ -122,6 +125,11 @@ impl MemoryManager {
                         None
                     }
                 }
+            }
+            #[cfg(not(feature = "fastembed"))]
+            "local" => {
+                warn!("Local embedding provider requested but 'fastembed' feature is not enabled. Build with --features fastembed to enable ONNX/CoreML local embeddings. Falling back to FTS-only search.");
+                None
             }
             "openai" => {
                 // Need OpenAI config for API key

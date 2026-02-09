@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 /// Advisory file lock for the agent workspace.
 ///
-/// Lock file lives at `~/.localgpt/workspace.lock` (outside the workspace
+/// Lock file lives at `~/.zier-alpha/workspace.lock` (outside the workspace
 /// to avoid git/watcher noise).
 #[derive(Clone)]
 pub struct WorkspaceLock {
@@ -32,7 +32,7 @@ impl Drop for WorkspaceLockGuard {
 impl WorkspaceLock {
     /// Create a new WorkspaceLock.
     ///
-    /// The lock file is placed at `~/.localgpt/workspace.lock`.
+    /// The lock file is placed at `~/.zier-alpha/workspace.lock`.
     pub fn new() -> Result<Self> {
         let state_dir = crate::agent::get_state_dir()?;
         let path = state_dir.join("workspace.lock");

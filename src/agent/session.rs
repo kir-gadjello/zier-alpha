@@ -304,7 +304,7 @@ impl Session {
             "id": self.id,
             "timestamp": self.created_at.to_rfc3339(),
             "cwd": self.cwd,
-            // LocalGPT extensions (ignored by Pi but preserved)
+            // Zier Alpha extensions (ignored by Pi but preserved)
             "compactionCount": self.compaction_count,
             "memoryFlushCompactionCount": self.memory_flush_compaction_count
         });
@@ -601,7 +601,7 @@ pub fn get_sessions_dir_for_agent(agent_id: &str) -> Result<PathBuf> {
 
     Ok(base
         .home_dir()
-        .join(".localgpt")
+        .join(".zier-alpha")
         .join("agents")
         .join(agent_id)
         .join("sessions"))
@@ -611,7 +611,7 @@ pub fn get_state_dir() -> Result<PathBuf> {
     let base = directories::BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
 
-    Ok(base.home_dir().join(".localgpt"))
+    Ok(base.home_dir().join(".zier-alpha"))
 }
 
 fn estimate_tokens(text: &str) -> usize {

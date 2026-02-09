@@ -5,14 +5,14 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::io::{self, Write};
 
-use localgpt::agent::{
+use zier_alpha::agent::{
     extract_tool_detail, get_last_session_id_for_agent, get_skills_summary,
     list_sessions_for_agent, load_skills, parse_skill_command, search_sessions_for_agent, Agent,
     AgentConfig, ImageAttachment, Skill,
 };
-use localgpt::concurrency::WorkspaceLock;
-use localgpt::config::Config;
-use localgpt::memory::MemoryManager;
+use zier_alpha::concurrency::WorkspaceLock;
+use zier_alpha::config::Config;
+use zier_alpha::memory::MemoryManager;
 
 /// Adjust a byte index to the nearest valid UTF-8 char boundary (searching forward).
 fn floor_char_boundary(s: &str, index: usize) -> usize {
@@ -173,7 +173,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         String::new()
     };
     println!(
-        "LocalGPT v{} | Agent: {} | Model: {} | Memory: {} chunks{}{}\n",
+        "Zier Alpha v{} | Agent: {} | Model: {} | Memory: {} chunks{}{}\n",
         env!("CARGO_PKG_VERSION"),
         agent_id,
         agent.model(),
@@ -338,7 +338,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                 CommandResult::Quit => break,
                 CommandResult::SendMessage(msg) => {
                     // Skill invocation - send message to agent
-                    print!("\nLocalGPT: ");
+                    print!("\nZier Alpha: ");
                     stdout.flush().ok();
                     let _lock_guard = workspace_lock.acquire()?;
                     match agent.chat(&msg).await {
@@ -390,7 +390,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         }
 
         // Send message to agent with streaming
-        print!("\nLocalGPT: ");
+        print!("\nZier Alpha: ");
         stdout.flush()?;
 
         let _lock_guard = workspace_lock.acquire()?;

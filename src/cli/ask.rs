@@ -1,10 +1,10 @@
 use anyhow::Result;
 use clap::Args;
 
-use localgpt::agent::{Agent, AgentConfig};
-use localgpt::concurrency::WorkspaceLock;
-use localgpt::config::Config;
-use localgpt::memory::MemoryManager;
+use zier_alpha::agent::{Agent, AgentConfig};
+use zier_alpha::concurrency::WorkspaceLock;
+use zier_alpha::config::Config;
+use zier_alpha::memory::MemoryManager;
 
 #[derive(Args)]
 pub struct AskArgs {

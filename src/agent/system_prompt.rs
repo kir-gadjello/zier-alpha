@@ -1,4 +1,4 @@
-//! System prompt builder for LocalGPT agent
+//! System prompt builder for Zier Alpha agent
 //!
 //! Builds the system prompt with identity, safety guardrails, workspace info,
 //! and special token handling (NO_REPLY, HEARTBEAT_OK).
@@ -15,7 +15,7 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
     let mut lines = Vec::new();
 
     // Identity
-    lines.push("You are a personal assistant running inside LocalGPT.".to_string());
+    lines.push("You are a personal assistant running inside Zier Alpha.".to_string());
     lines.push(String::new());
 
     // Safety section (inspired by Anthropic's constitution)
@@ -165,7 +165,7 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
 
     // Heartbeat section (for autonomous task runner)
     lines.push("## Heartbeats".to_string());
-    lines.push("LocalGPT may send periodic heartbeat polls to check on pending tasks.".to_string());
+    lines.push("Zier Alpha may send periodic heartbeat polls to check on pending tasks.".to_string());
     lines.push(
         "If you receive a heartbeat poll and there is nothing that needs attention, reply exactly:"
             .to_string(),
@@ -210,7 +210,7 @@ impl<'a> SystemPromptParams<'a> {
         let timezone = now.format("%Z").to_string();
 
         Self {
-            workspace_dir: workspace.to_str().unwrap_or("~/.localgpt/workspace"),
+            workspace_dir: workspace.to_str().unwrap_or("~/.zier-alpha/workspace"),
             model,
             tool_names: Vec::new(),
             hostname: std::env::var("HOSTNAME")

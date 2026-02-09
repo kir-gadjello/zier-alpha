@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
-use localgpt::config::Config;
+use zier_alpha::config::Config;
 
 #[derive(Args)]
 pub struct ConfigArgs {
@@ -114,7 +114,7 @@ fn init_config(force: bool) -> Result<()> {
     Ok(())
 }
 
-const DEFAULT_CONFIG_TEMPLATE: &str = r#"# LocalGPT Configuration
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"# Zier Alpha Configuration
 
 [agent]
 # Default model: claude-cli/opus, anthropic/claude-sonnet-4-5, openai/gpt-4o, etc.
@@ -144,7 +144,7 @@ interval = "30m"
 # end = "22:00"
 
 [memory]
-workspace = "~/.localgpt/workspace"
+workspace = "~/.zier-alpha/workspace"
 
 [server]
 enabled = true

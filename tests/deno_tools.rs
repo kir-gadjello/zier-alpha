@@ -1,5 +1,5 @@
-use localgpt::config::SandboxPolicy;
-use localgpt::scripting::ScriptService;
+use zier_alpha::config::SandboxPolicy;
+use zier_alpha::scripting::ScriptService;
 use tempfile::NamedTempFile;
 use std::io::Write;
 

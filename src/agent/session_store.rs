@@ -1,7 +1,7 @@
 //! Session store - manages sessions.json metadata file
 //!
 //! Matches OpenClaw's session store format for compatibility:
-//! ~/.localgpt/agents/<agentId>/sessions/sessions.json
+//! ~/.zier-alpha/agents/<agentId>/sessions/sessions.json
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

@@ -14,7 +14,7 @@ reports its available tools correctly, but when asked to use one it emits
 raw XML-like text instead of producing structured tool calls:
 
 ```
-LocalGPT: <tool_call>
+Zier Alpha: <tool_call>
 <bash>
 pwd
 </tool_call>

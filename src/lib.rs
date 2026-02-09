@@ -1,6 +1,6 @@
-//! LocalGPT - A lightweight, local-only AI assistant with persistent memory
+//! Zier Alpha - A lightweight, local-only AI assistant with persistent memory
 //!
-//! This crate provides the core functionality for LocalGPT, including:
+//! This crate provides the core functionality for Zier Alpha, including:
 //! - Agent core with LLM provider abstraction
 //! - Memory system with markdown files and SQLite index
 //! - Heartbeat runner for continuous operation

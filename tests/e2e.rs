@@ -1,8 +1,8 @@
-use localgpt::config::{Config, MemoryConfig, AgentConfig, ServerConfig};
-use localgpt::ingress::{IngressBus, IngressMessage, TrustLevel};
-use localgpt::ingress::controller::ingress_loop;
-use localgpt::prompts::PromptRegistry;
-use localgpt::scheduler::JobConfig;
+use zier_alpha::config::{Config, MemoryConfig, AgentConfig, ServerConfig};
+use zier_alpha::ingress::{IngressBus, IngressMessage, TrustLevel};
+use zier_alpha::ingress::controller::ingress_loop;
+use zier_alpha::prompts::PromptRegistry;
+use zier_alpha::scheduler::JobConfig;
 use std::sync::Arc;
 use tempfile::TempDir;
 use std::time::Duration;

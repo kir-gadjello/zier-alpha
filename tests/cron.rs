@@ -1,5 +1,5 @@
-use localgpt::ingress::{IngressBus, TrustLevel};
-use localgpt::scheduler::dispatcher::dispatch_job;
+use zier_alpha::ingress::{IngressBus, TrustLevel};
+use zier_alpha::scheduler::dispatcher::dispatch_job;
 
 #[tokio::test]
 async fn test_cron_dispatch() {

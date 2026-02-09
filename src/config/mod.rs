@@ -1,8 +1,6 @@
-mod migrate;
 mod sandbox;
 mod schema;
 
-pub use migrate::{has_openclaw_workspace, openclaw_config_path, try_migrate_openclaw_config};
 pub use sandbox::*;
 pub use schema::*;
 
@@ -162,7 +160,7 @@ pub struct MemoryConfig {
     pub embedding_model: String,
 
     /// Cache directory for local embedding models (optional)
-    /// Default: ~/.cache/localgpt/models
+    /// Default: ~/.cache/zier-alpha/models
     /// Can also be set via FASTEMBED_CACHE_DIR environment variable
     #[serde(default = "default_embedding_cache_dir")]
     pub embedding_cache_dir: String,
@@ -179,12 +177,12 @@ pub struct MemoryConfig {
     pub paths: Vec<MemoryIndexPath>,
 
     /// Maximum messages to save in session memory files (0 = unlimited)
-    /// Similar to OpenClaw's hooks.session-memory.messages (default: 15)
+    /// Defaults to 15 to keep context focused
     #[serde(default = "default_session_max_messages")]
     pub session_max_messages: usize,
 
     /// Maximum characters per message in session memory (0 = unlimited)
-    /// Set to 0 to preserve full message content like OpenClaw
+    /// Set to 0 to preserve full message content
     #[serde(default)]
     pub session_max_chars: usize,
 }
@@ -275,16 +273,16 @@ fn default_interval() -> String {
     "30m".to_string()
 }
 fn default_workspace() -> String {
-    "~/.localgpt/workspace".to_string()
+    "~/.zier-alpha/workspace".to_string()
 }
 fn default_embedding_provider() -> String {
-    "local".to_string() // Local embeddings via fastembed (no API key needed)
+    "none".to_string() // Default to none to avoid ONNX/CoreML dependencies
 }
 fn default_embedding_model() -> String {
     "all-MiniLM-L6-v2".to_string() // Local model via fastembed (no API key needed)
 }
 fn default_embedding_cache_dir() -> String {
-    "~/.cache/localgpt/models".to_string()
+    "~/.cache/zier-alpha/models".to_string()
 }
 fn default_chunk_size() -> usize {
     400
@@ -314,7 +312,7 @@ fn default_log_level() -> String {
     "info".to_string()
 }
 fn default_log_file() -> String {
-    "~/.localgpt/logs/agent.log".to_string()
+    "~/.zier-alpha/logs/agent.log".to_string()
 }
 
 impl Default for AgentConfig {
@@ -395,12 +393,6 @@ impl Config {
         let path = Self::config_path()?;
 
         if !path.exists() {
-            // Try to migrate from OpenClaw config
-            if let Some(migrated) = try_migrate_openclaw_config() {
-                // Save migrated config to disk
-                migrated.save()?;
-                return Ok(migrated);
-            }
             // Create default config file on first run
             let config = Config::default();
             config.save_with_template()?;
@@ -449,7 +441,7 @@ impl Config {
         let base = directories::BaseDirs::new()
             .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
 
-        Ok(base.home_dir().join(".localgpt").join("config.toml"))
+        Ok(base.home_dir().join(".zier-alpha").join("config.toml"))
     }
 
     fn expand_env_vars(&mut self) {
@@ -502,13 +494,13 @@ impl Config {
     /// Get workspace path, expanded
     ///
     /// Resolution order (like OpenClaw):
-    /// 1. LOCALGPT_WORKSPACE env var (absolute path override)
-    /// 2. LOCALGPT_PROFILE env var (creates ~/.localgpt/workspace-{profile})
+    /// 1. ZIER_ALPHA_WORKSPACE env var (absolute path override)
+    /// 2. ZIER_ALPHA_PROFILE env var (creates ~/.zier-alpha/workspace-{profile})
     /// 3. memory.workspace from config file
-    /// 4. Default: ~/.localgpt/workspace
+    /// 4. Default: ~/.zier-alpha/workspace
     pub fn workspace_path(&self) -> PathBuf {
         // Check for direct workspace override
-        if let Ok(workspace) = std::env::var("LOCALGPT_WORKSPACE") {
+        if let Ok(workspace) = std::env::var("ZIER_ALPHA_WORKSPACE") {
             let trimmed = workspace.trim();
             if !trimmed.is_empty() {
                 let expanded = shellexpand::tilde(trimmed);
@@ -516,15 +508,15 @@ impl Config {
             }
         }
 
-        // Check for profile-based workspace (like OpenClaw's OPENCLAW_PROFILE)
-        if let Ok(profile) = std::env::var("LOCALGPT_PROFILE") {
+        // Check for profile-based workspace (like OpenClaw's ZIER_ALPHA_PROFILE)
+        if let Ok(profile) = std::env::var("ZIER_ALPHA_PROFILE") {
             let trimmed = profile.trim().to_lowercase();
             if !trimmed.is_empty() && trimmed != "default" {
                 let base = directories::BaseDirs::new()
                     .map(|b| b.home_dir().to_path_buf())
                     .unwrap_or_else(|| PathBuf::from("~"));
                 return base
-                    .join(".localgpt")
+                    .join(".zier-alpha")
                     .join(format!("workspace-{}", trimmed));
             }
         }
@@ -546,7 +538,7 @@ fn expand_env(s: &str) -> String {
 }
 
 /// Default config template with helpful comments (used for first-time setup)
-const DEFAULT_CONFIG_TEMPLATE: &str = r#"# LocalGPT Configuration
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"# Zier Alpha Configuration
 # Auto-created on first run. Edit as needed.
 
 [agent]
@@ -579,9 +571,12 @@ interval = "30m"
 [memory]
 # Workspace directory for memory files (MEMORY.md, HEARTBEAT.md, etc.)
 # Can also be set via environment variables:
-#   LOCALGPT_WORKSPACE=/path/to/workspace  - absolute path override
-#   LOCALGPT_PROFILE=work                  - uses ~/.localgpt/workspace-work
-workspace = "~/.localgpt/workspace"
+#   ZIER_ALPHA_WORKSPACE=/path/to/workspace  - absolute path override
+#   ZIER_ALPHA_PROFILE=work                  - uses ~/.zier-alpha/workspace-work
+workspace = "~/.zier-alpha/workspace"
+
+# Embedding provider: "none" (default), "local" (requires 'fastembed' feature), "openai"
+embedding_provider = "none"
 
 # Session memory settings (for /new command)
 # session_max_messages = 15    # Max messages to save (0 = unlimited)

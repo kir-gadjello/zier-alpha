@@ -1,6 +1,6 @@
-# Embedding Model Options for LocalGPT
+# Embedding Model Options for Zier Alpha
 
-This document compares embedding model formats and providers for semantic search in LocalGPT.
+This document compares embedding model formats and providers for semantic search in Zier Alpha.
 
 ## Quick Start
 
@@ -32,7 +32,7 @@ embedding_provider = "local"
 embedding_model = "all-MiniLM-L6-v2"
 
 # Cache directory for downloaded models
-embedding_cache_dir = "~/.cache/localgpt/models"
+embedding_cache_dir = "~/.cache/zier-alpha/models"
 ```
 
 ## Available Models
@@ -77,7 +77,7 @@ Download from:
 
 ## Comparison with OpenClaw
 
-| Aspect | OpenClaw | LocalGPT |
+| Aspect | OpenClaw | Zier Alpha |
 |--------|----------|----------|
 | Runtime | node-llama-cpp | FastEmbed (default) or llama-cpp-2 |
 | Default Model | embeddinggemma-300M-GGUF | all-MiniLM-L6-v2 |
@@ -100,7 +100,7 @@ cargo build --release --features gguf
 ```toml
 [memory]
 embedding_provider = "gguf"
-embedding_model = "~/.cache/localgpt/models/embeddinggemma-300M-Q8_0.gguf"
+embedding_model = "~/.cache/zier-alpha/models/embeddinggemma-300M-Q8_0.gguf"
 ```
 
 ### For Minimal Build

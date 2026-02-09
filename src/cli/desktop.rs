@@ -10,20 +10,20 @@ pub struct DesktopArgs {
 }
 
 pub fn run(_args: DesktopArgs, agent_id: &str) -> Result<()> {
-    use localgpt::desktop::DesktopApp;
+    use zier_alpha::desktop::DesktopApp;
 
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])
             .with_min_inner_size([400.0, 300.0])
-            .with_title("LocalGPT"),
+            .with_title("Zier Alpha"),
         ..Default::default()
     };
 
     let agent_id = agent_id.to_string();
 
     eframe::run_native(
-        "LocalGPT",
+        "Zier Alpha",
         native_options,
         Box::new(move |cc| Ok(Box::new(DesktopApp::new(cc, Some(agent_id.clone()))))),
     )

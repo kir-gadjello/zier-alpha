@@ -1,5 +1,5 @@
-# LocalGPT Configuration
-# Copy to ~/.localgpt/config.toml
+# Zier Alpha Configuration
+# Copy to ~/.zier-alpha/config.toml
 
 [agent]
 # Default model to use for chat
@@ -68,14 +68,14 @@ interval = "30m"
 
 [memory]
 # Where to store memory files
-workspace = "~/.localgpt/workspace"
+workspace = "~/.zier-alpha/workspace"
 
-# Embedding provider for semantic search: "local" (default), "gguf", "openai", or "none"
-# - "local": Uses FastEmbed/ONNX (all-MiniLM-L6-v2), no API key needed
-# - "gguf": Uses llama.cpp for GGUF models (requires --features gguf build)
+# Embedding provider for semantic search: "none" (default), "local", "gguf", "openai"
+# - "none": FTS-only search (default, no vector dependencies)
+# - "local": Uses FastEmbed/ONNX (requires 'fastembed' feature)
+# - "gguf": Uses llama.cpp for GGUF models (requires 'gguf' feature)
 # - "openai": Uses OpenAI embeddings (requires providers.openai config)
-# - "none": FTS-only search, no vector embeddings
-embedding_provider = "local"
+embedding_provider = "none"
 
 # Embedding model for local provider (FastEmbed):
 #
@@ -101,9 +101,9 @@ embedding_model = "all-MiniLM-L6-v2"
 
 # Cache directory for local embedding models (ONNX format)
 # Models are downloaded from HuggingFace on first use
-# Default: ~/.cache/localgpt/models
+# Default: ~/.cache/zier-alpha/models
 # Can also be set via FASTEMBED_CACHE_DIR environment variable
-# embedding_cache_dir = "~/.cache/localgpt/models"
+# embedding_cache_dir = "~/.cache/zier-alpha/models"
 
 # Chunk size for indexing (tokens)
 chunk_size = 400
@@ -126,4 +126,4 @@ bind = "127.0.0.1"
 level = "info"
 
 # Log file path
-file = "~/.localgpt/logs/agent.log"
+file = "~/.zier-alpha/logs/agent.log"

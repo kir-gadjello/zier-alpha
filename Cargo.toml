@@ -1,12 +1,12 @@
 [package]
-name = "localgpt"
+name = "zier-alpha"
 version = "0.1.2"
 edition = "2021"
 description = "A local device focused AI assistant with persistent markdown memory, autonomous heartbeat tasks, and semantic search. Single binary, no runtime dependencies."
 license = "Apache-2.0"
-repository = "https://github.com/localgpt-app/localgpt"
-homepage = "https://localgpt.app"
-documentation = "https://github.com/localgpt-app/localgpt/blob/main/README.md"
+repository = "https://github.com/zier-alpha-app/zier-alpha"
+homepage = "https://zier-alpha.app"
+documentation = "https://github.com/zier-alpha-app/zier-alpha/blob/main/README.md"
 readme = "README.md"
 keywords = ["ai", "assistant", "llm", "memory", "local"]
 categories = ["command-line-utilities", "text-processing"]
@@ -17,6 +17,8 @@ default = ["desktop"]
 desktop = ["eframe"]
 # GGUF embedding model support via llama.cpp (requires C++ compiler)
 gguf = ["llama-cpp-2"]
+# Local embeddings via fastembed (requires ONNX runtime)
+fastembed = ["dep:fastembed"]
 
 [dependencies]
 # Async runtime
@@ -38,8 +40,8 @@ rusqlite = { version = "0.32", features = ["bundled", "functions", "vtab", "load
 # Vector search extension for SQLite
 sqlite-vec = "0.1.7-alpha.2"
 
-# Local embeddings (default - no API key needed)
-fastembed = "5.8"
+# Local embeddings (optional - pulls in ONNX runtime/CoreML)
+fastembed = { version = "5.8", optional = true }
 
 # GGUF embeddings via llama.cpp (optional, requires C++ compiler)
 llama-cpp-2 = { version = "0.1", optional = true }
@@ -104,7 +106,7 @@ tempfile = "3.14"
 mockall = "0.13"
 
 [[bin]]
-name = "localgpt"
+name = "zier-alpha"
 path = "src/main.rs"
 
 [profile.release]

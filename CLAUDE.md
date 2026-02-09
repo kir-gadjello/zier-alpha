@@ -27,7 +27,7 @@ cargo fmt --check
 
 ## Architecture
 
-LocalGPT is a local-only AI assistant with persistent markdown-based memory and optional autonomous operation via heartbeat.
+Zier Alpha is a local-only AI assistant with persistent markdown-based memory and optional autonomous operation via heartbeat.
 
 ### Core Modules (`src/`)
 
@@ -52,10 +52,10 @@ LocalGPT is a local-only AI assistant with persistent markdown-based memory and 
   - `http.rs` - Axum-based REST API. Note: creates new Agent per request (no session persistence via HTTP)
   - Endpoints: `/health`, `/api/status`, `/api/chat`, `/api/memory/search`, `/api/memory/stats`
 
-- **config/** - TOML configuration at `~/.localgpt/config.toml`
+- **config/** - TOML configuration at `~/.zier-alpha/config.toml`
   - Supports `${ENV_VAR}` expansion in API keys
   - `workspace_path()` returns expanded memory workspace path
-  - `migrate.rs` - Auto-migrates from OpenClaw's `~/.openclaw/config.json5` if LocalGPT config doesn't exist
+  - `migrate.rs` - Auto-migrates from OpenClaw's `~/.openclaw/config.json5` if Zier Alpha config doesn't exist
 
 - **cli/** - Clap-based subcommands: `chat`, `ask`, `daemon`, `memory`, `config`
 
@@ -68,14 +68,14 @@ LocalGPT is a local-only AI assistant with persistent markdown-based memory and 
 
 ## Configuration
 
-Default config path: `~/.localgpt/config.toml` (see `config.example.toml`)
+Default config path: `~/.zier-alpha/config.toml` (see `config.example.toml`)
 
-**Auto-creation**: If no config file exists on first run, LocalGPT automatically creates a default config with helpful comments. If an OpenClaw config exists at `~/.openclaw/config.json5`, it will be migrated automatically.
+**Auto-creation**: If no config file exists on first run, Zier Alpha automatically creates a default config with helpful comments. If an OpenClaw config exists at `~/.openclaw/config.json5`, it will be migrated automatically.
 
 Key settings:
 - `agent.default_model` - Model name (determines provider). Default: `claude-cli/opus`
 - `agent.context_window` / `reserve_tokens` - Context management
-- `memory.workspace` - Workspace directory path. Default: `~/.localgpt/workspace`
+- `memory.workspace` - Workspace directory path. Default: `~/.zier-alpha/workspace`
 - `heartbeat.interval` - Duration string (e.g., "30m", "1h")
 - `heartbeat.active_hours` - Optional `{start, end}` in "HH:MM" format
 - `server.port` - HTTP server port (default: 31327)
@@ -83,20 +83,20 @@ Key settings:
 ### Workspace Path Customization (OpenClaw-Compatible)
 
 Workspace path resolution order:
-1. `LOCALGPT_WORKSPACE` env var - absolute path override
-2. `LOCALGPT_PROFILE` env var - creates `~/.localgpt/workspace-{profile}`
+1. `ZIER_ALPHA_WORKSPACE` env var - absolute path override
+2. `ZIER_ALPHA_PROFILE` env var - creates `~/.zier-alpha/workspace-{profile}`
 3. `memory.workspace` from config file
-4. Default: `~/.localgpt/workspace`
+4. Default: `~/.zier-alpha/workspace`
 
 Examples:
 ```bash
 # Use a custom workspace directory
-export LOCALGPT_WORKSPACE=~/my-project/ai-workspace
-localgpt chat
+export ZIER_ALPHA_WORKSPACE=~/my-project/ai-workspace
+zier-alpha chat
 
 # Use profile-based workspaces (like OpenClaw's OPENCLAW_PROFILE)
-export LOCALGPT_PROFILE=work    # uses ~/.localgpt/workspace-work
-export LOCALGPT_PROFILE=home    # uses ~/.localgpt/workspace-home
+export ZIER_ALPHA_PROFILE=work    # uses ~/.zier-alpha/workspace-work
+export ZIER_ALPHA_PROFILE=home    # uses ~/.zier-alpha/workspace-home
 ```
 
 ## Skills System (OpenClaw-Compatible)
@@ -105,8 +105,8 @@ Skills are SKILL.md files that provide specialized instructions for specific tas
 
 ### Skill Sources (Priority Order)
 
-1. **Workspace skills**: `~/.localgpt/workspace/skills/` (highest priority)
-2. **Managed skills**: `~/.localgpt/skills/` (user-level, shared across workspaces)
+1. **Workspace skills**: `~/.zier-alpha/workspace/skills/` (highest priority)
+2. **Managed skills**: `~/.zier-alpha/skills/` (user-level, shared across workspaces)
 
 ### SKILL.md Format
 
@@ -166,12 +166,12 @@ Plus any skill slash commands (e.g., `/github-pr`, `/commit`) based on installed
 
 ## OpenClaw Compatibility
 
-LocalGPT maintains strong compatibility with OpenClaw workspace files for seamless migration.
+Zier Alpha maintains strong compatibility with OpenClaw workspace files for seamless migration.
 
 ### Directory Structure
 
 ```
-~/.localgpt/                          # State directory (OpenClaw: ~/.openclaw/)
+~/.zier-alpha/                          # State directory (OpenClaw: ~/.openclaw/)
 ├── config.toml                       # Config (OpenClaw uses JSON5)
 ├── agents/
 │   └── main/                         # Default agent ID
@@ -197,7 +197,7 @@ LocalGPT maintains strong compatibility with OpenClaw workspace files for seamle
 
 OpenClaw workspace files are fully supported. Copy them directly:
 
-| File | Purpose | LocalGPT Support |
+| File | Purpose | Zier Alpha Support |
 |------|---------|------------------|
 | `MEMORY.md` | Long-term curated knowledge (facts, preferences, decisions) | ✅ Full |
 | `HEARTBEAT.md` | Pending tasks for autonomous heartbeat runs | ✅ Full |
@@ -224,7 +224,7 @@ All memory files are **plain Markdown** with no required frontmatter.
 - Preference: Short, direct responses
 
 ## Key Decisions
-- Using Rust for LocalGPT implementation
+- Using Rust for Zier Alpha implementation
 - SQLite FTS5 for memory search
 
 ## TODOs
@@ -261,7 +261,7 @@ Keep responses concise. Avoid unnecessary pleasantries.
 
 ### Memory Search Compatibility
 
-LocalGPT uses the same chunking and indexing approach as OpenClaw:
+Zier Alpha uses the same chunking and indexing approach as OpenClaw:
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
@@ -323,10 +323,10 @@ Session transcripts use Pi's SessionManager JSONL format for OpenClaw compatibil
 
 ```bash
 # Copy workspace files (fully compatible)
-cp -r ~/.openclaw/workspace/* ~/.localgpt/workspace/
+cp -r ~/.openclaw/workspace/* ~/.zier-alpha/workspace/
 
 # Copy session data
-cp -r ~/.openclaw/agents ~/.localgpt/agents
+cp -r ~/.openclaw/agents ~/.zier-alpha/agents
 
 # Memory index will be rebuilt automatically on first run
 ```
@@ -342,13 +342,13 @@ cp -r ~/.openclaw/agents ~/.localgpt/agents
 
 **What differs:**
 - Config format: TOML vs JSON5 (auto-migrated)
-- No multi-channel routing (LocalGPT is local-only)
+- No multi-channel routing (Zier Alpha is local-only)
 - No remote channels (Telegram, Discord, Slack)
 - No subagent spawning (single "main" agent)
 - No plugin/extension system
 
 **Auto-config migration:**
-If `~/.localgpt/config.toml` doesn't exist but `~/.openclaw/config.json5` does:
+If `~/.zier-alpha/config.toml` doesn't exist but `~/.openclaw/config.json5` does:
 - `agents.defaults.workspace` → `memory.workspace`
 - `agents.defaults.model` → `agent.default_model`
 - `models.openai.apiKey` → `providers.openai.api_key`
@@ -356,7 +356,7 @@ If `~/.localgpt/config.toml` doesn't exist but `~/.openclaw/config.json5` does:
 
 ## Git Version Control
 
-LocalGPT auto-creates `.gitignore` files. Recommended version control:
+Zier Alpha auto-creates `.gitignore` files. Recommended version control:
 
 **Version control (workspace/):**
 - `MEMORY.md` - Your curated knowledge

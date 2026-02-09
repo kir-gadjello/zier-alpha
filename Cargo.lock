@@ -2821,56 +2821,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "localgpt"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "chrono",
- "clap",
- "daemonize",
- "deno_core",
- "directories",
- "eframe",
- "fastembed",
- "fs2",
- "futures",
- "glob",
- "json5",
- "llama-cpp-2",
- "mime_guess",
- "mockall",
- "notify",
- "notify-debouncer-mini",
- "once_cell",
- "regex",
- "reqwest",
- "rusqlite",
- "rust-embed",
- "rustyline",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "shellexpand",
- "sqlite-vec",
- "tempfile",
- "thiserror 2.0.18",
- "tiktoken-rs",
- "tokio",
- "tokio-cron-scheduler",
- "tokio-stream",
- "toml",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6655,6 +6605,56 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "zier-alpha"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "daemonize",
+ "deno_core",
+ "directories",
+ "eframe",
+ "fastembed",
+ "fs2",
+ "futures",
+ "glob",
+ "json5",
+ "llama-cpp-2",
+ "mime_guess",
+ "mockall",
+ "notify",
+ "notify-debouncer-mini",
+ "once_cell",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "rust-embed",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "shellexpand",
+ "sqlite-vec",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tiktoken-rs",
+ "tokio",
+ "tokio-cron-scheduler",
+ "tokio-stream",
+ "toml",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

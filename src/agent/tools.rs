@@ -711,7 +711,7 @@ impl Tool for WebFetchTool {
         let response = self
             .client
             .get(url)
-            .header("User-Agent", "LocalGPT/0.1")
+            .header("User-Agent", "Zier Alpha/0.1")
             .send()
             .await?;
 

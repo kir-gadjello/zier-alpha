@@ -6,18 +6,18 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use daemonize::Daemonize;
 
-use localgpt::concurrency::TurnGate;
-use localgpt::config::Config;
-use localgpt::heartbeat::HeartbeatRunner;
-use localgpt::ingress::IngressBus;
-use localgpt::ingress::controller::ingress_loop;
-use localgpt::memory::MemoryManager;
-use localgpt::prompts::PromptRegistry;
-use localgpt::scheduler::Scheduler;
-use localgpt::server::Server;
-use localgpt::scripting::ScriptService;
-use localgpt::scripting::loader::ScriptLoader;
-use localgpt::agent::ScriptTool;
+use zier_alpha::concurrency::TurnGate;
+use zier_alpha::config::Config;
+use zier_alpha::heartbeat::HeartbeatRunner;
+use zier_alpha::ingress::IngressBus;
+use zier_alpha::ingress::controller::ingress_loop;
+use zier_alpha::memory::MemoryManager;
+use zier_alpha::prompts::PromptRegistry;
+use zier_alpha::scheduler::Scheduler;
+use zier_alpha::server::Server;
+use zier_alpha::scripting::ScriptService;
+use zier_alpha::scripting::loader::ScriptLoader;
+use zier_alpha::agent::ScriptTool;
 
 /// Synchronously stop the daemon (for use before Tokio runtime starts)
 pub fn stop_sync() -> Result<()> {
@@ -89,7 +89,7 @@ pub fn daemonize_and_run(agent_id: &str) -> Result<()> {
 
     // Print startup info before daemonizing
     println!(
-        "Starting LocalGPT daemon in background (agent: {})...",
+        "Starting Zier Alpha daemon in background (agent: {})...",
         agent_id
     );
     println!("  PID file: {}", pid_file.display());
@@ -100,8 +100,8 @@ pub fn daemonize_and_run(agent_id: &str) -> Result<()> {
             config.server.bind, config.server.port
         );
     }
-    println!("\nUse 'localgpt daemon status' to check status");
-    println!("Use 'localgpt daemon stop' to stop\n");
+    println!("\nUse 'zier-alpha daemon status' to check status");
+    println!("Use 'zier-alpha daemon stop' to stop\n");
 
     // Fork BEFORE starting Tokio
     // Use append mode to preserve previous logs within the same day
@@ -166,7 +166,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     if let Ok(home) = directories::BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
     {
-        let extensions_dir = home.home_dir().join(".localgpt/extensions");
+        let extensions_dir = home.home_dir().join(".zier-alpha/extensions");
         if extensions_dir.exists() {
             script_loader.load_from_dir(&extensions_dir).await?;
             println!("  Extensions: loaded from {}", extensions_dir.display());
@@ -185,7 +185,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     if let Ok(home) = directories::BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
     {
-        let scheduler_config_path = home.home_dir().join(".localgpt/scheduler.toml");
+        let scheduler_config_path = home.home_dir().join(".zier-alpha/scheduler.toml");
         if scheduler_config_path.exists() {
             scheduler.load_jobs(&scheduler_config_path).await?;
             println!(
@@ -202,7 +202,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     if let Ok(home) = directories::BaseDirs::new()
         .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
     {
-        let prompts_dir = home.home_dir().join(".localgpt/prompts");
+        let prompts_dir = home.home_dir().join(".zier-alpha/prompts");
         if prompts_dir.exists() {
             prompt_registry.load_from_dir(&prompts_dir)?;
             println!("  Prompts: loaded from {}", prompts_dir.display());
@@ -360,7 +360,7 @@ async fn start_daemon(foreground: bool, agent_id: &str) -> Result<()> {
     }
 
     println!(
-        "Starting LocalGPT daemon in foreground (agent: {})...",
+        "Starting Zier Alpha daemon in foreground (agent: {})...",
         agent_id
     );
 
@@ -456,7 +456,7 @@ async fn restart_daemon(foreground: bool, agent_id: &str) -> Result<()> {
     // For background mode on Unix, we need to exit and let main() handle daemonization
     #[cfg(unix)]
     if !foreground {
-        println!("\nTo start daemon in background, run: localgpt daemon start");
+        println!("\nTo start daemon in background, run: zier-alpha daemon start");
         println!("(Background restart requires re-running the command due to fork requirements)");
         return Ok(());
     }
@@ -477,7 +477,7 @@ async fn show_status() -> Result<()> {
         false
     };
 
-    println!("LocalGPT Daemon Status");
+    println!("Zier Alpha Daemon Status");
     println!("----------------------");
     println!("Running: {}", if running { "yes" } else { "no" });
 
@@ -519,13 +519,13 @@ async fn run_heartbeat_once(agent_id: &str) -> Result<()> {
 }
 
 fn get_pid_file() -> Result<PathBuf> {
-    // Put PID file in state dir (~/.localgpt/), not workspace
-    let state_dir = localgpt::agent::get_state_dir()?;
+    // Put PID file in state dir (~/.zier-alpha/), not workspace
+    let state_dir = zier_alpha::agent::get_state_dir()?;
     Ok(state_dir.join("daemon.pid"))
 }
 
 fn get_log_file(retention_days: u32) -> Result<PathBuf> {
-    let state_dir = localgpt::agent::get_state_dir()?;
+    let state_dir = zier_alpha::agent::get_state_dir()?;
     let logs_dir = state_dir.join("logs");
     fs::create_dir_all(&logs_dir)?;
 
@@ -536,7 +536,7 @@ fn get_log_file(retention_days: u32) -> Result<PathBuf> {
 
     // Use date-based log files (like OpenClaw)
     let date = chrono::Local::now().format("%Y-%m-%d");
-    Ok(logs_dir.join(format!("localgpt-{}.log", date)))
+    Ok(logs_dir.join(format!("zier-alpha-{}.log", date)))
 }
 
 /// Prune log files older than `keep_days` days
@@ -549,10 +549,10 @@ fn prune_old_logs(logs_dir: &std::path::Path, keep_days: i64) {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
 
-            // Match localgpt-YYYY-MM-DD.log pattern
-            if name_str.starts_with("localgpt-") && name_str.ends_with(".log") {
+            // Match zier-alpha-YYYY-MM-DD.log pattern
+            if name_str.starts_with("zier-alpha-") && name_str.ends_with(".log") {
                 if let Some(date_part) = name_str
-                    .strip_prefix("localgpt-")
+                    .strip_prefix("zier-alpha-")
                     .and_then(|s| s.strip_suffix(".log"))
                 {
                     if date_part < cutoff_date.as_str() {

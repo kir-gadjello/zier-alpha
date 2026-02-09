@@ -1,4 +1,4 @@
-//! Skills system for LocalGPT (OpenClaw-compatible)
+//! Skills system for Zier Alpha (OpenClaw-compatible)
 //!
 //! Skills are SKILL.md files that provide specialized instructions for specific tasks.
 //! Supports multiple sources, requirements gating, and slash command invocation.
@@ -98,7 +98,7 @@ fn default_true() -> bool {
 pub enum SkillSource {
     /// Workspace-level skill (highest priority)
     Workspace,
-    /// User-managed skill (~/.localgpt/skills/)
+    /// User-managed skill (~/.zier-alpha/skills/)
     Managed,
     /// Bundled with the application
     Bundled,
@@ -211,9 +211,9 @@ pub fn load_skills(workspace: &Path) -> Result<Vec<Skill>> {
     Ok(skills)
 }
 
-/// Get the managed skills directory (~/.localgpt/skills/)
+/// Get the managed skills directory (~/.zier-alpha/skills/)
 fn get_managed_skills_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".localgpt").join("skills"))
+    directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(".zier-alpha").join("skills"))
 }
 
 /// Load skills from a single directory

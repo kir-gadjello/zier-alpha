@@ -121,7 +121,7 @@ If you change this file, tell the user — it's your soul, and they should know.
 _This file is yours to evolve. As you learn who you are, update it._
 "#;
 
-const GITIGNORE_TEMPLATE: &str = r#"# LocalGPT workspace .gitignore
+const GITIGNORE_TEMPLATE: &str = r#"# Zier Alpha workspace .gitignore
 
 # Nothing to ignore in workspace by default
 # All memory files should be version controlled:
@@ -151,7 +151,7 @@ pub fn init_state_dir(state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-const STATE_GITIGNORE_TEMPLATE: &str = r#"# LocalGPT state directory .gitignore
+const STATE_GITIGNORE_TEMPLATE: &str = r#"# Zier Alpha state directory .gitignore
 
 # Session transcripts (large, ephemeral)
 agents/*/sessions/*.jsonl

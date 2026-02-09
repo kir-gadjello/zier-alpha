@@ -131,7 +131,7 @@ pub fn op_register_tool(
 }
 
 deno_core::extension!(
-    localgpt_ext,
+    zier_alpha_ext,
     ops = [
         op_read_file,
         op_write_file,
@@ -148,7 +148,7 @@ pub struct DenoRuntime {
 impl DenoRuntime {
     pub fn new(policy: SandboxPolicy) -> Result<Self, AnyError> {
         let mut runtime = JsRuntime::new(RuntimeOptions {
-            extensions: vec![localgpt_ext::init_ops_and_esm()],
+            extensions: vec![zier_alpha_ext::init_ops_and_esm()],
             ..Default::default()
         });
 
@@ -210,7 +210,7 @@ impl DenoRuntime {
         );
 
         let res = self.runtime.execute_script("<tool_exec>", code)?;
-        let resolve = self.runtime.resolve_value(res).await?;
+        let resolve = self.runtime.resolve(res).await?;
 
         let scope = &mut self.runtime.handle_scope();
         let value = v8::Local::new(scope, resolve);

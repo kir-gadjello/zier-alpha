@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use super::embeddings::{cosine_similarity, deserialize_embedding, serialize_embedding};
@@ -41,13 +41,6 @@ impl MemoryIndex {
         }
 
         let conn = Connection::open(db_path)?;
-
-        // Check if we need to migrate from old schema
-        let needs_migration = Self::needs_schema_migration(&conn)?;
-        if needs_migration {
-            info!("Migrating database schema to OpenClaw-compatible format");
-            Self::migrate_to_openclaw_schema(&conn)?;
-        }
 
         // Initialize OpenClaw-compatible schema
         conn.execute_batch(
@@ -102,10 +95,6 @@ impl MemoryIndex {
 
         // Create FTS5 table (OpenClaw-compatible with UNINDEXED columns)
         Self::ensure_fts_table(&conn)?;
-
-        // Ensure source column exists on older tables
-        Self::ensure_column(&conn, "files", "source", "TEXT NOT NULL DEFAULT 'memory'")?;
-        Self::ensure_column(&conn, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'")?;
 
         // Try to load sqlite-vec extension for fast vector search
         let has_vec_extension = Self::try_load_sqlite_vec(&conn);
@@ -420,165 +409,6 @@ impl MemoryIndex {
         &self.db_path
     }
 
-    /// Check if we need to migrate from old LocalGPT schema to OpenClaw schema
-    fn needs_schema_migration(conn: &Connection) -> Result<bool> {
-        // Check for old schema indicators:
-        // 1. chunks table has 'file_path' column instead of 'path'
-        // 2. chunks table has 'content' column instead of 'text'
-        // 3. chunks.id is INTEGER instead of TEXT
-        let result: rusqlite::Result<String> =
-            conn.query_row("PRAGMA table_info(chunks)", [], |row| row.get(1));
-
-        if result.is_err() {
-            // chunks table doesn't exist yet, no migration needed
-            return Ok(false);
-        }
-
-        // Check column names
-        let has_file_path: bool = conn.prepare("SELECT file_path FROM chunks LIMIT 0").is_ok();
-        let has_content: bool = conn.prepare("SELECT content FROM chunks LIMIT 0").is_ok();
-
-        // Old schema has file_path and content columns
-        Ok(has_file_path || has_content)
-    }
-
-    /// Migrate from old LocalGPT schema to OpenClaw-compatible schema
-    fn migrate_to_openclaw_schema(conn: &Connection) -> Result<()> {
-        // Start transaction
-        conn.execute("BEGIN TRANSACTION", [])?;
-
-        // 1. Rename old tables
-        let _ = conn.execute("ALTER TABLE chunks RENAME TO chunks_old", []);
-        let _ = conn.execute("ALTER TABLE files RENAME TO files_old", []);
-
-        // 2. Drop old FTS and triggers
-        let _ = conn.execute("DROP TABLE IF EXISTS chunks_fts", []);
-        let _ = conn.execute("DROP TRIGGER IF EXISTS chunks_ai", []);
-        let _ = conn.execute("DROP TRIGGER IF EXISTS chunks_ad", []);
-        let _ = conn.execute("DROP TRIGGER IF EXISTS chunks_au", []);
-
-        // 3. Create new tables with OpenClaw schema
-        conn.execute(
-            r#"
-            CREATE TABLE IF NOT EXISTS files (
-                path TEXT PRIMARY KEY,
-                source TEXT NOT NULL DEFAULT 'memory',
-                hash TEXT NOT NULL,
-                mtime INTEGER NOT NULL,
-                size INTEGER NOT NULL
-            )
-            "#,
-            [],
-        )?;
-
-        conn.execute(
-            r#"
-            CREATE TABLE IF NOT EXISTS chunks (
-                id TEXT PRIMARY KEY,
-                path TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'memory',
-                start_line INTEGER NOT NULL,
-                end_line INTEGER NOT NULL,
-                hash TEXT NOT NULL,
-                model TEXT NOT NULL DEFAULT '',
-                text TEXT NOT NULL,
-                embedding TEXT NOT NULL DEFAULT '',
-                updated_at INTEGER NOT NULL
-            )
-            "#,
-            [],
-        )?;
-
-        // 4. Migrate data from old tables
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        // Migrate files
-        let _ = conn.execute(
-            r#"
-            INSERT INTO files (path, source, hash, mtime, size)
-            SELECT path, 'memory', hash, mtime, size FROM files_old
-            "#,
-            [],
-        );
-
-        // Migrate chunks - generate new TEXT UUIDs for each row
-        // Check if old schema has embedding columns
-        let has_embedding_cols = conn
-            .prepare("SELECT embedding FROM chunks_old LIMIT 0")
-            .is_ok();
-
-        // Read old data and insert with new UUIDs
-        if has_embedding_cols {
-            // Old schema has embedding columns
-            let mut stmt = conn.prepare(
-                "SELECT file_path, line_start, line_end, content, embedding, embedding_model FROM chunks_old",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i32>(1)?,
-                    row.get::<_, i32>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            })?;
-
-            for row in rows {
-                let (file_path, line_start, line_end, content, embedding, model) = row?;
-                let new_id = Uuid::new_v4().to_string();
-                let hash = hash_content(&content);
-                let model = model.unwrap_or_default();
-                let embedding = embedding.unwrap_or_default();
-
-                conn.execute(
-                    r#"
-                    INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-                    VALUES (?1, ?2, 'memory', ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                    "#,
-                    params![&new_id, &file_path, line_start, line_end, &hash, &model, &content, &embedding, now],
-                )?;
-            }
-        } else {
-            // Old schema without embedding columns
-            let mut stmt =
-                conn.prepare("SELECT file_path, line_start, line_end, content FROM chunks_old")?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i32>(1)?,
-                    row.get::<_, i32>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })?;
-
-            for row in rows {
-                let (file_path, line_start, line_end, content) = row?;
-                let new_id = Uuid::new_v4().to_string();
-                let hash = hash_content(&content);
-
-                conn.execute(
-                    r#"
-                    INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-                    VALUES (?1, ?2, 'memory', ?3, ?4, ?5, '', ?6, '', ?7)
-                    "#,
-                    params![&new_id, &file_path, line_start, line_end, &hash, &content, now],
-                )?;
-            }
-        }
-
-        // 5. Drop old tables
-        let _ = conn.execute("DROP TABLE IF EXISTS chunks_old", []);
-        let _ = conn.execute("DROP TABLE IF EXISTS files_old", []);
-
-        conn.execute("COMMIT", [])?;
-        info!("Schema migration completed successfully");
-        Ok(())
-    }
-
     /// Create FTS5 table with OpenClaw-compatible structure
     fn ensure_fts_table(conn: &Connection) -> Result<()> {
         // OpenClaw uses UNINDEXED columns for metadata
@@ -602,17 +432,6 @@ impl MemoryIndex {
             Err(e) => debug!("FTS5 table creation skipped: {}", e),
         }
 
-        Ok(())
-    }
-
-    /// Ensure a column exists on a table (for migrations)
-    fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str) -> Result<()> {
-        let sql = format!("SELECT {} FROM {} LIMIT 0", column, table);
-        if conn.prepare(&sql).is_err() {
-            let alter = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, definition);
-            conn.execute(&alter, [])?;
-            debug!("Added column {} to table {}", column, table);
-        }
         Ok(())
     }
 

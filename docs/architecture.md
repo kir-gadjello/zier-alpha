@@ -1,12 +1,12 @@
-# LocalGPT Architecture
+# Zier Alpha Architecture
 
 ## Relationship with OpenClaw
 
-LocalGPT is a **fresh Rust implementation** inspired by OpenClaw's architecture, stripped down to essential components for local-only AI interaction.
+Zier Alpha is a **fresh Rust implementation** inspired by OpenClaw's architecture, stripped down to essential components for local-only AI interaction.
 
 ### Design Philosophy
 
-| Aspect | OpenClaw | LocalGPT |
+| Aspect | OpenClaw | Zier Alpha |
 |--------|----------|----------|
 | Language | TypeScript | Rust |
 | LOC (estimated) | ~200k | ~3k |
@@ -44,10 +44,10 @@ The following concepts were directly inspired by OpenClaw:
 
 ### Key Differences
 
-1. **No Remote Channels**: LocalGPT is purely local - no Telegram, Discord, WhatsApp, etc.
-2. **No Plugin System**: OpenClaw has an extension architecture; LocalGPT is monolithic
-3. **No Gateway**: OpenClaw's gateway handles multi-channel routing; LocalGPT has only CLI and HTTP
-4. **No Canvas/UI**: OpenClaw has web-based chat UI; LocalGPT is CLI-first
+1. **No Remote Channels**: Zier Alpha is purely local - no Telegram, Discord, WhatsApp, etc.
+2. **No Plugin System**: OpenClaw has an extension architecture; Zier Alpha is monolithic
+3. **No Gateway**: OpenClaw's gateway handles multi-channel routing; Zier Alpha has only CLI and HTTP
+4. **No Canvas/UI**: OpenClaw has web-based chat UI; Zier Alpha is CLI-first
 
 ---
 
@@ -147,7 +147,7 @@ The following concepts were directly inspired by OpenClaw:
 ## File Structure Reference
 
 ```
-~/.localgpt/
+~/.zier-alpha/
 ├── config.toml              # Main configuration
 ├── workspace/
 │   ├── MEMORY.md            # Curated long-term knowledge
@@ -166,7 +166,7 @@ The following concepts were directly inspired by OpenClaw:
 
 ## Contributing
 
-When working on LocalGPT:
+When working on Zier Alpha:
 
 1. Keep the codebase small and focused
 2. Prefer simplicity over features

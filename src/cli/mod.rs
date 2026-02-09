@@ -9,7 +9,7 @@ pub mod memory;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "localgpt")]
+#[command(name = "zier-alpha")]
 #[command(author, version, about = "A lightweight, local-only AI assistant")]
 #[command(propagate_version = true)]
 pub struct Cli {
@@ -21,7 +21,7 @@ pub struct Cli {
     pub verbose: bool,
 
     /// Path to config file
-    #[arg(short, long, global = true, env = "LOCALGPT_CONFIG")]
+    #[arg(short, long, global = true, env = "ZIER_ALPHA_CONFIG")]
     pub config: Option<String>,
 
     /// Agent ID to use (default: "main", OpenClaw-compatible)
@@ -30,7 +30,7 @@ pub struct Cli {
         long,
         global = true,
         default_value = "main",
-        env = "LOCALGPT_AGENT"
+        env = "ZIER_ALPHA_AGENT"
     )]
     pub agent: String,
 }

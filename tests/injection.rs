@@ -1,6 +1,6 @@
-use localgpt::ingress::{IngressMessage, TrustLevel};
-use localgpt::config::Config;
-use localgpt::server::telegram; // I need to make this public or accessible?
+use zier_alpha::ingress::{IngressMessage, TrustLevel};
+use zier_alpha::config::Config;
+use zier_alpha::server::telegram; // I need to make this public or accessible?
 // telegram module is accessible if I made it pub in server/mod.rs
 
 #[tokio::test]
@@ -17,7 +17,7 @@ async fn test_injection_trace_ingress() {
     // config.server.owner_telegram_id = Some(owner_id); // Wait, Config fields are public?
     // Config struct has public fields.
 
-    let mut server_config = localgpt::config::ServerConfig::default();
+    let mut server_config = zier_alpha::config::ServerConfig::default();
     server_config.owner_telegram_id = Some(owner_id);
 
     // Logic from telegram.rs:
