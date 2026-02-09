@@ -71,7 +71,8 @@ chrono = { version = "0.4", features = ["serde"] }
 directories = "6.0"
 thiserror = "2.0"
 anyhow = "1.0"
-uuid = { version = "1.11", features = ["v4"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+tokio-cron-scheduler = "0.13"
 async-trait = "0.1"
 futures = "0.3"
 tokio-stream = "0.1"
@@ -82,6 +83,8 @@ base64 = "0.22"
 regex = "1"
 once_cell = "1"
 fs2 = "0.4"
+tempfile = "3.14"
+deno_core = "0.334"
 
 # Desktop GUI (optional — disable with --no-default-features for headless builds)
 eframe = { version = "0.30", optional = true, default-features = false, features = [

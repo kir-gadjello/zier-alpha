@@ -1,7 +1,9 @@
 mod migrate;
+mod sandbox;
 mod schema;
 
 pub use migrate::{has_openclaw_workspace, openclaw_config_path, try_migrate_openclaw_config};
+pub use sandbox::*;
 pub use schema::*;
 
 use anyhow::Result;
@@ -204,6 +206,12 @@ pub struct ServerConfig {
 
     #[serde(default = "default_bind")]
     pub bind: String,
+
+    /// Telegram Owner ID (for authentication)
+    pub owner_telegram_id: Option<i64>,
+
+    /// Telegram Webhook Secret Token
+    pub telegram_secret_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +374,8 @@ impl Default for ServerConfig {
             enabled: default_true(),
             port: default_port(),
             bind: default_bind(),
+            owner_telegram_id: None,
+            telegram_secret_token: None,
         }
     }
 }

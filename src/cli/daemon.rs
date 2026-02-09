@@ -9,8 +9,15 @@ use daemonize::Daemonize;
 use localgpt::concurrency::TurnGate;
 use localgpt::config::Config;
 use localgpt::heartbeat::HeartbeatRunner;
+use localgpt::ingress::IngressBus;
+use localgpt::ingress::controller::ingress_loop;
 use localgpt::memory::MemoryManager;
+use localgpt::prompts::PromptRegistry;
+use localgpt::scheduler::Scheduler;
 use localgpt::server::Server;
+use localgpt::scripting::ScriptService;
+use localgpt::scripting::loader::ScriptLoader;
+use localgpt::agent::ScriptTool;
 
 /// Synchronously stop the daemon (for use before Tokio runtime starts)
 pub fn stop_sync() -> Result<()> {
@@ -147,6 +154,83 @@ async fn run_daemon_server(config: Config, agent_id: &str) -> Result<()> {
 
 /// Run daemon services (server and/or heartbeat)
 async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
+    // VIZIER: Initialize Ingress Bus
+    let bus = std::sync::Arc::new(IngressBus::new(100));
+    println!("  Ingress Bus: initialized");
+
+    // VIZIER: Initialize Scripting Service
+    // TODO: Load policy from config. For now, strict default.
+    let script_service = ScriptService::new(Default::default())?;
+    let script_loader = ScriptLoader::new(script_service.clone());
+
+    if let Ok(home) = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    {
+        let extensions_dir = home.home_dir().join(".localgpt/extensions");
+        if extensions_dir.exists() {
+            script_loader.load_from_dir(&extensions_dir).await?;
+            println!("  Extensions: loaded from {}", extensions_dir.display());
+        }
+    }
+
+    let script_tools_def = script_service.get_tools().await?;
+    let mut script_tools: Vec<ScriptTool> = Vec::new();
+    for def in script_tools_def {
+        script_tools.push(ScriptTool::new(def, script_service.clone()));
+    }
+    println!("  Script Tools: {} loaded", script_tools.len());
+
+    // VIZIER: Initialize Scheduler
+    let mut scheduler = Scheduler::new(bus.clone()).await?;
+    if let Ok(home) = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    {
+        let scheduler_config_path = home.home_dir().join(".localgpt/scheduler.toml");
+        if scheduler_config_path.exists() {
+            scheduler.load_jobs(&scheduler_config_path).await?;
+            println!(
+                "  Scheduler: loaded from {}",
+                scheduler_config_path.display()
+            );
+        }
+    }
+    scheduler.start().await?;
+    println!("  Scheduler: started");
+
+    // VIZIER: Initialize Prompt Registry
+    let mut prompt_registry = PromptRegistry::new();
+    if let Ok(home) = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    {
+        let prompts_dir = home.home_dir().join(".localgpt/prompts");
+        if prompts_dir.exists() {
+            prompt_registry.load_from_dir(&prompts_dir)?;
+            println!("  Prompts: loaded from {}", prompts_dir.display());
+        }
+    }
+    let prompt_registry = std::sync::Arc::new(prompt_registry);
+
+    // VIZIER: Start Ingress Consumer Loop
+    let bus_receiver = bus.receiver();
+    let config_clone = config.clone();
+    let agent_id_clone = agent_id.to_string();
+    let prompts_clone = prompt_registry.clone();
+    let script_tools_clone = script_tools.clone();
+    let jobs_clone = scheduler.jobs.clone();
+
+    tokio::spawn(async move {
+        ingress_loop(
+            bus_receiver,
+            config_clone,
+            agent_id_clone,
+            prompts_clone,
+            script_tools_clone,
+            jobs_clone,
+        )
+        .await;
+    });
+    println!("  Ingress Loop: started");
+
     // Create shared turn gate for heartbeat + HTTP concurrency control
     let turn_gate = TurnGate::new();
 
@@ -185,7 +269,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
             "  Server: http://{}:{}",
             config.server.bind, config.server.port
         );
-        let server = Server::new_with_gate(config, turn_gate)?;
+        let server = Server::new_with_gate(config, turn_gate, Some(bus.clone()))?;
         server.run().await?;
     } else if heartbeat_handle.is_some() {
         // Server not enabled but heartbeat is - wait for Ctrl+C
@@ -203,6 +287,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
 
     Ok(())
 }
+
 
 #[derive(Args)]
 pub struct DaemonArgs {

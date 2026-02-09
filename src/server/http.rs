@@ -34,6 +34,7 @@ use crate::agent::{extract_tool_detail, Agent, AgentConfig, StreamEvent};
 use crate::concurrency::{TurnGate, WorkspaceLock};
 use crate::config::Config;
 use crate::heartbeat::{get_last_heartbeat_event, HeartbeatStatus};
+use crate::ingress::IngressBus;
 use crate::memory::MemoryManager;
 
 /// Embedded UI assets
@@ -53,6 +54,7 @@ const HTTP_AGENT_ID: &str = "http";
 pub struct Server {
     config: Config,
     turn_gate: TurnGate,
+    bus: Option<Arc<IngressBus>>,
 }
 
 struct SessionEntry {
@@ -62,8 +64,8 @@ struct SessionEntry {
     dirty: bool,
 }
 
-struct AppState {
-    config: Config,
+pub struct AppState {
+    pub config: Config,
     sessions: Mutex<HashMap<String, SessionEntry>>,
     /// Shared MemoryManager to avoid reinitializing embedding provider
     memory: MemoryManager,
@@ -71,6 +73,7 @@ struct AppState {
     turn_gate: TurnGate,
     /// Cross-process workspace lock
     workspace_lock: WorkspaceLock,
+    pub bus: Option<Arc<IngressBus>>,
 }
 
 impl Server {
@@ -78,15 +81,21 @@ impl Server {
         Ok(Self {
             config: config.clone(),
             turn_gate: TurnGate::new(),
+            bus: None,
         })
     }
 
     /// Create a server with a shared TurnGate (for daemon mode where
     /// heartbeat and HTTP share concurrency control).
-    pub fn new_with_gate(config: &Config, turn_gate: TurnGate) -> Result<Self> {
+    pub fn new_with_gate(
+        config: &Config,
+        turn_gate: TurnGate,
+        bus: Option<Arc<IngressBus>>,
+    ) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
             turn_gate,
+            bus,
         })
     }
 
@@ -103,6 +112,7 @@ impl Server {
             memory,
             turn_gate: self.turn_gate.clone(),
             workspace_lock,
+            bus: self.bus.clone(),
         });
 
         // Load persisted sessions on startup
@@ -164,6 +174,7 @@ impl Server {
             .route("/api/saved-sessions", get(list_saved_sessions))
             .route("/api/saved-sessions/{session_id}", get(get_saved_session))
             .route("/api/logs/daemon", get(get_daemon_logs))
+            .route("/webhooks/telegram", post(crate::server::telegram::webhook_handler))
             .layer(cors)
             .with_state(state);
 
