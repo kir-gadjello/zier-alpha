@@ -1,4 +1,4 @@
-use zier_alpha::config::SandboxPolicy;
+use zier_alpha::config::{SandboxPolicy, WorkdirStrategy};
 use zier_alpha::scripting::ScriptService;
 use tempfile::NamedTempFile;
 use std::io::Write;
@@ -13,7 +13,13 @@ async fn test_deno_tool_registration_and_execution() {
     };
 
     // 2. Initialize Service
-    let service = ScriptService::new(policy).expect("Failed to create script service");
+    let temp_dir = tempfile::tempdir().unwrap();
+    let service = ScriptService::new(
+        policy, 
+        temp_dir.path().to_path_buf(),
+        temp_dir.path().to_path_buf(),
+        WorkdirStrategy::Overlay
+    ).expect("Failed to create script service");
 
     // 3. Create a JS script that registers a tool
     let script_content = r#"
@@ -64,7 +70,13 @@ async fn test_deno_sandbox_fs_allowed() {
         allow_write: vec![],
     };
 
-    let service = ScriptService::new(policy).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let service = ScriptService::new(
+        policy, 
+        temp_dir.path().to_path_buf(),
+        temp_dir.path().to_path_buf(),
+        WorkdirStrategy::Overlay
+    ).unwrap();
 
     let script_content = format!(r#"
         pi.registerTool({{
@@ -108,7 +120,13 @@ async fn test_deno_sandbox_fs_denied() {
         allow_write: vec![],
     };
 
-    let service = ScriptService::new(policy).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let service = ScriptService::new(
+        policy, 
+        temp_dir.path().to_path_buf(),
+        temp_dir.path().to_path_buf(),
+        WorkdirStrategy::Overlay
+    ).unwrap();
 
     let script_content = r#"
         pi.registerTool({

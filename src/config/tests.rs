@@ -8,6 +8,7 @@ mod tests {
         let mut models = HashMap::new();
 
         models.insert("base".to_string(), ModelConfig {
+            provider: None,
             api_base: Some("https://base.com".to_string()),
             api_key_env: Some("BASE_KEY".to_string()),
             model: "base-model".to_string(),
@@ -21,6 +22,7 @@ mod tests {
         });
 
         models.insert("derived".to_string(), ModelConfig {
+            provider: None,
             api_base: None,
             api_key_env: None,
             model: "derived-model".to_string(),
@@ -46,13 +48,13 @@ mod tests {
         let mut models = HashMap::new();
 
         models.insert("a".to_string(), ModelConfig {
-            api_base: None, api_key_env: None, model: "a".to_string(),
+            provider: None, api_base: None, api_key_env: None, model: "a".to_string(),
             extend: Some("b".to_string()), timeout: None, extra_body: None,
             fallback_models: None, fallback_settings: None, aliases: None, supports_vision: None,
         });
 
         models.insert("b".to_string(), ModelConfig {
-            api_base: None, api_key_env: None, model: "b".to_string(),
+            provider: None, api_base: None, api_key_env: None, model: "b".to_string(),
             extend: Some("a".to_string()), timeout: None, extra_body: None,
             fallback_models: None, fallback_settings: None, aliases: None, supports_vision: None,
         });

@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::path::PathBuf;
-use crate::config::SandboxPolicy;
+use crate::config::{SandboxPolicy, WorkdirStrategy};
+use crate::agent::tools::resolve_path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DenoToolDefinition {
@@ -15,27 +16,26 @@ pub struct DenoToolDefinition {
 
 pub struct SandboxState {
     pub policy: SandboxPolicy,
+    pub workspace: PathBuf,
+    pub project_dir: PathBuf,
+    pub strategy: WorkdirStrategy,
     pub registered_tools: Vec<DenoToolDefinition>,
 }
 
-fn check_path(path: &str, allowed_paths: &[String], is_write: bool) -> Result<PathBuf, std::io::Error> {
-    let path_expanded = shellexpand::tilde(path).to_string();
-    let path_buf = PathBuf::from(&path_expanded);
+fn check_path(path: &str, allowed_paths: &[String], is_write: bool, state: &SandboxState) -> Result<PathBuf, std::io::Error> {
+    let resolved_path = resolve_path(path, &state.workspace, &state.project_dir, &state.strategy);
 
-    let abs_path = if path_buf.exists() {
-        path_buf.canonicalize()?
+    let abs_path = if resolved_path.exists() {
+        resolved_path.canonicalize()?
     } else if is_write {
-        if let Some(parent) = path_buf.parent() {
+        if let Some(parent) = resolved_path.parent() {
             if parent.exists() {
-                parent.canonicalize()?.join(path_buf.file_name().ok_or(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid file name"))?)
+                parent.canonicalize()?.join(resolved_path.file_name().ok_or(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid file name"))?)
             } else {
                 return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Parent directory does not exist for {}", path)));
             }
         } else {
-             // Path is root or relative to CWD and has no parent component?
-             // If relative "foo.txt", parent is "".
-             // If we use current_dir:
-             std::env::current_dir()?.join(path_buf)
+             resolved_path
         }
     } else {
         return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("File not found: {}", path)));
@@ -73,7 +73,7 @@ pub fn op_read_file(
     #[string] path: String,
 ) -> Result<String, std::io::Error> {
     let sandbox = state.borrow::<SandboxState>();
-    let abs_path = check_path(&path, &sandbox.policy.allow_read, false)?;
+    let abs_path = check_path(&path, &sandbox.policy.allow_read, false, &sandbox)?;
     let content = std::fs::read_to_string(abs_path)?;
     Ok(content)
 }
@@ -85,7 +85,7 @@ pub fn op_write_file(
     #[string] content: String,
 ) -> Result<(), std::io::Error> {
     let sandbox = state.borrow::<SandboxState>();
-    let abs_path = check_path(&path, &sandbox.policy.allow_write, true)?;
+    let abs_path = check_path(&path, &sandbox.policy.allow_write, true, &sandbox)?;
     std::fs::write(abs_path, content)?;
     Ok(())
 }
@@ -146,7 +146,7 @@ pub struct DenoRuntime {
 }
 
 impl DenoRuntime {
-    pub fn new(policy: SandboxPolicy) -> Result<Self, AnyError> {
+    pub fn new(policy: SandboxPolicy, workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Result<Self, AnyError> {
         let mut runtime = JsRuntime::new(RuntimeOptions {
             extensions: vec![zier_alpha_ext::init_ops_and_esm()],
             ..Default::default()
@@ -154,6 +154,9 @@ impl DenoRuntime {
 
         let state = SandboxState {
             policy,
+            workspace,
+            project_dir,
+            strategy,
             registered_tools: Vec::new(),
         };
         runtime.op_state().borrow_mut().put(state);

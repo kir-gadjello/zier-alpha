@@ -1,8 +1,9 @@
-use crate::config::SandboxPolicy;
+use crate::config::{SandboxPolicy, WorkdirStrategy};
 use crate::scripting::deno::{DenoRuntime, DenoToolDefinition};
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
 use std::thread;
+use std::path::PathBuf;
 use tracing::error;
 
 enum ScriptCommand {
@@ -26,7 +27,7 @@ pub struct ScriptService {
 }
 
 impl ScriptService {
-    pub fn new(policy: SandboxPolicy) -> Result<Self> {
+    pub fn new(policy: SandboxPolicy, workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Result<Self> {
         let (tx, mut rx) = mpsc::channel(32);
 
         // Spawn a dedicated OS thread for V8 (since JsRuntime is !Send)
@@ -38,7 +39,7 @@ impl ScriptService {
             match runtime {
                 Ok(rt) => {
                     rt.block_on(async move {
-                        let mut deno = match DenoRuntime::new(policy) {
+                        let mut deno = match DenoRuntime::new(policy, workspace, project_dir, strategy) {
                             Ok(d) => d,
                             Err(e) => {
                                 error!("Failed to initialize Deno runtime: {}", e);

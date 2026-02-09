@@ -104,7 +104,7 @@ async fn worker_loop(
     let _ = tx.send(WorkerMessage::Status(agent.session_status().await));
 
     // Track tools requiring approval
-    let approval_tools: Vec<String> = agent.approval_required_tools().to_vec();
+    let _approval_tools: Vec<String> = agent.approval_required_tools().to_vec();
 
     // Main loop
     while let Ok(msg) = rx.recv() {
@@ -113,7 +113,7 @@ async fn worker_loop(
         match msg {
             UiMessage::Chat(message) => {
                 // Stream response with tool support
-                match agent.chat_stream_with_tools(&message).await {
+                match agent.chat_stream_with_tools(&message, Vec::new()).await {
                     Ok(stream) => {
                         let mut stream = pin!(stream);
                         let mut pending_tools: Vec<ToolCall> = Vec::new();
@@ -129,22 +129,32 @@ async fn worker_loop(
                                         id,
                                         arguments,
                                     } => {
-                                        // Check if this tool requires approval
-                                        if approval_tools.contains(&name) {
-                                            // Collect for approval
-                                            pending_tools.push(ToolCall {
-                                                id,
-                                                name,
-                                                arguments: String::new(),
-                                            });
-                                        } else {
-                                            let detail = extract_tool_detail(&name, &arguments);
-                                            let _ = tx.send(WorkerMessage::ToolCallStart {
-                                                name,
-                                                id,
-                                                detail,
-                                            });
-                                        }
+                                        let detail = extract_tool_detail(&name, &arguments);
+                                        let _ = tx.send(WorkerMessage::ToolCallStart {
+                                            name,
+                                            id,
+                                            detail,
+                                        });
+                                    }
+                                    StreamEvent::ApprovalRequired {
+                                        name,
+                                        id,
+                                        arguments,
+                                    } => {
+                                        // Send tool call start event so it shows in UI
+                                        let detail = extract_tool_detail(&name, &arguments);
+                                        let _ = tx.send(WorkerMessage::ToolCallStart {
+                                            name: name.clone(),
+                                            id: id.clone(),
+                                            detail,
+                                        });
+
+                                        // Collect for approval
+                                        pending_tools.push(ToolCall {
+                                            id,
+                                            name,
+                                            arguments,
+                                        });
                                     }
                                     StreamEvent::ToolCallEnd { name, id, output } => {
                                         let _ = tx.send(WorkerMessage::ToolCallEnd {

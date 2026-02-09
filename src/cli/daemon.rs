@@ -161,7 +161,12 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
 
     // VIZIER: Initialize Scripting Service
     // TODO: Load policy from config. For now, strict default.
-    let script_service = ScriptService::new(Default::default())?;
+    let script_service = ScriptService::new(
+        Default::default(), 
+        config.workspace_path(),
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        config.workdir.strategy.clone()
+    )?;
     let script_loader = ScriptLoader::new(script_service.clone());
 
     if let Ok(home) = directories::BaseDirs::new()

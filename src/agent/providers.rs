@@ -130,6 +130,12 @@ pub enum StreamEvent {
         id: String,
         arguments: String,
     },
+    /// Tool call needs user approval
+    ApprovalRequired {
+        name: String,
+        id: String,
+        arguments: String,
+    },
     /// Tool call completed
     ToolCallEnd {
         name: String,
@@ -294,6 +300,10 @@ pub fn create_provider(model: &str, config: &Config) -> Result<Box<dyn LLMProvid
                 &ollama_config.endpoint,
                 &model_id,
             )?))
+        }
+
+        "mock" => {
+            Ok(Box::new(MockProvider::new(&model_id)))
         }
 
         _ => {
@@ -1810,4 +1820,78 @@ mod tests {
         );
     }
 
+}
+
+pub struct MockProvider {
+    #[allow(dead_code)]
+    pub model: String,
+}
+
+impl MockProvider {
+    pub fn new(model: &str) -> Self {
+        Self {
+            model: model.to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl LLMProvider for MockProvider {
+    async fn chat(&self, messages: &[Message], _tools: Option<&[ToolSchema]>) -> Result<LLMResponse> {
+        let last_msg = messages.last().ok_or_else(|| anyhow::anyhow!("No messages"))?;
+        
+        // Mock logic for testing tool routing and strategies
+        if let Some(tool_req) = last_msg.content.strip_prefix("test_tool:") {
+            let parts: Vec<&str> = tool_req.split('|').collect();
+            if parts.len() >= 3 {
+                let tool_name = parts[0];
+                let path = parts[1];
+                let content = parts[2];
+
+                if !last_msg.content.contains("tool_result") && last_msg.role != Role::Tool {
+                    let args = if tool_name == "write_file" || tool_name == "test_write" {
+                        json!({ "path": path, "content": content })
+                    } else if tool_name == "read_file" || tool_name == "test_read" {
+                        json!({ "path": path })
+                    } else {
+                        json!({})
+                    };
+
+                    return Ok(LLMResponse::tool_calls(vec![ToolCall {
+                        id: "test_call".to_string(),
+                        name: tool_name.to_string(),
+                        arguments: args.to_string(),
+                    }]));
+                }
+                return Ok(LLMResponse::text("Tool execution verified".to_string()));
+            }
+        }
+
+        let has_write_memory = messages.iter().any(|m| m.role == Role::User && m.content.contains("write memory"));
+        let last_is_tool = messages.last().map(|m| m.role == Role::Tool).unwrap_or(false);
+        
+        // Mock logic: if user asks to "write memory", simulate tool call followed by text
+        if has_write_memory {
+            // First turn: return tool call
+            if !last_is_tool {
+                 return Ok(LLMResponse::tool_calls(vec![ToolCall {
+                    id: "call_1".to_string(),
+                    name: "write_file".to_string(),
+                    arguments: json!({
+                        "path": "MEMORY.md",
+                        "content": "Name: Kira"
+                    }).to_string(),
+                }]));
+            }
+            
+            // Second turn (after tool result): return success text
+            return Ok(LLMResponse::text("I've saved your name as Kira in MEMORY.md.".to_string()));
+        }
+
+        Ok(LLMResponse::text("Mock response".to_string()))
+    }
+
+    async fn summarize(&self, _text: &str) -> Result<String> {
+        Ok("Mock summary".to_string())
+    }
 }

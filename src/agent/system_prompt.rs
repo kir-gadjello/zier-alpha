@@ -4,6 +4,7 @@
 //! and special token handling (NO_REPLY, HEARTBEAT_OK).
 
 use std::path::Path;
+use crate::config::{WorkdirConfig, WorkdirStrategy};
 
 /// Special tokens for silent replies
 pub const SILENT_REPLY_TOKEN: &str = "NO_REPLY";
@@ -81,14 +82,37 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
 
     // Workspace section
     lines.push("## Workspace".to_string());
-    lines.push(format!(
-        "Your working directory is: {}",
-        params.workspace_dir
-    ));
-    lines.push(
-        "Treat this directory as your workspace for file operations unless instructed otherwise."
-            .to_string(),
-    );
+    
+    match params.workdir_config.strategy {
+        WorkdirStrategy::Overlay => {
+            if let Some(custom) = &params.workdir_config.custom_prompt {
+                lines.push(custom.clone());
+            } else {
+                lines.push(format!("Your cognitive home (memory) is at: {}", params.workspace_dir));
+                if let Some(project) = params.project_dir {
+                    lines.push(format!("The project you are assisting with is at: {}", project));
+                    lines.push("File tools (read_file, write_file, edit_file) use cognitive routing:".to_string());
+                    lines.push("- Cognitive files (MEMORY.md, SOUL.md, etc.) are routed to your cognitive home.".to_string());
+                    lines.push("- All other relative paths are routed to the project directory.".to_string());
+                    lines.push("The bash tool always executes in the project directory.".to_string());
+                } else {
+                    lines.push("Treat this directory as your workspace for file operations.".to_string());
+                }
+            }
+        }
+        WorkdirStrategy::Mount => {
+            if let Some(custom) = &params.workdir_config.custom_prompt {
+                lines.push(custom.clone());
+            } else {
+                lines.push(format!("Your workspace root is: {}", params.workspace_dir));
+                if let Some(project) = params.project_dir {
+                    lines.push(format!("The project you are assisting with is mounted at: {}/project (aliased to {})", params.workspace_dir, project));
+                    lines.push("To access project files, use paths starting with 'project/'.".to_string());
+                }
+                lines.push("Memory files (MEMORY.md, etc.) are in the root of your workspace.".to_string());
+            }
+        }
+    }
     lines.push(String::new());
 
     // Current time section
@@ -115,9 +139,10 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
     lines.push("- memory/YYYY-MM-DD.md: Daily logs for session notes".to_string());
     lines.push(String::new());
     lines.push(
-        "To save information: use write_file or edit_file to update memory files directly. \
-         Use MEMORY.md for important persistent facts (names, preferences). \
-         Sessions are auto-saved to memory/ when starting a new session."
+        "CRITICAL: To save or remember information, you MUST EXPLICITLY call write_file or edit_file. \
+         Simply stating that you have saved or remembered something is NOT enough and will NOT persist. \
+         Use MEMORY.md for important persistent facts (names, preferences, project details). \
+         Always use read_file first to check current content before editing."
             .to_string(),
     );
     lines.push(String::new());
@@ -193,6 +218,8 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
 /// Parameters for building the system prompt
 pub struct SystemPromptParams<'a> {
     pub workspace_dir: &'a str,
+    pub project_dir: Option<&'a str>,
+    pub workdir_config: WorkdirConfig,
     pub model: &'a str,
     pub tool_names: Vec<&'a str>,
     pub hostname: Option<String>,
@@ -211,6 +238,8 @@ impl<'a> SystemPromptParams<'a> {
 
         Self {
             workspace_dir: workspace.to_str().unwrap_or("~/.zier-alpha/workspace"),
+            project_dir: None,
+            workdir_config: WorkdirConfig::default(),
             model,
             tool_names: Vec::new(),
             hostname: std::env::var("HOSTNAME")
@@ -224,6 +253,12 @@ impl<'a> SystemPromptParams<'a> {
             },
             skills_prompt: None,
         }
+    }
+
+    pub fn with_project(mut self, project: &'a Path, config: WorkdirConfig) -> Self {
+        self.project_dir = project.to_str();
+        self.workdir_config = config;
+        self
     }
 
     pub fn with_tools(mut self, tools: Vec<&'a str>) -> Self {

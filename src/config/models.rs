@@ -4,6 +4,7 @@ use anyhow::Result;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ModelConfig {
+    pub provider: Option<String>,
     pub api_base: Option<String>,
     pub api_key_env: Option<String>, // e.g., "OPENROUTER_API_KEY"
     pub model: String, // The actual wire name (e.g., "openai/gpt-4o")
@@ -59,6 +60,7 @@ pub fn resolve_model_config(
     let mut final_config = config_chain[0].clone();
 
     for child in config_chain.iter().skip(1) {
+        if let Some(v) = &child.provider { final_config.provider = Some(v.clone()); }
         if let Some(v) = &child.api_base { final_config.api_base = Some(v.clone()); }
         if let Some(v) = &child.api_key_env { final_config.api_key_env = Some(v.clone()); }
         final_config.model = child.model.clone(); // Always override model name

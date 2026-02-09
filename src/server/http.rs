@@ -732,16 +732,19 @@ async fn chat_stream(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ChatRequest>,
 ) -> Response {
-    // Get or create session first (outside the stream)
-    let session_id = match get_or_create_session(&state, request.session_id).await {
-        Ok(id) => id,
-        Err(e) => return e.into_response(),
-    };
-
-    let state_clone = state.clone();
+    let state_clone = Arc::clone(&state);
     let message = request.message.clone();
 
     let stream = async_stream::stream! {
+        // Get or create session
+        let session_id = match get_or_create_session(&state_clone, request.session_id.clone()).await {
+            Ok(id) => id,
+            Err(e) => {
+                yield Ok::<Event, Infallible>(Event::default().data(json!({"error": e.1}).to_string()));
+                return;
+            }
+        };
+
         // Send session_id first
         yield Ok::<Event, Infallible>(Event::default().data(json!({"type": "session", "session_id": session_id}).to_string()));
 
@@ -775,7 +778,7 @@ async fn chat_stream(
         entry.dirty = true;
 
         // Use streaming with tools
-        match entry.agent.chat_stream_with_tools(&message).await {
+        match entry.agent.chat_stream_with_tools(&message, Vec::new()).await {
             Ok(event_stream) => {
                 use futures::StreamExt;
 
@@ -792,6 +795,12 @@ async fn chat_stream(
                             let detail = extract_tool_detail(&name, &arguments);
                             let data = json!({"type": "tool_start", "name": name, "id": id, "detail": detail});
                             yield Ok(Event::default().data(data.to_string()));
+                        }
+                        Ok(StreamEvent::ApprovalRequired { name, id, arguments }) => {
+                            let detail = extract_tool_detail(&name, &arguments);
+                            let data = json!({"type": "approval_required", "name": name, "id": id, "detail": detail, "arguments": arguments});
+                            yield Ok(Event::default().data(data.to_string()));
+                            break; // Stop stream until approval received
                         }
                         Ok(StreamEvent::ToolCallEnd { name, id, output }) => {
                             let data = json!({

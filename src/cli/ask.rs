@@ -6,6 +6,8 @@ use zier_alpha::concurrency::WorkspaceLock;
 use zier_alpha::config::Config;
 use zier_alpha::memory::MemoryManager;
 
+use std::path::PathBuf;
+
 #[derive(Args)]
 pub struct AskArgs {
     /// The question or task to perform
@@ -18,10 +20,21 @@ pub struct AskArgs {
     /// Output format: text (default) or json
     #[arg(short, long, default_value = "text")]
     pub format: String,
+
+    /// Working directory for the project (Worksite)
+    #[arg(short, long)]
+    pub workdir: Option<String>,
 }
 
 pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
     let config = Config::load()?;
+    
+    let project_dir = if let Some(w) = args.workdir {
+        PathBuf::from(shellexpand::tilde(&w).to_string()).canonicalize()?
+    } else {
+        std::env::current_dir()?
+    };
+
     let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), agent_id)?;
 
     let agent_config = AgentConfig {
@@ -30,7 +43,7 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
         reserve_tokens: config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Stateless).await?;
+    let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Stateless, project_dir).await?;
     agent.new_session().await?;
 
     let workspace_lock = WorkspaceLock::new()?;

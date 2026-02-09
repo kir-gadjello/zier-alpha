@@ -15,6 +15,33 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkdirStrategy {
+    #[default]
+    Overlay,
+    Mount,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkdirConfig {
+    #[serde(default)]
+    pub strategy: WorkdirStrategy,
+    
+    /// Custom prompt addition for this strategy. 
+    /// If None, a default informative prompt is used.
+    pub custom_prompt: Option<String>,
+}
+
+impl Default for WorkdirConfig {
+    fn default() -> Self {
+        Self {
+            strategy: WorkdirStrategy::Overlay,
+            custom_prompt: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -43,6 +70,9 @@ pub struct Config {
 
     #[serde(default)]
     pub vision: VisionConfig,
+
+    #[serde(default)]
+    pub workdir: WorkdirConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -653,4 +683,10 @@ bind = "127.0.0.1"
 
 [logging]
 level = "info"
+
+[workdir]
+# Strategy for handling project directories: "overlay" (default) or "mount"
+# - "overlay": Cognitive files go to workspace, others to project dir.
+# - "mount": Everything is in workspace; project dir is mounted at ./project.
+strategy = "overlay"
 "#;

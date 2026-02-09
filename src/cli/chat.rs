@@ -4,6 +4,7 @@ use futures::StreamExt;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use zier_alpha::agent::{
     extract_tool_detail, get_last_session_id_for_agent, get_skills_summary,
@@ -112,10 +113,26 @@ pub struct ChatArgs {
     /// Resume the most recent session
     #[arg(long)]
     pub resume: bool,
+
+    /// Show full tool arguments and outputs
+    #[arg(short, long)]
+    pub verbose: bool,
+
+    /// Working directory for the project (Worksite)
+    #[arg(short, long)]
+    pub workdir: Option<String>,
 }
 
 pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
+    let verbose_chat = args.verbose;
     let config = Config::load()?;
+    
+    let project_dir = if let Some(w) = args.workdir {
+        PathBuf::from(shellexpand::tilde(&w).to_string()).canonicalize()?
+    } else {
+        std::env::current_dir()?
+    };
+
     // Embedding provider is automatically created based on config.memory.embedding_provider
     let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), agent_id)?;
 
@@ -125,7 +142,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         reserve_tokens: config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full).await?;
+    let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Full, project_dir).await?;
     let workspace_lock = WorkspaceLock::new()?;
 
     // Determine session to use
@@ -389,27 +406,66 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
             }
         }
 
-        // Send message to agent with streaming
+        // Send message to agent with streaming and tool support
         print!("\nZier Alpha: ");
         stdout.flush()?;
 
         let _lock_guard = workspace_lock.acquire()?;
-        match agent.chat_stream_with_images(&message, images).await {
-            Ok(mut stream) => {
-                let mut full_response = String::new();
-                let mut pending_tool_calls = None;
+        let mut current_stream: futures::stream::BoxStream<'_, Result<zier_alpha::agent::StreamEvent>> = 
+            Box::pin(agent.chat_stream_with_tools(&message, images).await?);
 
-                while let Some(result) = stream.next().await {
-                    match result {
-                        Ok(chunk) => {
-                            print!("{}", chunk.delta);
+        loop {
+            let mut approval_info = None;
+            
+            {
+                let mut pinned_stream = std::pin::pin!(current_stream);
+                while let Some(event) = pinned_stream.next().await {
+                    match event {
+                        Ok(zier_alpha::agent::StreamEvent::Content(content)) => {
+                            print!("{}", content);
                             stdout.flush()?;
-                            full_response.push_str(&chunk.delta);
-
-                            // Capture tool calls from the final chunk
-                            if chunk.done && chunk.tool_calls.is_some() {
-                                pending_tool_calls = chunk.tool_calls;
+                        }
+                        Ok(zier_alpha::agent::StreamEvent::ToolCallStart { name, arguments, .. }) => {
+                            let detail = extract_tool_detail(&name, &arguments);
+                            if verbose_chat {
+                                println!("\n[Tool Call: {}]", name);
+                                println!("Arguments: {}", arguments);
+                            } else if let Some(ref d) = detail {
+                                println!("\n[{}: {}]", name, d);
+                            } else {
+                                println!("\n[{}]", name);
                             }
+                            stdout.flush()?;
+                        }
+                        Ok(zier_alpha::agent::StreamEvent::ApprovalRequired { name, id, arguments }) => {
+                            let detail = extract_tool_detail(&name, &arguments);
+                            if verbose_chat {
+                                println!("\n[Approval Required: {}]", name);
+                                println!("Arguments: {}", arguments);
+                            } else if let Some(ref d) = detail {
+                                println!("\n[{}: {}]", name, d);
+                            } else {
+                                println!("\n[{}]", name);
+                            }
+
+                            print!("Execute {}? [y/N]: ", name);
+                            stdout.flush()?;
+
+                            let mut input = String::new();
+                            io::stdin().read_line(&mut input)?;
+                            let input = input.trim().to_lowercase();
+
+                            approval_info = Some((id, name, arguments, input == "y" || input == "yes"));
+                            break; // Exit inner stream loop
+                        }
+                        Ok(zier_alpha::agent::StreamEvent::ToolCallEnd { output, .. }) => {
+                            if verbose_chat {
+                                println!("Output: {}", output);
+                            }
+                            stdout.flush()?;
+                        }
+                        Ok(zier_alpha::agent::StreamEvent::Done) => {
+                            // All done
                         }
                         Err(e) => {
                             eprintln!("\nStream error: {}", e);
@@ -417,74 +473,32 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                         }
                     }
                 }
+            } // pinned_stream dropped here
 
-                // Handle tool calls if any
-                if let Some(tool_calls) = pending_tool_calls {
-                    // Check for tools requiring approval
-                    let mut approved_calls = Vec::new();
-                    let mut any_denied = false;
-
-                    for tc in tool_calls {
-                        let detail = extract_tool_detail(&tc.name, &tc.arguments);
-                        if let Some(ref d) = detail {
-                            println!("\n[{}: {}]", tc.name, d);
-                        } else {
-                            println!("\n[{}]", tc.name);
-                        }
-
-                        if agent.requires_approval(&tc.name) {
-                            // Prompt for approval
-                            print!("Execute {}? [y/N]: ", tc.name);
-                            stdout.flush()?;
-
-                            let mut input = String::new();
-                            std::io::stdin().read_line(&mut input)?;
-                            let input = input.trim().to_lowercase();
-
-                            if input == "y" || input == "yes" {
-                                approved_calls.push(tc);
-                            } else {
-                                println!("Skipped: {}", tc.name);
-                                any_denied = true;
-                            }
-                        } else {
-                            approved_calls.push(tc);
-                        }
-                    }
-                    stdout.flush()?;
-
-                    if !approved_calls.is_empty() {
-                        match agent
-                            .execute_streaming_tool_calls(&full_response, approved_calls)
-                            .await
-                        {
-                            Ok(follow_up) => {
-                                print!("{}", follow_up);
-                                stdout.flush()?;
-                            }
-                            Err(e) => {
-                                eprintln!("Tool execution error: {}", e);
-                            }
-                        }
-                    } else if any_denied {
-                        // All tools were denied, just finish the stream
-                        agent.finish_chat_stream(&full_response).await;
-                        println!("\n(Tool execution skipped)");
-                    }
+            if let Some((id, name, arguments, approved)) = approval_info {
+                let output = if approved {
+                    let call = zier_alpha::agent::ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                    };
+                    agent.execute_tool(&call).await.unwrap_or_else(|e| format!("Error: {}", e))
                 } else {
-                    // No tool calls - just finish the stream
-                    agent.finish_chat_stream(&full_response).await;
-                }
+                    println!("Skipped: {}", name);
+                    "User denied execution".to_string()
+                };
 
-                if let Err(e) = agent.auto_save_session().await {
-                    eprintln!("Warning: Failed to auto-save session: {}", e);
-                }
-                println!("\n");
-            }
-            Err(e) => {
-                eprintln!("Error: {}\n", e);
+                agent.provide_tool_result(id, output).await;
+                current_stream = Box::pin(agent.resume_chat_stream_with_tools().await?);
+            } else {
+                break;
             }
         }
+
+        if let Err(e) = agent.auto_save_session().await {
+            eprintln!("Warning: Failed to auto-save session: {}", e);
+        }
+        println!("\n");
     }
 
     println!("Goodbye!");

@@ -37,6 +37,7 @@ impl SmartClient {
             resolve_model_config(model_alias, &self.config.models)
         } else {
             Ok(ModelConfig {
+                provider: None,
                 api_base: None,
                 api_key_env: None,
                 model: model_alias.to_string(),
@@ -83,7 +84,11 @@ impl SmartClient {
     }
 
     fn create_provider_from_config(&self, config: &ModelConfig) -> Result<Box<dyn LLMProvider>> {
-        let (provider_name, model_id) = parse_provider_model(&config.model);
+        let (provider_name, model_id) = if let Some(ref p) = config.provider {
+            (p.to_lowercase(), config.model.clone())
+        } else {
+            parse_provider_model(&config.model)
+        };
 
         let get_key = |env_var: &Option<String>, default: Option<&String>| -> Result<String> {
             if let Some(var) = env_var {
@@ -196,7 +201,12 @@ impl SmartClient {
             match provider.chat(messages, tools).await {
                 Ok(response) => {
                     let latency = start.elapsed().as_millis() as u64;
-                    let (provider_name, _) = parse_provider_model(&config.model);
+                    let provider_name = if let Some(ref p) = config.provider {
+                        p.to_lowercase()
+                    } else {
+                        let (p, _) = parse_provider_model(&config.model);
+                        p
+                    };
                     return Ok(SmartResponse {
                         response,
                         used_model: config.model.clone(),

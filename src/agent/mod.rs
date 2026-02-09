@@ -89,6 +89,8 @@ pub struct Agent {
     cumulative_usage: Usage,
     context_strategy: ContextStrategy,
     compaction_strategy: Box<dyn CompactionStrategy>,
+    /// Project working directory (Worksite)
+    project_dir: PathBuf,
 }
 
 impl Agent {
@@ -98,11 +100,31 @@ impl Agent {
         memory: MemoryManager,
         context_strategy: ContextStrategy,
     ) -> Result<Self> {
+        Self::new_with_project(
+            config,
+            app_config,
+            memory,
+            context_strategy,
+            std::env::current_dir()?
+        ).await
+    }
+
+    pub async fn new_with_project(
+        config: AgentConfig,
+        app_config: &Config,
+        memory: MemoryManager,
+        context_strategy: ContextStrategy,
+        project_dir: PathBuf,
+    ) -> Result<Self> {
         let client = SmartClient::new(app_config.clone(), config.model.clone());
 
         // Wrap memory in Arc so tools can share it
         let memory = Arc::new(memory);
-        let tools = tools::create_default_tools(app_config, Some(Arc::clone(&memory)))?;
+        let tools = tools::create_default_tools_with_project(
+            app_config, 
+            Some(Arc::clone(&memory)), 
+            project_dir.clone()
+        )?;
 
         Ok(Self {
             config,
@@ -114,6 +136,7 @@ impl Agent {
             cumulative_usage: Usage::default(),
             context_strategy,
             compaction_strategy: Box::new(NativeCompactor),
+            project_dir,
         })
     }
 
@@ -233,6 +256,7 @@ impl Agent {
         let tool_names: Vec<&str> = self.tools.iter().map(|t| t.name()).collect();
         let system_prompt_params =
             system_prompt::SystemPromptParams::new(self.memory.workspace(), &self.config.model)
+                .with_project(&self.project_dir, self.app_config.workdir.clone())
                 .with_tools(tool_names)
                 .with_skills_prompt(skills_prompt);
         let system_prompt = system_prompt::build_system_prompt(system_prompt_params);
@@ -412,7 +436,7 @@ impl Agent {
         }
     }
 
-    async fn execute_tool(&self, call: &ToolCall) -> Result<String> {
+    pub async fn execute_tool(&self, call: &ToolCall) -> Result<String> {
         for tool in &self.tools {
             if tool.name() == call.name {
                 let raw_output = tool.execute(&call.arguments).await?;
@@ -962,14 +986,37 @@ impl Agent {
     pub async fn chat_stream_with_tools(
         &mut self,
         message: &str,
+        images: Vec<ImageAttachment>,
     ) -> Result<impl futures::Stream<Item = Result<StreamEvent>> + '_> {
+        // 1. Check vision support and process images if needed
+        let mut final_content = message.to_string();
+        let mut final_images = images;
+        let config = self.client.resolve_config(self.model())?;
+
+        if config.supports_vision == Some(false) && !final_images.is_empty() {
+            info!("Model {} does not support vision. Generating descriptions...", self.model());
+            let vision_service = VisionService::new(&self.app_config);
+
+            for (i, img) in final_images.iter().enumerate() {
+                match vision_service.describe_image(img).await {
+                    Ok(desc) => {
+                        final_content.push_str(&format!("\n\n[Image {} Description: {}]", i + 1, desc));
+                    }
+                    Err(e) => {
+                        final_content.push_str(&format!("\n\n[Image {} processing failed: {}]", i + 1, e));
+                    }
+                }
+            }
+            final_images.clear();
+        }
+
         // Add user message
         self.session.write().await.add_message(Message {
             role: Role::User,
-            content: message.to_string(),
+            content: final_content,
             tool_calls: None,
             tool_call_id: None,
-            images: Vec::new(),
+            images: final_images,
         });
 
         // Check if we should run pre-compaction memory flush (soft threshold)
@@ -1033,44 +1080,54 @@ impl Agent {
                                 break;
                             }
                             LLMResponseContent::ToolCalls(calls) => {
-                        // Notify about tool calls
-                        for call in &calls {
-                            yield Ok(StreamEvent::ToolCallStart {
-                                name: call.name.clone(),
-                                id: call.id.clone(),
-                                arguments: call.arguments.clone(),
-                            });
+                                // Add tool call message to session (assistant turn)
+                                self.session.write().await.add_message(Message {
+                                    role: Role::Assistant,
+                                    content: String::new(),
+                                    tool_calls: Some(calls.clone()),
+                                    tool_call_id: None,
+                                    images: Vec::new(),
+                                });
 
-                            // Execute tool
-                            let result = self.execute_tool(call).await;
-                            let output = result.unwrap_or_else(|e| format!("Error: {}", e));
+                                // Notify about and execute tool calls
+                                for call in &calls {
+                                    if self.requires_approval(&call.name) {
+                                        yield Ok(StreamEvent::ApprovalRequired {
+                                            name: call.name.clone(),
+                                            id: call.id.clone(),
+                                            arguments: call.arguments.clone(),
+                                        });
+                                        // The caller must call provide_tool_result then resume_chat_stream_with_tools
+                                        return;
+                                    }
 
-                            yield Ok(StreamEvent::ToolCallEnd {
-                                name: call.name.clone(),
-                                id: call.id.clone(),
-                                output: output.clone(),
-                            });
+                                    yield Ok(StreamEvent::ToolCallStart {
+                                        name: call.name.clone(),
+                                        id: call.id.clone(),
+                                        arguments: call.arguments.clone(),
+                                    });
 
-                            // Add tool result to session
-                            self.session.write().await.add_message(Message {
-                                role: Role::Tool,
-                                content: output,
-                                tool_calls: None,
-                                tool_call_id: Some(call.id.clone()),
-                                images: Vec::new(),
-                            });
-                        }
+                                    // Execute tool
+                                    let result = self.execute_tool(call).await;
+                                    let output = result.unwrap_or_else(|e| format!("Error: {}", e));
 
-                        // Add tool call message to session
-                        self.session.write().await.add_message(Message {
-                            role: Role::Assistant,
-                            content: String::new(),
-                            tool_calls: Some(calls),
-                            tool_call_id: None,
-                            images: Vec::new(),
-                        });
+                                    yield Ok(StreamEvent::ToolCallEnd {
+                                        name: call.name.clone(),
+                                        id: call.id.clone(),
+                                        output: output.clone(),
+                                    });
 
-                        // Continue loop to get next response
+                                    // Add tool result to session
+                                    self.session.write().await.add_message(Message {
+                                        role: Role::Tool,
+                                        content: output,
+                                        tool_calls: None,
+                                        tool_call_id: Some(call.id.clone()),
+                                        images: Vec::new(),
+                                    });
+                                }
+
+                                // Continue loop to get next response
                             }
                         }
                     }
@@ -1086,6 +1143,24 @@ impl Agent {
     /// Get tool schemas for external use
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.tools.iter().map(|t| t.schema()).collect()
+    }
+
+    /// Provide a result for a tool call that required approval
+    pub async fn provide_tool_result(&mut self, call_id: String, output: String) {
+        self.session.write().await.add_message(Message {
+            role: Role::Tool,
+            content: output,
+            tool_calls: None,
+            tool_call_id: Some(call_id),
+            images: Vec::new(),
+        });
+    }
+
+    /// Resume a streaming chat after tool results have been provided
+    pub async fn resume_chat_stream_with_tools(
+        &mut self,
+    ) -> Result<impl futures::Stream<Item = Result<StreamEvent>> + '_> {
+        Ok(self.stream_with_tool_loop())
     }
 
     /// Auto-save session to disk (call after each message)

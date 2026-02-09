@@ -12,7 +12,7 @@ pub mod script;
 pub mod registry;
 
 use super::providers::ToolSchema;
-use crate::config::Config;
+use crate::config::{Config, WorkdirStrategy};
 use crate::memory::MemoryManager;
 pub use script::ScriptTool;
 
@@ -33,6 +33,14 @@ pub fn create_default_tools(
     config: &Config,
     memory: Option<Arc<MemoryManager>>,
 ) -> Result<Vec<Box<dyn Tool>>> {
+    create_default_tools_with_project(config, memory, std::env::current_dir()?)
+}
+
+pub fn create_default_tools_with_project(
+    config: &Config,
+    memory: Option<Arc<MemoryManager>>,
+    project_dir: PathBuf,
+) -> Result<Vec<Box<dyn Tool>>> {
     let workspace = config.workspace_path();
 
     // Use indexed memory search if MemoryManager is provided, otherwise fallback to grep-based
@@ -42,25 +50,79 @@ pub fn create_default_tools(
         Box::new(MemorySearchTool::new(workspace.clone()))
     };
 
+    let strategy = &config.workdir.strategy;
+
     Ok(vec![
-        Box::new(BashTool::new(config.tools.bash_timeout_ms)),
-        Box::new(ReadFileTool::new()),
-        Box::new(WriteFileTool::new()),
-        Box::new(EditFileTool::new()),
+        Box::new(BashTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), config.tools.bash_timeout_ms)),
+        Box::new(ReadFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
+        Box::new(WriteFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
+        Box::new(EditFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
         memory_search_tool,
         Box::new(MemoryGetTool::new(workspace)),
         Box::new(WebFetchTool::new(config.tools.web_fetch_max_bytes)),
     ])
 }
 
+/// Helper to resolve a path based on strategy and cognitive routing
+pub fn resolve_path(path: &str, workspace: &PathBuf, project_dir: &PathBuf, strategy: &WorkdirStrategy) -> PathBuf {
+    let expanded = shellexpand::tilde(path).to_string();
+    let p = PathBuf::from(&expanded);
+    
+    if p.is_absolute() {
+        return p;
+    }
+
+    match strategy {
+        WorkdirStrategy::Overlay => {
+            if is_cognitive_path(&expanded) {
+                workspace.join(p)
+            } else {
+                project_dir.join(p)
+            }
+        }
+        WorkdirStrategy::Mount => {
+            // In Mount mode, if path starts with "project/", we route to actual project_dir
+            // Handle "project", "./project", "/project" (relative to virtual root)
+            let clean_path = expanded.trim_start_matches("./").trim_start_matches('/');
+            if clean_path == "project" || clean_path.starts_with("project/") {
+                let rel = if clean_path == "project" {
+                    PathBuf::new()
+                } else {
+                    PathBuf::from(&clean_path[8..]) // strip "project/"
+                };
+                project_dir.join(rel)
+            } else {
+                // Default to workspace
+                workspace.join(p)
+            }
+        }
+    }
+}
+
+/// Check if a path refers to a cognitive memory file
+pub fn is_cognitive_path(path: &str) -> bool {
+    let p = path.to_lowercase();
+    p == "memory.md" || 
+    p == "soul.md" || 
+    p == "heartbeat.md" || 
+    p == "identity.md" || 
+    p == "user.md" || 
+    p == "agents.md" ||
+    p == "tools.md" ||
+    p.starts_with("memory/")
+}
+
 // Bash Tool
 pub struct BashTool {
+    workspace: PathBuf,
+    project_dir: PathBuf,
+    strategy: WorkdirStrategy,
     default_timeout_ms: u64,
 }
 
 impl BashTool {
-    pub fn new(default_timeout_ms: u64) -> Self {
-        Self { default_timeout_ms }
+    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy, default_timeout_ms: u64) -> Self {
+        Self { workspace, project_dir, strategy, default_timeout_ms }
     }
 }
 
@@ -101,9 +163,14 @@ impl Tool for BashTool {
             .as_u64()
             .unwrap_or(self.default_timeout_ms);
 
+        let run_dir = match self.strategy {
+            WorkdirStrategy::Overlay => &self.project_dir,
+            WorkdirStrategy::Mount => &self.workspace,
+        };
+
         debug!(
-            "Executing bash command (timeout: {}ms): {}",
-            timeout_ms, command
+            "Executing bash command in {:?} (timeout: {}ms): {}",
+            run_dir, timeout_ms, command
         );
 
         // Run command with timeout
@@ -113,6 +180,7 @@ impl Tool for BashTool {
             tokio::process::Command::new("bash")
                 .arg("-c")
                 .arg(command)
+                .current_dir(run_dir)
                 .output(),
         )
         .await
@@ -146,11 +214,15 @@ impl Tool for BashTool {
 }
 
 // Read File Tool
-pub struct ReadFileTool;
+pub struct ReadFileTool {
+    workspace: PathBuf,
+    project_dir: PathBuf,
+    strategy: WorkdirStrategy,
+}
 
 impl ReadFileTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Self {
+        Self { workspace, project_dir, strategy }
     }
 }
 
@@ -169,7 +241,7 @@ impl Tool for ReadFileTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "The path to the file to read"
+                        "description": "The path to the file to read (relative to workspace or absolute)"
                     },
                     "offset": {
                         "type": "integer",
@@ -191,11 +263,11 @@ impl Tool for ReadFileTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
 
-        let path = shellexpand::tilde(path).to_string();
+        let resolved_path = resolve_path(path, &self.workspace, &self.project_dir, &self.strategy);
 
-        debug!("Reading file: {}", path);
+        debug!("Reading file: {}", resolved_path.display());
 
-        let content = fs::read_to_string(&path)?;
+        let content = fs::read_to_string(&resolved_path)?;
 
         // Handle offset and limit
         let offset = args["offset"].as_u64().unwrap_or(0) as usize;
@@ -220,11 +292,15 @@ impl Tool for ReadFileTool {
 }
 
 // Write File Tool
-pub struct WriteFileTool;
+pub struct WriteFileTool {
+    workspace: PathBuf,
+    project_dir: PathBuf,
+    strategy: WorkdirStrategy,
+}
 
 impl WriteFileTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Self {
+        Self { workspace, project_dir, strategy }
     }
 }
 
@@ -243,7 +319,7 @@ impl Tool for WriteFileTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "The path to the file to write"
+                        "description": "The path to the file to write (relative to workspace or absolute)"
                     },
                     "content": {
                         "type": "string",
@@ -264,32 +340,35 @@ impl Tool for WriteFileTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing content"))?;
 
-        let path = shellexpand::tilde(path).to_string();
-        let path = PathBuf::from(&path);
+        let resolved_path = resolve_path(path, &self.workspace, &self.project_dir, &self.strategy);
 
-        debug!("Writing file: {}", path.display());
+        debug!("Writing file: {}", resolved_path.display());
 
         // Create parent directories if needed
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = resolved_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(&path, content)?;
+        fs::write(&resolved_path, content)?;
 
         Ok(format!(
             "Successfully wrote {} bytes to {}",
             content.len(),
-            path.display()
+            resolved_path.display()
         ))
     }
 }
 
 // Edit File Tool
-pub struct EditFileTool;
+pub struct EditFileTool {
+    workspace: PathBuf,
+    project_dir: PathBuf,
+    strategy: WorkdirStrategy,
+}
 
 impl EditFileTool {
-    pub fn new() -> Self {
-        Self
+    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Self {
+        Self { workspace, project_dir, strategy }
     }
 }
 
@@ -308,7 +387,7 @@ impl Tool for EditFileTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "The path to the file to edit"
+                        "description": "The path to the file to edit (relative to workspace or absolute)"
                     },
                     "old_string": {
                         "type": "string",
@@ -341,11 +420,11 @@ impl Tool for EditFileTool {
             .ok_or_else(|| anyhow::anyhow!("Missing new_string"))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
-        let path = shellexpand::tilde(path).to_string();
+        let resolved_path = resolve_path(path, &self.workspace, &self.project_dir, &self.strategy);
 
-        debug!("Editing file: {}", path);
+        debug!("Editing file: {}", resolved_path.display());
 
-        let content = fs::read_to_string(&path)?;
+        let content = fs::read_to_string(&resolved_path)?;
 
         let (new_content, count) = if replace_all {
             let count = content.matches(old_string).count();
@@ -356,9 +435,9 @@ impl Tool for EditFileTool {
             return Err(anyhow::anyhow!("old_string not found in file"));
         };
 
-        fs::write(&path, &new_content)?;
+        fs::write(&resolved_path, &new_content)?;
 
-        Ok(format!("Replaced {} occurrence(s) in {}", count, path))
+        Ok(format!("Replaced {} occurrence(s) in {}", count, resolved_path.display()))
     }
 }
 

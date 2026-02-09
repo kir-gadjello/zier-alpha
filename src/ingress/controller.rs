@@ -5,6 +5,7 @@ use crate::memory::{ArtifactWriter, MemoryManager};
 use crate::prompts::PromptRegistry;
 use crate::scheduler::JobConfig;
 use crate::state::session_manager::GlobalSessionManager;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -91,6 +92,7 @@ pub async fn ingress_loop(
                     &config,
                     Some(Arc::new(memory.clone())),
                     script_tools.clone(),
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 ) {
                     Ok(t) => agent.set_tools(t),
                     Err(e) => error!("Failed to rebuild tools: {}", e),
@@ -162,6 +164,7 @@ pub async fn ingress_loop(
                     &config,
                     Some(Arc::new(memory.clone())),
                     script_tools.clone(),
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
                 )
                 .unwrap_or_default();
 
