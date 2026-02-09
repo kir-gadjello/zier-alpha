@@ -1,126 +1,66 @@
+# Zier-Alpha
 
-# LocalGPT
+A local-first cognitive kernel engineered in Rust. This is the alpha foundation of Vizier, a silicon-based Staffer that enforces a strict separation between cognition and execution. Featuring persistent memory and autonomous agency, it reserves the root context for reasoning while strictly confining tool use to secure, discrete environments.
 
-A local device focused AI assistant built in Rust — persistent memory, autonomous tasks, ~27MB binary. Inspired by and compatible with OpenClaw.
+## Core Philosophy
 
-`cargo install localgpt`
+* **Single binary** — No Node.js, Docker, or Python runtime dependencies for the core.
+* **Data sovereignty** — Runs entirely on localhost. Your memory and screen data never leave the device without explicit intent.
+* **Persistent memory** — Markdown-based knowledge store with SQLite-backed full-text and semantic search.
+* **Autonomous heartbeat** — Background event loop for scheduled tasks and system monitoring.
+* **Trust-aware ingress** — Architecturally distinguishes between Owner commands and external events (webhooks, news) to prevent prompt injection.
+* **Secure sandbox** — Tools run in isolated environments (Apple Sandbox on macOS) to prevent data exfiltration.
 
-## Why LocalGPT?
+## Installation
 
-- **Single binary** — no Node.js, Docker, or Python required
-- **Local device focused** — runs entirely on your machine, your memory data stays yours
-- **Persistent memory** — markdown-based knowledge store with full-text and semantic search
-- **Autonomous heartbeat** — delegate tasks and let it work in the background
-- **Multiple interfaces** — CLI, web UI, desktop GUI
-- **Multiple LLM providers** — Anthropic (Claude), OpenAI, Ollama
-- **OpenClaw compatible** — works with SOUL, MEMORY, HEARTBEAT markdown files and skills format
-
-## Install
+Zier-Alpha is currently distributed as source. You will need a Rust toolchain installed.
 
 ```bash
-# Full install (includes desktop GUI)
-cargo install localgpt
+# Clone the repository
+git clone https://github.com/your-username/zier-alpha.git
+cd zier-alpha
 
-# Headless (no desktop GUI — for servers, Docker, CI)
-cargo install localgpt --no-default-features
+# Full install (includes desktop GUI)
+cargo install --path .
+
+# Headless install (server/daemon only)
+cargo install --path . --no-default-features
+
 ```
 
 ## Quick Start
 
-```bash
-# Initialize configuration
-localgpt config init
-
-# Start interactive chat
-localgpt chat
-
-# Ask a single question
-localgpt ask "What is the meaning of life?"
-
-# Run as a daemon with heartbeat, HTTP API and web ui
-localgpt daemon start
-```
-
-## How It Works
-
-LocalGPT uses plain markdown files as its memory:
-
-```
-~/.localgpt/workspace/
-├── MEMORY.md            # Long-term knowledge (auto-loaded each session)
-├── HEARTBEAT.md         # Autonomous task queue
-├── SOUL.md              # Personality and behavioral guidance
-└── knowledge/           # Structured knowledge bank (optional)
-    ├── finance/
-    ├── legal/
-    └── tech/
-```
-
-Files are indexed with SQLite FTS5 for fast keyword search, and sqlite-vec for semantic search with local embeddings 
-
-## Configuration
-
-Stored at `~/.localgpt/config.toml`:
-
-```toml
-[agent]
-default_model = "claude-cli/opus"
-
-[providers.anthropic]
-api_key = "${ANTHROPIC_API_KEY}"
-
-[heartbeat]
-enabled = true
-interval = "30m"
-active_hours = { start = "09:00", end = "22:00" }
-
-[memory]
-workspace = "~/.localgpt/workspace"
-```
-
-## CLI Commands
+Initialize the configuration and workspace:
 
 ```bash
-# Chat
-localgpt chat                     # Interactive chat
-localgpt chat --session <id>      # Resume session
-localgpt ask "question"           # Single question
+zier-alpha config init
 
-# Daemon
-localgpt daemon start             # Start background daemon
-localgpt daemon stop              # Stop daemon
-localgpt daemon status            # Show status
-localgpt daemon heartbeat         # Run one heartbeat cycle
-
-# Memory
-localgpt memory search "query"    # Search memory
-localgpt memory reindex           # Reindex files
-localgpt memory stats             # Show statistics
-
-# Config
-localgpt config init              # Create default config
-localgpt config show              # Show current config
 ```
 
-## HTTP API
+Start an interactive chat session:
 
-When the daemon is running:
+```bash
+zier-alpha chat
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | Health check |
-| `GET /api/status` | Server status |
-| `POST /api/chat` | Chat with the assistant |
-| `GET /api/memory/search?q=<query>` | Search memory |
-| `GET /api/memory/stats` | Memory statistics |
+```
 
-## Blog
+Ask a single question from the CLI:
 
-[Why I Built LocalGPT in 4 Nights](https://localgpt.app/blog/why-i-built-localgpt-in-4-nights) — the full story with commit-by-commit breakdown.
+```bash
+zier-alpha ask "Summarize the latest HN top stories"
 
-## VIZIER Architecture
+```
 
-LocalGPT operates as a "Secure Cognitive Kernel" (VIZIER), decoupling input handling from execution to ensure safety and stability.
+Run as a background daemon (enables Heartbeat and HTTP API):
+
+```bash
+zier-alpha daemon start
+
+```
+
+## Architecture
+
+Zier-Alpha implements the VIZIER architecture: a Secure Cognitive Kernel that decouples input sources from execution logic. This ensures that untrusted inputs (like web content or forwarded messages) cannot hijack the agent's tool capabilities.
 
 ```mermaid
 graph TD
@@ -147,36 +87,61 @@ graph TD
 
     subgraph Tools
         Native[Native Tools]
-        Script[Deno Script Tools]
-        Sandbox[Apple Sandbox / Deno V8]
+        Script[External Script Tools]
+        Sandbox[Apple Sandbox / Isolation]
     end
 
     Tools -->|Result| AgentResponse
     AgentResponse --> Artifacts[Artifact Storage]
+
 ```
 
-### Key Components
+### Components
 
-*   **Ingress Bus** ([`src/ingress/bus.rs`](src/ingress/bus.rs)): Central event bus that decouples input sources (Telegram, Cron) from execution logic.
-*   **Control Plane** ([`src/cli/daemon.rs`](src/cli/daemon.rs)): The main loop that consumes events, determines `TrustLevel`, and initializes the appropriate Agent persona.
-*   **Scheduler** ([`src/scheduler/mod.rs`](src/scheduler/mod.rs)): `cron`-based job scheduler that emits trusted events to the bus.
-*   **Scripting Engine** ([`src/scripting/deno.rs`](src/scripting/deno.rs)): Embedded Deno runtime for executing sandboxed JS/TS tools.
-*   **Sandbox Policy** ([`src/config/sandbox.rs`](src/config/sandbox.rs)): Defines file system and network allowances for tools.
+* **Ingress Bus:** A central `tokio` broadcast channel that normalizes all inputs into `IngressMessage` structs containing source, content, and `TrustLevel`.
+* **Control Plane:** The main event loop. It routes `OwnerCommand` to the fully capable Root Agent and `UntrustedEvent` to a restricted Sanitizer persona that can only summarize text, not execute tools.
+* **Artifact Store:** The primary memory system. Instead of unstructured chat logs, Zier-Alpha writes structured Markdown files (`Artifacts`) with strict provenance metadata (timestamp, model used, trust level).
+* **Sandboxed Tools:** External scripts (Python/Node) are executed via the native OS sandbox (e.g., `sandbox-exec` on macOS) with strict profiles deny-listing network or file access by default.
 
-## Built With
+## Workspace Structure
 
-Rust, Tokio, Axum, SQLite (FTS5 + sqlite-vec), fastembed, eframe, Deno Core
+Zier-Alpha uses plain text files for state, making it Git-friendly and easy to edit manually.
 
-## Contributors
+```text
+~/.zier-alpha/workspace/
+├── MEMORY.md            # Long-term knowledge (auto-loaded context)
+├── HEARTBEAT.md         # Autonomous task queue and status
+├── SOUL.md              # System prompt and personality definition
+└── artifacts/           # Structured outputs (reports, summaries)
+    ├── 2024-03-20_finance_report.md
+    └── 2024-03-21_hn_digest.md
 
-<a href="https://github.com/localgpt-app/localgpt/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=localgpt-app/localgpt" />
-</a>
+```
 
-## Stargazers
+## Configuration
 
-[![Star History Chart](https://api.star-history.com/svg?repos=localgpt-app/localgpt&type=Date)](https://star-history.com/#localgpt-app/localgpt&Date)
+Configuration is stored at `~/.zier-alpha/config.toml`.
+
+```toml
+[agent]
+default_model = "claude-3-opus"
+fast_model = "claude-3-haiku"
+
+[ingress]
+telegram_owner_id = 123456789
+
+[sandbox]
+default_policy = "strict" # Deny network, allow write only to artifacts/
+
+[heartbeat]
+enabled = true
+interval = "30m"
+
+[memory]
+workspace = "~/.zier-alpha/workspace"
+
+```
 
 ## License
 
-[Apache-2.0](LICENSE)
+Apache-2.0
