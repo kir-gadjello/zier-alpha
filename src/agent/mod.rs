@@ -31,10 +31,20 @@ pub use tools::{create_default_tools, extract_tool_detail, ScriptTool, Tool, Too
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+use crate::agent::client::{SmartClient, SmartResponse};
+use crate::capabilities::vision::VisionService;
 use crate::config::Config;
 use crate::memory::{MemoryChunk, MemoryManager};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextStrategy {
+    Full,
+    Stateless,
+    Episodic,
+}
 
 /// Soft threshold buffer before compaction (tokens)
 /// Memory flush runs when within this buffer of the hard limit
@@ -68,12 +78,13 @@ pub struct AgentConfig {
 pub struct Agent {
     config: AgentConfig,
     app_config: Config,
-    provider: Box<dyn LLMProvider>,
-    session: Session,
+    client: SmartClient,
+    session: Arc<RwLock<Session>>,
     memory: Arc<MemoryManager>,
     tools: Vec<Box<dyn Tool>>,
     /// Cumulative token usage for this session
     cumulative_usage: Usage,
+    context_strategy: ContextStrategy,
 }
 
 impl Agent {
@@ -81,8 +92,9 @@ impl Agent {
         config: AgentConfig,
         app_config: &Config,
         memory: MemoryManager,
+        context_strategy: ContextStrategy,
     ) -> Result<Self> {
-        let provider = providers::create_provider(&config.model, app_config)?;
+        let client = SmartClient::new(app_config.clone(), config.model.clone());
 
         // Wrap memory in Arc so tools can share it
         let memory = Arc::new(memory);
@@ -91,11 +103,12 @@ impl Agent {
         Ok(Self {
             config,
             app_config: app_config.clone(),
-            provider,
-            session: Session::new(),
+            client,
+            session: Arc::new(RwLock::new(Session::new())),
             memory,
             tools,
             cumulative_usage: Usage::default(),
+            context_strategy,
         })
     }
 
@@ -123,9 +136,8 @@ impl Agent {
 
     /// Switch to a different model
     pub fn set_model(&mut self, model: &str) -> Result<()> {
-        let provider = providers::create_provider(model, &self.app_config)?;
         self.config.model = model.to_string();
-        self.provider = provider;
+        self.client = SmartClient::new(self.app_config.clone(), model.to_string());
         info!("Switched to model: {}", model);
         Ok(())
     }
@@ -148,9 +160,13 @@ impl Agent {
         self.config.reserve_tokens
     }
 
+    pub fn set_session(&mut self, session: Arc<RwLock<Session>>) {
+        self.session = session;
+    }
+
     /// Get current context usage info
-    pub fn context_usage(&self) -> (usize, usize, usize) {
-        let used = self.session.token_count();
+    pub async fn context_usage(&self) -> (usize, usize, usize) {
+        let used = self.session.read().await.token_count();
         let available = self.config.context_window;
         let reserve = self.config.reserve_tokens;
         let usable = available.saturating_sub(reserve);
@@ -158,14 +174,15 @@ impl Agent {
     }
 
     /// Export session messages as markdown
-    pub fn export_markdown(&self) -> String {
+    pub async fn export_markdown(&self) -> String {
+        let session = self.session.read().await;
         let mut output = String::new();
         output.push_str("# Zier Alpha Session Export\n\n");
         output.push_str(&format!("Model: {}\n", self.config.model));
-        output.push_str(&format!("Session ID: {}\n\n", self.session.id()));
+        output.push_str(&format!("Session ID: {}\n\n", session.id()));
         output.push_str("---\n\n");
 
-        for msg in self.session.messages() {
+        for msg in session.messages() {
             let role = match msg.role {
                 Role::User => "**User**",
                 Role::Assistant => "**Assistant**",
@@ -192,7 +209,11 @@ impl Agent {
     }
 
     pub async fn new_session(&mut self) -> Result<()> {
-        self.session = Session::new();
+        // Reset session
+        {
+            let mut session = self.session.write().await;
+            *session = Session::new();
+        }
 
         // Load skills from workspace
         let workspace_skills = skills::load_skills(self.memory.workspace()).unwrap_or_default();
@@ -207,8 +228,11 @@ impl Agent {
                 .with_skills_prompt(skills_prompt);
         let system_prompt = system_prompt::build_system_prompt(system_prompt_params);
 
-        // Load memory context (SOUL.md, MEMORY.md, daily logs, HEARTBEAT.md)
-        let memory_context = self.build_memory_context().await?;
+        // Load memory context depending on strategy
+        let memory_context = match self.context_strategy {
+            ContextStrategy::Stateless => String::new(),
+            _ => self.build_memory_context().await?,
+        };
 
         // Combine system prompt with memory context
         let full_context = if memory_context.is_empty() {
@@ -220,18 +244,22 @@ impl Agent {
             )
         };
 
-        self.session.set_system_context(full_context);
+        self.session.write().await.set_system_context(full_context);
 
-        info!("Created new session: {}", self.session.id());
+        info!("Created new session: {}", self.session.read().await.id());
         Ok(())
     }
 
-    pub fn set_system_prompt(&mut self, prompt: &str) {
-        self.session.set_system_context(prompt.to_string());
+    pub async fn set_system_prompt(&mut self, prompt: &str) {
+        self.session.write().await.set_system_context(prompt.to_string());
     }
 
     pub async fn resume_session(&mut self, session_id: &str) -> Result<()> {
-        self.session = Session::load(session_id)?;
+        let loaded = Session::load(session_id)?;
+        {
+            let mut session = self.session.write().await;
+            *session = loaded;
+        }
         info!("Resumed session: {}", session_id);
         Ok(())
     }
@@ -243,45 +271,69 @@ impl Agent {
     pub async fn chat_with_images(
         &mut self,
         message: &str,
-        images: Vec<ImageAttachment>,
+        mut images: Vec<ImageAttachment>,
     ) -> Result<String> {
-        // Add user message with images
-        self.session.add_message(Message {
+        // 1. Check vision support
+        let mut final_content = message.to_string();
+        let config = self.client.resolve_config(self.model())?;
+
+        if config.supports_vision == Some(false) && !images.is_empty() {
+            info!("Model {} does not support vision. Generating descriptions...", self.model());
+            let vision_service = VisionService::new(&self.app_config);
+
+            for (i, img) in images.iter().enumerate() {
+                match vision_service.describe_image(img).await {
+                    Ok(desc) => {
+                        final_content.push_str(&format!("\n\n[Image {} Description: {}]", i + 1, desc));
+                    }
+                    Err(e) => {
+                        final_content.push_str(&format!("\n\n[Image {} processing failed: {}]", i + 1, e));
+                    }
+                }
+            }
+            // Clear images since they are now described in text
+            images.clear();
+        }
+
+        // Add user message with images (or empty if processed)
+        self.session.write().await.add_message(Message {
             role: Role::User,
-            content: message.to_string(),
+            content: final_content,
             tool_calls: None,
             tool_call_id: None,
             images,
         });
 
         // Check if we should run pre-compaction memory flush (soft threshold)
-        if self.should_memory_flush() {
+        if self.should_memory_flush().await {
             info!("Running pre-compaction memory flush (soft threshold)");
             self.memory_flush().await?;
         }
 
         // Check if we need to compact (hard limit)
-        if self.should_compact() {
+        if self.should_compact().await {
             self.compact_session().await?;
         }
 
         // Build messages for LLM
-        let messages = self.session.messages_for_llm();
+        let messages = self.session.read().await.messages_for_llm();
 
         // Get available tools
         let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
 
         // Invoke LLM
         let response = self
-            .provider
+            .client
             .chat(&messages, Some(tool_schemas.as_slice()))
             .await?;
+
+        let metadata = (response.used_model.clone(), response.latency_ms);
 
         // Handle tool calls if any
         let final_response = self.handle_response(response).await?;
 
         // Add assistant response
-        self.session.add_message(Message {
+        self.session.write().await.add_message(Message {
             role: Role::Assistant,
             content: final_response.clone(),
             tool_calls: None,
@@ -289,14 +341,16 @@ impl Agent {
             images: Vec::new(),
         });
 
+        self.session.write().await.add_metadata_to_last_message(Some(metadata.0), Some(metadata.1));
+
         Ok(final_response)
     }
 
-    async fn handle_response(&mut self, response: LLMResponse) -> Result<String> {
+    async fn handle_response(&mut self, response: SmartResponse) -> Result<String> {
         // Track usage
-        self.add_usage(response.usage);
+        self.add_usage(response.response.usage);
 
-        match response.content {
+        match response.response.content {
             LLMResponseContent::Text(text) => Ok(text),
             LLMResponseContent::ToolCalls(calls) => {
                 // Execute tool calls
@@ -316,7 +370,7 @@ impl Agent {
                 }
 
                 // Add tool call message
-                self.session.add_message(Message {
+                self.session.write().await.add_message(Message {
                     role: Role::Assistant,
                     content: String::new(),
                     tool_calls: Some(calls),
@@ -326,7 +380,7 @@ impl Agent {
 
                 // Add tool results
                 for result in &results {
-                    self.session.add_message(Message {
+                    self.session.write().await.add_message(Message {
                         role: Role::Tool,
                         content: result.output.clone(),
                         tool_calls: None,
@@ -336,10 +390,10 @@ impl Agent {
                 }
 
                 // Continue conversation with tool results
-                let messages = self.session.messages_for_llm();
+                let messages = self.session.read().await.messages_for_llm();
                 let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
                 let next_response = self
-                    .provider
+                    .client
                     .chat(&messages, Some(tool_schemas.as_slice()))
                     .await?;
 
@@ -530,30 +584,32 @@ impl Agent {
         Ok(context)
     }
 
-    fn should_compact(&self) -> bool {
-        self.session.token_count() > (self.config.context_window - self.config.reserve_tokens)
+    async fn should_compact(&self) -> bool {
+        self.session.read().await.token_count() > (self.config.context_window - self.config.reserve_tokens)
     }
 
     /// Check if we should run pre-compaction memory flush (soft threshold)
-    fn should_memory_flush(&self) -> bool {
+    async fn should_memory_flush(&self) -> bool {
         let hard_limit = self.config.context_window - self.config.reserve_tokens;
         let soft_limit = hard_limit.saturating_sub(MEMORY_FLUSH_SOFT_THRESHOLD);
 
-        self.session.token_count() > soft_limit && self.session.should_memory_flush()
+        let session = self.session.read().await;
+        session.token_count() > soft_limit && session.should_memory_flush()
     }
 
     pub async fn compact_session(&mut self) -> Result<(usize, usize)> {
-        let before = self.session.token_count();
+        let before = self.session.read().await.token_count();
 
         // Trigger memory flush before compacting (if not already done)
-        if self.session.should_memory_flush() {
+        if self.should_memory_flush().await {
             self.memory_flush().await?;
         }
 
         // Compact the session
-        self.session.compact(&*self.provider).await?;
+        // Requires write lock
+        self.session.write().await.compact_native(&self.client).await?;
 
-        let after = self.session.token_count();
+        let after = self.session.read().await.token_count();
         info!("Session compacted: {} -> {} tokens", before, after);
 
         Ok((before, after))
@@ -563,7 +619,7 @@ impl Agent {
     /// Runs before compaction to preserve important context to disk
     async fn memory_flush(&mut self) -> Result<()> {
         // Mark as flushed for this compaction cycle (prevents running twice)
-        self.session.mark_memory_flushed();
+        self.session.write().await.mark_memory_flushed();
 
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let flush_prompt = format!(
@@ -576,7 +632,7 @@ impl Agent {
         );
 
         // Add flush prompt as user message
-        self.session.add_message(Message {
+        self.session.write().await.add_message(Message {
             role: Role::User,
             content: flush_prompt,
             tool_calls: None,
@@ -586,15 +642,15 @@ impl Agent {
 
         // Get tool schemas so agent can write files
         let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
-        let messages = self.session.messages_for_llm();
+        let messages = self.session.read().await.messages_for_llm();
 
-        let response = self.provider.chat(&messages, Some(&tool_schemas)).await?;
+        let response = self.client.chat(&messages, Some(&tool_schemas)).await?;
 
         // Handle response (may include tool calls)
         let final_response = self.handle_response(response).await?;
 
         // Add response to session
-        self.session.add_message(Message {
+        self.session.write().await.add_message(Message {
             role: Role::Assistant,
             content: final_response.clone(),
             tool_calls: None,
@@ -612,7 +668,7 @@ impl Agent {
     /// Save current session to memory file (called on /new command)
     /// Creates memory/YYYY-MM-DD-slug.md with session transcript
     pub async fn save_session_to_memory(&self) -> Result<Option<PathBuf>> {
-        let messages = self.session.user_assistant_messages();
+        let messages = self.session.read().await.user_assistant_messages();
 
         debug!(
             "save_session_to_memory: {} user/assistant messages found",
@@ -655,7 +711,7 @@ impl Agent {
              ## Conversation\n\n",
             date_str,
             time_str,
-            self.session.id()
+            self.session.read().await.id()
         );
 
         for msg in &messages {
@@ -695,8 +751,9 @@ impl Agent {
         Ok(Some(path))
     }
 
-    pub fn clear_session(&mut self) {
-        self.session = Session::new();
+    pub async fn clear_session(&mut self) {
+        let mut session = self.session.write().await;
+        *session = Session::new();
     }
 
     pub async fn search_memory(&self, query: &str) -> Result<Vec<MemoryChunk>> {
@@ -713,16 +770,16 @@ impl Agent {
     }
 
     pub async fn save_session(&self) -> Result<PathBuf> {
-        self.session.save()
+        self.session.read().await.save()
     }
 
     /// Save session for a specific agent ID (used by HTTP server)
     pub async fn save_session_for_agent(&self, agent_id: &str) -> Result<PathBuf> {
-        self.session.save_for_agent(agent_id)
+        self.session.read().await.save_for_agent(agent_id)
     }
 
-    pub fn session_status(&self) -> SessionStatus {
-        self.session.status_with_usage(
+    pub async fn session_status(&self) -> SessionStatus {
+        self.session.read().await.status_with_usage(
             self.cumulative_usage.input_tokens,
             self.cumulative_usage.output_tokens,
         )
@@ -742,7 +799,7 @@ impl Agent {
         images: Vec<ImageAttachment>,
     ) -> Result<StreamResult> {
         // Add user message with images
-        self.session.add_message(Message {
+        self.session.write().await.add_message(Message {
             role: Role::User,
             content: message.to_string(),
             tool_calls: None,
@@ -751,31 +808,31 @@ impl Agent {
         });
 
         // Check if we should run pre-compaction memory flush (soft threshold)
-        if self.should_memory_flush() {
+        if self.should_memory_flush().await {
             info!("Running pre-compaction memory flush (soft threshold)");
             self.memory_flush().await?;
         }
 
         // Check if we need to compact (hard limit)
-        if self.should_compact() {
+        if self.should_compact().await {
             self.compact_session().await?;
         }
 
         // Build messages for LLM
-        let messages = self.session.messages_for_llm();
+        let messages = self.session.read().await.messages_for_llm();
 
         // Get tool schemas so the model knows the correct tool call format
         let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
 
         // Get stream from provider with tools
-        self.provider
+        self.client
             .chat_stream(&messages, Some(&tool_schemas))
             .await
     }
 
     /// Complete a streaming chat by adding the assistant response to the session
-    pub fn finish_chat_stream(&mut self, response: &str) {
-        self.session.add_message(Message {
+    pub async fn finish_chat_stream(&mut self, response: &str) {
+        self.session.write().await.add_message(Message {
             role: Role::Assistant,
             content: response.to_string(),
             tool_calls: None,
@@ -792,7 +849,7 @@ impl Agent {
         tool_calls: Vec<ToolCall>,
     ) -> Result<String> {
         // Add assistant message with tool calls
-        self.session.add_message(Message {
+        self.session.write().await.add_message(Message {
             role: Role::Assistant,
             content: text_response.to_string(),
             tool_calls: Some(tool_calls.clone()),
@@ -817,7 +874,7 @@ impl Agent {
 
         // Add tool results to session
         for result in &results {
-            self.session.add_message(Message {
+            self.session.write().await.add_message(Message {
                 role: Role::Tool,
                 content: result.output.clone(),
                 tool_calls: None,
@@ -827,10 +884,10 @@ impl Agent {
         }
 
         // Get follow-up response from LLM
-        let messages = self.session.messages_for_llm();
+        let messages = self.session.read().await.messages_for_llm();
         let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
         let response = self
-            .provider
+            .client
             .chat(&messages, Some(tool_schemas.as_slice()))
             .await?;
 
@@ -838,7 +895,7 @@ impl Agent {
         let final_response = self.handle_response(response).await?;
 
         // Add final response to session
-        self.session.add_message(Message {
+        self.session.write().await.add_message(Message {
             role: Role::Assistant,
             content: final_response.clone(),
             tool_calls: None,
@@ -851,22 +908,17 @@ impl Agent {
 
     /// Get a reference to the LLM provider for streaming
     pub fn provider(&self) -> &dyn LLMProvider {
-        &*self.provider
+        &self.client
     }
 
     /// Get messages for the LLM (for streaming)
-    pub fn session_messages(&self) -> Vec<Message> {
-        self.session.messages_for_llm()
-    }
-
-    /// Get raw session messages with metadata (for API responses)
-    pub fn raw_session_messages(&self) -> &[SessionMessage] {
-        self.session.raw_messages()
+    pub async fn session_messages(&self) -> Vec<Message> {
+        self.session.read().await.messages_for_llm()
     }
 
     /// Add a user message to the session
-    pub fn add_user_message(&mut self, content: &str) {
-        self.session.add_message(Message {
+    pub async fn add_user_message(&mut self, content: &str) {
+        self.session.write().await.add_message(Message {
             role: Role::User,
             content: content.to_string(),
             tool_calls: None,
@@ -876,8 +928,8 @@ impl Agent {
     }
 
     /// Add an assistant message to the session
-    pub fn add_assistant_message(&mut self, content: &str) {
-        self.session.add_message(Message {
+    pub async fn add_assistant_message(&mut self, content: &str) {
+        self.session.write().await.add_message(Message {
             role: Role::Assistant,
             content: content.to_string(),
             tool_calls: None,
@@ -894,7 +946,7 @@ impl Agent {
         message: &str,
     ) -> Result<impl futures::Stream<Item = Result<StreamEvent>> + '_> {
         // Add user message
-        self.session.add_message(Message {
+        self.session.write().await.add_message(Message {
             role: Role::User,
             content: message.to_string(),
             tool_calls: None,
@@ -903,13 +955,13 @@ impl Agent {
         });
 
         // Check if we should run pre-compaction memory flush (soft threshold)
-        if self.should_memory_flush() {
+        if self.should_memory_flush().await {
             info!("Running pre-compaction memory flush (soft threshold)");
             self.memory_flush().await?;
         }
 
         // Check if we need to compact (hard limit)
-        if self.should_compact() {
+        if self.should_compact().await {
             self.compact_session().await?;
         }
 
@@ -932,28 +984,28 @@ impl Agent {
                 let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
 
                 // Build messages for LLM
-                let messages = self.session.messages_for_llm();
+                let messages = self.session.read().await.messages_for_llm();
 
                 // Try streaming first (without tools since most providers don't support tool streaming)
                 // Then check for tool calls in the response
                 let response = self
-                    .provider
+                    .client
                     .chat(&messages, Some(tool_schemas.as_slice()))
                     .await;
 
                 match response {
                     Ok(resp) => {
                         // Track usage
-                        self.add_usage(resp.usage);
+                        self.add_usage(resp.response.usage);
 
-                        match resp.content {
+                        match resp.response.content {
                             LLMResponseContent::Text(text) => {
                                 // No tool calls - yield the text and we're done
                                 yield Ok(StreamEvent::Content(text.clone()));
                                 yield Ok(StreamEvent::Done);
 
                                 // Add to session
-                                self.session.add_message(Message {
+                                self.session.write().await.add_message(Message {
                                     role: Role::Assistant,
                                     content: text,
                                     tool_calls: None,
@@ -982,7 +1034,7 @@ impl Agent {
                             });
 
                             // Add tool result to session
-                            self.session.add_message(Message {
+                            self.session.write().await.add_message(Message {
                                 role: Role::Tool,
                                 content: output,
                                 tool_calls: None,
@@ -992,7 +1044,7 @@ impl Agent {
                         }
 
                         // Add tool call message to session
-                        self.session.add_message(Message {
+                        self.session.write().await.add_message(Message {
                             role: Role::Assistant,
                             content: String::new(),
                             tool_calls: Some(calls),
@@ -1019,8 +1071,8 @@ impl Agent {
     }
 
     /// Auto-save session to disk (call after each message)
-    pub fn auto_save_session(&self) -> Result<()> {
-        self.session.auto_save()
+    pub async fn auto_save_session(&self) -> Result<()> {
+        self.session.read().await.auto_save()
     }
 }
 

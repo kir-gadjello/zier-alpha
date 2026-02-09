@@ -9,6 +9,7 @@ use tracing::debug;
 pub mod external;
 pub mod runner;
 pub mod script;
+pub mod registry;
 
 use super::providers::ToolSchema;
 use crate::config::Config;

@@ -1,11 +1,17 @@
 mod sandbox;
 mod schema;
+pub mod models;
 
 pub use sandbox::*;
 pub use schema::*;
+pub use models::*;
+
+#[cfg(test)]
+mod tests;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -16,6 +22,9 @@ pub struct Config {
 
     #[serde(default)]
     pub providers: ProvidersConfig,
+
+    #[serde(default)]
+    pub models: HashMap<String, ModelConfig>,
 
     #[serde(default)]
     pub heartbeat: HeartbeatConfig,
@@ -31,6 +40,9 @@ pub struct Config {
 
     #[serde(default)]
     pub tools: ToolsConfig,
+
+    #[serde(default)]
+    pub vision: VisionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +87,10 @@ pub struct ToolsConfig {
     /// Wrap tool outputs and memory content with XML-style delimiters
     #[serde(default = "default_true")]
     pub use_content_delimiters: bool,
+
+    /// Whitelist of builtin tools to allow (e.g. ["read_file", "bash"]). "*" allows all.
+    #[serde(default = "default_allowed_tools")]
+    pub allowed_builtin: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -210,6 +226,9 @@ pub struct ServerConfig {
 
     /// Telegram Webhook Secret Token
     pub telegram_secret_token: Option<String>,
+
+    /// Telegram Bot Token (for outbound messages)
+    pub telegram_bot_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +242,18 @@ pub struct LoggingConfig {
     /// Days to keep log files (0 = keep forever, no auto-deletion)
     #[serde(default)]
     pub retention_days: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VisionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    #[serde(default = "default_vision_fallback_model")]
+    pub fallback_model: String,
+
+    #[serde(default = "default_vision_fallback_prompt")]
+    pub fallback_prompt: String,
 }
 
 // Default value functions
@@ -247,6 +278,15 @@ fn default_web_fetch_max_bytes() -> usize {
 }
 fn default_tool_output_max_chars() -> usize {
     50000 // 50k characters max for tool output by default
+}
+fn default_vision_fallback_model() -> String {
+    "gpt-4o".to_string()
+}
+fn default_vision_fallback_prompt() -> String {
+    "Transcribe text and describe details in this image for a text-only AI.".to_string()
+}
+fn default_allowed_tools() -> Vec<String> {
+    vec!["*".to_string()]
 }
 fn default_openai_base_url() -> String {
     "https://api.openai.com/v1".to_string()
@@ -374,6 +414,7 @@ impl Default for ServerConfig {
             bind: default_bind(),
             owner_telegram_id: None,
             telegram_secret_token: None,
+            telegram_bot_token: None,
         }
     }
 }

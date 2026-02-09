@@ -1,5 +1,6 @@
 use std::fmt;
 use uuid::Uuid;
+use crate::agent::providers::ImageAttachment;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustLevel {
@@ -23,6 +24,7 @@ pub struct IngressMessage {
     pub payload: String, // could be JSON, or just text
     pub trust: TrustLevel,
     pub timestamp: u64,
+    pub images: Vec<ImageAttachment>,
 }
 
 impl IngressMessage {
@@ -33,7 +35,13 @@ impl IngressMessage {
             payload,
             trust,
             timestamp: chrono::Utc::now().timestamp() as u64,
+            images: Vec::new(),
         }
+    }
+
+    pub fn with_images(mut self, images: Vec<ImageAttachment>) -> Self {
+        self.images = images;
+        self
     }
 }
 

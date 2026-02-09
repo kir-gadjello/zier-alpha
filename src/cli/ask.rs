@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 
-use zier_alpha::agent::{Agent, AgentConfig};
+use zier_alpha::agent::{Agent, AgentConfig, ContextStrategy};
 use zier_alpha::concurrency::WorkspaceLock;
 use zier_alpha::config::Config;
 use zier_alpha::memory::MemoryManager;
@@ -30,7 +30,7 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
         reserve_tokens: config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory).await?;
+    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Stateless).await?;
     agent.new_session().await?;
 
     let workspace_lock = WorkspaceLock::new()?;

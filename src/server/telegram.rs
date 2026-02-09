@@ -6,8 +6,10 @@ use axum::{
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::{info, warn};
-use crate::ingress::{IngressMessage, TrustLevel};
+use crate::agent::providers::ImageAttachment;
+use crate::ingress::{IngressMessage, TelegramClient, TrustLevel};
 use crate::server::http::AppState;
+use base64::{engine::general_purpose, Engine as _};
 
 // Telegram Update structure (partial)
 #[derive(serde::Deserialize)]
@@ -19,6 +21,12 @@ struct Update {
 struct Message {
     from: Option<User>,
     text: Option<String>,
+    photo: Option<Vec<PhotoSize>>,
+}
+
+#[derive(serde::Deserialize)]
+struct PhotoSize {
+    file_id: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -58,7 +66,55 @@ pub async fn webhook_handler(
     };
 
     if let Some(message) = update.message {
-        if let Some(text) = message.text {
+        let (payload, images) = if let Some(text) = message.text {
+            (Some(text), Vec::new())
+        } else if let Some(photos) = message.photo {
+            if let Some(largest) = photos.last() {
+                if let Some(token) = &state.config.server.telegram_bot_token {
+                    let client = TelegramClient::new(token.clone());
+                    match client.get_file_download_url(&largest.file_id).await {
+                        Ok(url) => {
+                            match reqwest::get(&url).await {
+                                Ok(resp) => match resp.bytes().await {
+                                    Ok(bytes) => {
+                                        let b64 = general_purpose::STANDARD.encode(&bytes);
+                                        let img = ImageAttachment {
+                                            data: b64,
+                                            media_type: "image/jpeg".to_string(),
+                                        };
+                                        (Some("User sent an image".to_string()), vec![img])
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to download image bytes: {}", e);
+                                        (None, Vec::new())
+                                    }
+                                },
+                                Err(e) => {
+                                    warn!("Failed to download image: {}", e);
+                                    (None, Vec::new())
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to get file url: {}", e);
+                            (None, Vec::new())
+                        }
+                    }
+                } else {
+                    warn!("Telegram bot token not configured, cannot download photo");
+                    (
+                        Some("[Photo received but bot token missing]".to_string()),
+                        Vec::new(),
+                    )
+                }
+            } else {
+                (None, Vec::new())
+            }
+        } else {
+            (None, Vec::new())
+        };
+
+        if let Some(text) = payload {
             if let Some(user) = message.from {
                 let trust = if let Some(owner_id) = state.config.server.owner_telegram_id {
                     if user.id == owner_id {
@@ -71,18 +127,18 @@ pub async fn webhook_handler(
                     TrustLevel::UntrustedEvent
                 };
 
-                let msg = IngressMessage::new(
-                    format!("telegram:{}", user.id),
-                    text,
-                    trust,
-                );
+                let msg = IngressMessage::new(format!("telegram:{}", user.id), text, trust)
+                    .with_images(images);
 
                 if let Err(e) = bus.push(msg).await {
                     warn!("Failed to push telegram message to bus: {}", e);
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
 
-                info!("Pushed Telegram message from {} to bus (Trust: {:?})", user.id, trust);
+                info!(
+                    "Pushed Telegram message from {} to bus (Trust: {:?})",
+                    user.id, trust
+                );
             }
         }
     }
