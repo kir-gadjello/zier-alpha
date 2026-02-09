@@ -8,6 +8,7 @@
 //! - Desktop GUI (egui-based)
 
 pub mod agent;
+pub mod capabilities;
 pub mod concurrency;
 pub mod config;
 #[cfg(feature = "desktop")]
@@ -20,5 +21,6 @@ pub mod scheduler;
 pub mod scripting;
 pub mod security;
 pub mod server;
+pub mod state;
 
 pub use config::Config;

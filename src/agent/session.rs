@@ -41,6 +41,8 @@ pub struct SessionMessage {
     pub usage: Option<MessageUsage>,
     pub stop_reason: Option<String>,
     pub timestamp: u64,
+    pub model_config_name: Option<String>,
+    pub latency_ms: Option<u64>,
 }
 
 /// Per-message usage tracking (Pi-compatible)
@@ -90,6 +92,8 @@ impl SessionMessage {
             usage: None,
             stop_reason: None,
             timestamp: Utc::now().timestamp_millis() as u64,
+            model_config_name: None,
+            latency_ms: None,
         }
     }
 
@@ -108,6 +112,8 @@ impl SessionMessage {
             usage: usage.map(MessageUsage::from),
             stop_reason: stop_reason.map(|s| s.to_string()),
             timestamp: Utc::now().timestamp_millis() as u64,
+            model_config_name: None,
+            latency_ms: None,
         }
     }
 }
@@ -144,6 +150,19 @@ impl Session {
         }
     }
 
+    pub fn new_with_id(id: String) -> Self {
+        Self {
+            id,
+            created_at: Utc::now(),
+            cwd: std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| ".".to_string()),
+            messages: Vec::new(),
+            system_context: None,
+            token_count: 0,
+            compaction_count: 0,
+            memory_flush_compaction_count: 0,
+        }
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -164,9 +183,28 @@ impl Session {
         self.memory_flush_compaction_count = self.compaction_count + 1;
     }
 
+    pub fn add_metadata_to_last_message(
+        &mut self,
+        model_config_name: Option<String>,
+        latency_ms: Option<u64>,
+    ) {
+        if let Some(msg) = self.messages.last_mut() {
+            if model_config_name.is_some() {
+                msg.model_config_name = model_config_name;
+            }
+            if latency_ms.is_some() {
+                msg.latency_ms = latency_ms;
+            }
+        }
+    }
+
     pub fn set_system_context(&mut self, context: String) {
         self.system_context = Some(context);
         self.recalculate_tokens();
+    }
+
+    pub fn system_context(&self) -> Option<&str> {
+        self.system_context.as_deref()
     }
 
     /// Add a message without metadata
@@ -230,7 +268,7 @@ impl Session {
             .collect()
     }
 
-    pub async fn compact(&mut self, provider: &dyn LLMProvider) -> Result<()> {
+    pub async fn compact_native(&mut self, provider: &dyn LLMProvider) -> Result<()> {
         if self.messages.len() < 4 {
             return Ok(());
         }
@@ -403,6 +441,12 @@ impl Session {
         if let Some(ref reason) = sm.stop_reason {
             message["stopReason"] = json!(reason);
         }
+        if let Some(ref name) = sm.model_config_name {
+            message["modelConfigName"] = json!(name);
+        }
+        if let Some(latency) = sm.latency_ms {
+            message["latencyMs"] = json!(latency);
+        }
         message["timestamp"] = json!(sm.timestamp);
 
         json!({
@@ -548,6 +592,8 @@ impl Session {
             usage,
             stop_reason: msg["stopReason"].as_str().map(|s| s.to_string()),
             timestamp: msg["timestamp"].as_u64().unwrap_or(0),
+            model_config_name: msg.get("modelConfigName").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            latency_ms: msg.get("latencyMs").and_then(|v| v.as_u64()),
         })
     }
 
@@ -578,6 +624,32 @@ impl Session {
             return Ok(());
         }
         self.save()?;
+        Ok(())
+    }
+
+    /// Replace messages and system context from JSON (used by ScriptCompactor)
+    /// Expected JSON format: { "messages": [...], "system_context": "..." }
+    pub fn replace_messages_from_json(&mut self, json_str: &str) -> Result<()> {
+        let val: serde_json::Value = serde_json::from_str(json_str)?;
+
+        if let Some(ctx) = val.get("system_context").and_then(|v| v.as_str()) {
+            self.system_context = Some(ctx.to_string());
+        }
+
+        if let Some(msgs_val) = val.get("messages") {
+            if let Some(msgs_arr) = msgs_val.as_array() {
+                let mut new_messages = Vec::new();
+                for m in msgs_arr {
+                    if let Some(sm) = Self::parse_pi_message(m) {
+                        new_messages.push(sm);
+                    }
+                }
+                self.messages = new_messages;
+            }
+        }
+
+        self.compaction_count += 1;
+        self.recalculate_tokens();
         Ok(())
     }
 }

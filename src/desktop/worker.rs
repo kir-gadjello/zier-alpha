@@ -11,8 +11,8 @@ use anyhow::Result;
 use futures::StreamExt;
 
 use crate::agent::{
-    extract_tool_detail, list_sessions_for_agent, Agent, AgentConfig, StreamEvent, ToolCall,
-    DEFAULT_AGENT_ID,
+    extract_tool_detail, list_sessions_for_agent, Agent, AgentConfig, ContextStrategy, StreamEvent,
+    ToolCall, DEFAULT_AGENT_ID,
 };
 use crate::config::Config;
 use crate::memory::MemoryManager;
@@ -85,7 +85,7 @@ async fn worker_loop(
         reserve_tokens: config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory).await?;
+    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full).await?;
     agent.new_session().await?;
 
     // Send ready message
@@ -101,7 +101,7 @@ async fn worker_loop(
     }
 
     // Send initial status
-    let _ = tx.send(WorkerMessage::Status(agent.session_status()));
+    let _ = tx.send(WorkerMessage::Status(agent.session_status().await));
 
     // Track tools requiring approval
     let approval_tools: Vec<String> = agent.approval_required_tools().to_vec();
@@ -179,7 +179,7 @@ async fn worker_loop(
             }
             UiMessage::NewSession => match agent.new_session().await {
                 Ok(()) => {
-                    let status = agent.session_status();
+                    let status = agent.session_status().await;
                     let _ = tx.send(WorkerMessage::SessionChanged {
                         id: status.id.clone(),
                         message_count: status.message_count,
@@ -192,7 +192,7 @@ async fn worker_loop(
             },
             UiMessage::ResumeSession(session_id) => match agent.resume_session(&session_id).await {
                 Ok(()) => {
-                    let status = agent.session_status();
+                    let status = agent.session_status().await;
                     let _ = tx.send(WorkerMessage::SessionChanged {
                         id: status.id.clone(),
                         message_count: status.message_count,
@@ -217,7 +217,7 @@ async fn worker_loop(
                 }
             }
             UiMessage::RefreshStatus => {
-                let _ = tx.send(WorkerMessage::Status(agent.session_status()));
+                let _ = tx.send(WorkerMessage::Status(agent.session_status().await));
             }
             UiMessage::SetModel(name) => match agent.set_model(&name) {
                 Ok(()) => {
@@ -239,7 +239,7 @@ async fn worker_loop(
                         "Session compacted: {} -> {} tokens",
                         before, after
                     )));
-                    let _ = tx.send(WorkerMessage::Status(agent.session_status()));
+                    let _ = tx.send(WorkerMessage::Status(agent.session_status().await));
                 }
                 Err(e) => {
                     let _ = tx.send(WorkerMessage::SystemMessage(format!(
@@ -312,7 +312,7 @@ Available commands:
                 let _ = tx.send(WorkerMessage::SystemMessage(help_text.to_string()));
             }
             UiMessage::ShowStatus => {
-                let status = agent.session_status();
+                let status = agent.session_status().await;
                 let text = format!(
                     "Session: {}\nMessages: {}\nTokens: {} context / {} API in / {} API out\nCompactions: {}",
                     &status.id[..8.min(status.id.len())],
@@ -329,7 +329,7 @@ Available commands:
 
         // Auto-save session after chat completes
         if should_auto_save {
-            if let Err(e) = agent.auto_save_session() {
+            if let Err(e) = agent.auto_save_session().await {
                 eprintln!("Warning: Failed to auto-save session: {}", e);
             }
         }

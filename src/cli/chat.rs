@@ -8,7 +8,7 @@ use std::io::{self, Write};
 use zier_alpha::agent::{
     extract_tool_detail, get_last_session_id_for_agent, get_skills_summary,
     list_sessions_for_agent, load_skills, parse_skill_command, search_sessions_for_agent, Agent,
-    AgentConfig, ImageAttachment, Skill,
+    AgentConfig, ContextStrategy, ImageAttachment, Skill,
 };
 use zier_alpha::concurrency::WorkspaceLock;
 use zier_alpha::config::Config;
@@ -125,7 +125,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         reserve_tokens: config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory).await?;
+    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full).await?;
     let workspace_lock = WorkspaceLock::new()?;
 
     // Determine session to use
@@ -141,7 +141,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
     if let Some(session_id) = session_id {
         match agent.resume_session(&session_id).await {
             Ok(()) => {
-                let status = agent.session_status();
+                let status = agent.session_status().await;
                 println!(
                     "Resumed session {} ({} messages)\n",
                     &session_id[..8],
@@ -344,7 +344,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     match agent.chat(&msg).await {
                         Ok(response) => {
                             println!("{}\n", response);
-                            if let Err(e) = agent.auto_save_session() {
+                            if let Err(e) = agent.auto_save_session().await {
                                 eprintln!("Warning: Failed to auto-save session: {}", e);
                             }
                         }
@@ -476,7 +476,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     agent.finish_chat_stream(&full_response);
                 }
 
-                if let Err(e) = agent.auto_save_session() {
+                if let Err(e) = agent.auto_save_session().await {
                     eprintln!("Warning: Failed to auto-save session: {}", e);
                 }
                 println!("\n");
@@ -640,7 +640,7 @@ async fn handle_command(
                             let full_id = matching[0].id.clone();
                             match futures::executor::block_on(agent.resume_session(&full_id)) {
                                 Ok(()) => {
-                                    let status = agent.session_status();
+                                    let status = futures::executor::block_on(agent.session_status());
                                     println!(
                                         "\nResumed session {} ({} messages)\n",
                                         &full_id[..8],
@@ -685,7 +685,7 @@ async fn handle_command(
         },
 
         "/clear" => {
-            agent.clear_session();
+            agent.clear_session().await;
             println!("\nSession cleared.\n");
             CommandResult::Continue
         }
@@ -770,7 +770,7 @@ async fn handle_command(
         },
 
         "/status" => {
-            let status = agent.session_status();
+            let status = agent.session_status().await;
             println!("\nSession Status:");
             println!("  ID: {}", status.id);
             println!("  Model: {}", agent.model());
@@ -812,7 +812,7 @@ async fn handle_command(
         }
 
         "/context" => {
-            let (used, usable, total) = agent.context_usage();
+            let (used, usable, total) = agent.context_usage().await;
             let pct = (used as f64 / usable as f64 * 100.0).min(100.0);
             println!("\nContext Window:");
             println!("  Used: {} tokens ({:.1}%)", used, pct);
@@ -828,7 +828,7 @@ async fn handle_command(
         }
 
         "/export" => {
-            let markdown = agent.export_markdown();
+            let markdown = agent.export_markdown().await;
             if parts.len() >= 2 {
                 let path = parts[1..].join(" ");
                 let expanded = shellexpand::tilde(&path).to_string();
