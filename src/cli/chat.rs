@@ -468,12 +468,12 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                         }
                     } else if any_denied {
                         // All tools were denied, just finish the stream
-                        agent.finish_chat_stream(&full_response);
+                        agent.finish_chat_stream(&full_response).await;
                         println!("\n(Tool execution skipped)");
                     }
                 } else {
                     // No tool calls - just finish the stream
-                    agent.finish_chat_stream(&full_response);
+                    agent.finish_chat_stream(&full_response).await;
                 }
 
                 if let Err(e) = agent.auto_save_session().await {
@@ -638,9 +638,9 @@ async fn handle_command(
                         )),
                         1 => {
                             let full_id = matching[0].id.clone();
-                            match futures::executor::block_on(agent.resume_session(&full_id)) {
+                            match agent.resume_session(&full_id).await {
                                 Ok(()) => {
-                                    let status = futures::executor::block_on(agent.session_status());
+                                    let status = agent.session_status().await;
                                     println!(
                                         "\nResumed session {} ({} messages)\n",
                                         &full_id[..8],
@@ -743,7 +743,7 @@ async fn handle_command(
             }
         }
 
-        "/reindex" => match futures::executor::block_on(agent.reindex_memory()) {
+        "/reindex" => match agent.reindex_memory().await {
             Ok((files, chunks, embedded)) => {
                 if embedded > 0 {
                     println!(

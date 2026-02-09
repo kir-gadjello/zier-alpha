@@ -1,6 +1,6 @@
 use std::fmt;
 use uuid::Uuid;
-use crate::agent::providers::ImageAttachment;
+use crate::agent::ImageAttachment;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustLevel {

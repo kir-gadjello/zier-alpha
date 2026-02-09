@@ -1,5 +1,4 @@
-use crate::agent::tools::registry::ToolRegistry;
-use crate::agent::{Agent, AgentConfig, ContextStrategy, ScriptTool};
+use crate::agent::{Agent, AgentConfig, ContextStrategy, ScriptTool, Session};
 use crate::config::Config;
 use crate::ingress::{IngressMessage, TelegramClient, TrustLevel};
 use crate::memory::{ArtifactWriter, MemoryManager};
@@ -9,6 +8,7 @@ use crate::state::session_manager::GlobalSessionManager;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 pub async fn ingress_loop(
@@ -58,7 +58,7 @@ pub async fn ingress_loop(
         };
 
         // Get session
-        let session = match session_manager.get_or_create_session(&msg.source).await {
+        let session: Arc<RwLock<Session>> = match session_manager.get_or_create_session(&msg.source).await {
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to get session for {}: {}", msg.source, e);
@@ -82,12 +82,12 @@ pub async fn ingress_loop(
         };
 
         // Set the shared session
-        agent.set_session(session.clone());
+        agent.set_session(Arc::clone(&session));
 
         match msg.trust {
             TrustLevel::OwnerCommand => {
                 // Rebuild tools
-                match ToolRegistry::build(
+                match crate::agent::tools::registry::ToolRegistry::build(
                     &config,
                     Some(Arc::new(memory.clone())),
                     script_tools.clone(),
@@ -158,7 +158,7 @@ pub async fn ingress_loop(
                 }
             }
             TrustLevel::TrustedEvent => {
-                let full_tools = ToolRegistry::build(
+                let full_tools = crate::agent::tools::registry::ToolRegistry::build(
                     &config,
                     Some(Arc::new(memory.clone())),
                     script_tools.clone(),
@@ -186,7 +186,7 @@ pub async fn ingress_loop(
                                     job.tool_ref.split(',').map(|s| s.trim()).collect();
                                 full_tools
                                     .into_iter()
-                                    .filter(|t| allowed_names.contains(&t.name()))
+                                    .filter(|t: &Box<dyn crate::agent::Tool>| allowed_names.contains(&t.name()))
                                     .collect()
                             }
                         } else {

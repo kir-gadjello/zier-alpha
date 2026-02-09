@@ -1,8 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use anyhow::Result;
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ModelConfig {
     pub api_base: Option<String>,
     pub api_key_env: Option<String>, // e.g., "OPENROUTER_API_KEY"
@@ -16,7 +16,7 @@ pub struct ModelConfig {
     pub supports_vision: Option<bool>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FallbackSettings {
     pub default: String, // "deny" or "allow"
     pub allow: Vec<String>, // ["429", "5*"]

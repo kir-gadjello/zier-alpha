@@ -375,6 +375,7 @@ impl Default for ToolsConfig {
             tool_output_max_chars: default_tool_output_max_chars(),
             log_injection_warnings: default_true(),
             use_content_delimiters: default_true(),
+            allowed_builtin: default_allowed_tools(),
         }
     }
 }

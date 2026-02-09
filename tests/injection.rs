@@ -1,7 +1,4 @@
-use zier_alpha::ingress::{IngressMessage, TrustLevel};
-use zier_alpha::config::Config;
-use zier_alpha::server::telegram; // I need to make this public or accessible?
-// telegram module is accessible if I made it pub in server/mod.rs
+use zier_alpha::ingress::TrustLevel;
 
 #[tokio::test]
 async fn test_injection_trace_ingress() {
@@ -13,7 +10,6 @@ async fn test_injection_trace_ingress() {
     let owner_id = 999;
     let sender_id = 123;
 
-    let config = Config::default();
     // config.server.owner_telegram_id = Some(owner_id); // Wait, Config fields are public?
     // Config struct has public fields.
 

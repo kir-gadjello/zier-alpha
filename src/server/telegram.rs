@@ -6,7 +6,7 @@ use axum::{
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::{info, warn};
-use crate::agent::providers::ImageAttachment;
+use crate::agent::ImageAttachment;
 use crate::ingress::{IngressMessage, TelegramClient, TrustLevel};
 use crate::server::http::AppState;
 use base64::{engine::general_purpose, Engine as _};

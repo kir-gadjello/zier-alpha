@@ -232,7 +232,7 @@ async fn load_persisted_sessions(state: &Arc<AppState>) -> Result<(), anyhow::Er
             reserve_tokens: state.config.agent.reserve_tokens,
         };
 
-        let mut agent = Agent::new(agent_config, &state.config, state.memory.clone()).await?;
+        let mut agent = Agent::new(agent_config, &state.config, state.memory.clone(), crate::agent::ContextStrategy::Full).await?;
 
         // Try to resume the session
         if agent.resume_session(&session_info.id).await.is_ok() {
@@ -317,7 +317,7 @@ async fn get_or_create_session(
         reserve_tokens: state.config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new(agent_config, &state.config, state.memory.clone())
+    let mut agent = Agent::new(agent_config, &state.config, state.memory.clone(), crate::agent::ContextStrategy::Full)
         .await
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -477,7 +477,7 @@ async fn get_session_status(
 
     match sessions.get(&session_id) {
         Some(entry) => {
-            let status = entry.agent.session_status();
+            let status = entry.agent.session_status().await;
             Json(SessionStatusResponse {
                 session_id,
                 model: entry.agent.model().to_string(),
@@ -522,6 +522,7 @@ async fn get_session_messages(
             let messages: Vec<ActiveSessionMessage> = entry
                 .agent
                 .raw_session_messages()
+                .await
                 .iter()
                 .map(|sm| {
                     let role = match sm.message.role {
@@ -605,7 +606,7 @@ async fn clear_session(
     match sessions.get_mut(&session_id) {
         Some(entry) => {
             entry.last_accessed = Instant::now();
-            entry.agent.clear_session();
+            entry.agent.clear_session().await;
             Json(json!({"session_id": session_id, "cleared": true})).into_response()
         }
         None => AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response(),

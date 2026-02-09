@@ -28,7 +28,7 @@ impl CompactionStrategy for NativeCompactor {
         };
 
         let mut count = 0;
-        if let Some(ctx) = &session.system_context {
+        if let Some(ctx) = session.system_context() {
             count += bpe.encode_with_special_tokens(ctx).len();
         }
 
@@ -59,7 +59,7 @@ impl CompactionStrategy for ScriptCompactor {
         let messages = session.messages();
         let args = json!({
             "messages": messages,
-            "system_context": session.system_context
+            "system_context": session.system_context()
         });
 
         let result_json = self.service.execute_tool("compact", &args.to_string()).await?;

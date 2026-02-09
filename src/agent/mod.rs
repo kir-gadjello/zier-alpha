@@ -1,10 +1,12 @@
+mod client;
+mod compaction;
 mod providers;
 mod sanitize;
 mod session;
 mod session_store;
 mod skills;
 mod system_prompt;
-mod tools;
+pub mod tools;
 
 pub use providers::{
     ImageAttachment, LLMProvider, LLMResponse, LLMResponseContent, Message, Role, StreamChunk,
@@ -34,7 +36,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use crate::agent::client::{SmartClient, SmartResponse};
+pub use client::{SmartClient, SmartResponse};
+pub use compaction::{CompactionStrategy, NativeCompactor, ScriptCompactor};
 use crate::capabilities::vision::VisionService;
 use crate::config::Config;
 use crate::memory::{MemoryChunk, MemoryManager};
@@ -85,6 +88,7 @@ pub struct Agent {
     /// Cumulative token usage for this session
     cumulative_usage: Usage,
     context_strategy: ContextStrategy,
+    compaction_strategy: Box<dyn CompactionStrategy>,
 }
 
 impl Agent {
@@ -109,6 +113,7 @@ impl Agent {
             tools,
             cumulative_usage: Usage::default(),
             context_strategy,
+            compaction_strategy: Box::new(NativeCompactor),
         })
     }
 
@@ -162,6 +167,10 @@ impl Agent {
 
     pub fn set_session(&mut self, session: Arc<RwLock<Session>>) {
         self.session = session;
+    }
+
+    pub fn set_compaction_strategy(&mut self, strategy: Box<dyn CompactionStrategy>) {
+        self.compaction_strategy = strategy;
     }
 
     /// Get current context usage info
@@ -585,7 +594,8 @@ impl Agent {
     }
 
     async fn should_compact(&self) -> bool {
-        self.session.read().await.token_count() > (self.config.context_window - self.config.reserve_tokens)
+        let limit = self.config.context_window - self.config.reserve_tokens;
+        self.compaction_strategy.should_compact(&*self.session.read().await, limit)
     }
 
     /// Check if we should run pre-compaction memory flush (soft threshold)
@@ -607,7 +617,10 @@ impl Agent {
 
         // Compact the session
         // Requires write lock
-        self.session.write().await.compact_native(&self.client).await?;
+        {
+            let mut session = self.session.write().await;
+            self.compaction_strategy.compact(&mut *session, &self.client).await?;
+        }
 
         let after = self.session.read().await.token_count();
         info!("Session compacted: {} -> {} tokens", before, after);
@@ -914,6 +927,11 @@ impl Agent {
     /// Get messages for the LLM (for streaming)
     pub async fn session_messages(&self) -> Vec<Message> {
         self.session.read().await.messages_for_llm()
+    }
+
+    /// Get raw session messages with metadata
+    pub async fn raw_session_messages(&self) -> Vec<SessionMessage> {
+        self.session.read().await.raw_messages().to_vec()
     }
 
     /// Add a user message to the session

@@ -172,10 +172,11 @@ impl DenoRuntime {
                 fetch: (url) => Deno.core.ops.op_fetch(url),
 
                 internal: {
-                    executeTool: async (name, args) => {
+                    executeTool: (name, args) => {
                         const tool = globalThis.toolRegistry[name];
                         if (!tool) throw new Error(`Tool ${name} not found`);
-                        return await tool.execute(null, args, {}, () => {}, {});
+                        // Wrap in Promise.resolve to handle both sync and async execute functions
+                        return Promise.resolve(tool.execute(null, args, {}, () => {}, {}));
                     }
                 }
             };
@@ -209,11 +210,40 @@ impl DenoRuntime {
             name, args
         );
 
-        let res = self.runtime.execute_script("<tool_exec>", code)?;
-        let resolve = self.runtime.resolve(res).await?;
+        let promise_global = self.runtime.execute_script("<tool_exec>", code)?;
+        
+        // Resolve the promise by running the event loop until it settles.
+        // Some promises (like those from async functions) might need multiple ticks
+        // of the event loop to settle.
+        let result_global = loop {
+            let state = {
+                let scope = &mut self.runtime.handle_scope();
+                let promise_local = v8::Local::new(scope, &promise_global);
+                let promise = v8::Local::<v8::Promise>::try_from(promise_local)?;
+                
+                match promise.state() {
+                    v8::PromiseState::Pending => None,
+                    v8::PromiseState::Fulfilled => {
+                        let value = promise.result(scope);
+                        Some(Ok(v8::Global::new(scope, value)))
+                    }
+                    v8::PromiseState::Rejected => {
+                        let exception = promise.result(scope);
+                        let msg = exception.to_rust_string_lossy(scope);
+                        Some(Err(anyhow::anyhow!("Promise rejected: {}", msg)))
+                    }
+                }
+            };
+
+            if let Some(res) = state {
+                break res?;
+            }
+
+            self.runtime.run_event_loop(Default::default()).await?;
+        };
 
         let scope = &mut self.runtime.handle_scope();
-        let value = v8::Local::new(scope, resolve);
+        let value = v8::Local::new(scope, result_global);
 
         let json = deno_core::serde_v8::from_v8::<serde_json::Value>(scope, value)?;
         if let serde_json::Value::String(s) = json {

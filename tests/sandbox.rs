@@ -1,6 +1,5 @@
 use zier_alpha::config::SandboxPolicy;
 use zier_alpha::security::apple_sandbox::compile_profile;
-use std::fs;
 use std::process::Command;
 use tempfile::NamedTempFile;
 use std::io::Write;

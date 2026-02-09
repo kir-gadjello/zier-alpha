@@ -55,7 +55,7 @@ async fn test_deno_tool_registration_and_execution() {
 
 #[tokio::test]
 async fn test_deno_sandbox_fs_allowed() {
-    let mut temp_file = NamedTempFile::new().unwrap();
+    let temp_file = NamedTempFile::new().unwrap();
     let temp_path = temp_file.path().to_str().unwrap().to_string();
 
     let policy = SandboxPolicy {

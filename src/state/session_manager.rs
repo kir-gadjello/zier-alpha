@@ -1,4 +1,4 @@
-use crate::agent::session::Session;
+use crate::agent::Session;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ impl GlobalSessionManager {
         {
             let sessions = self.sessions.read().await;
             if let Some(session) = sessions.get(id) {
-                return Ok(Some(session.clone()));
+                return Ok(Some(Arc::clone(session)));
             }
         } // Drop read lock
 
@@ -37,14 +37,14 @@ impl GlobalSessionManager {
         // Check again after acquiring write lock to avoid race
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get(id) {
-            return Ok(Some(session.clone()));
+            return Ok(Some(Arc::clone(session)));
         }
 
         // Try load from disk
         match Session::load(id) {
             Ok(session) => {
                 let session_arc = Arc::new(RwLock::new(session));
-                sessions.insert(id.to_string(), session_arc.clone());
+                sessions.insert(id.to_string(), Arc::clone(&session_arc));
                 info!("Loaded session {} from disk", id);
                 Ok(Some(session_arc))
             }
@@ -62,19 +62,19 @@ impl GlobalSessionManager {
         let mut sessions = self.sessions.write().await;
         // Check again
         if let Some(session) = sessions.get(id) {
-            return Ok(session.clone());
+            return Ok(Arc::clone(session));
         }
 
         let session = Session::new_with_id(id.to_string());
         let session_arc = Arc::new(RwLock::new(session));
-        sessions.insert(id.to_string(), session_arc.clone());
+        sessions.insert(id.to_string(), Arc::clone(&session_arc));
 
         info!("Created new session in memory: {}", id);
         Ok(session_arc)
     }
 
     fn start_auto_save_task(&self) {
-        let sessions_map_arc = self.sessions.clone();
+        let sessions_map_arc = Arc::clone(&self.sessions);
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60)); // Check every 60s
@@ -86,7 +86,7 @@ impl GlobalSessionManager {
                 let handles: Vec<(String, Arc<RwLock<Session>>)> = {
                     let map = sessions_map_arc.read().await;
                     map.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .map(|(k, v)| (k.clone(), Arc::clone(v)))
                         .collect()
                 };
 

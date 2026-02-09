@@ -1,5 +1,4 @@
-use crate::agent::client::SmartClient;
-use crate::agent::providers::{ImageAttachment, Message, Role};
+use crate::agent::{SmartClient, ImageAttachment, Message, Role, LLMResponseContent};
 use crate::config::Config;
 use anyhow::Result;
 
@@ -30,7 +29,7 @@ impl VisionService {
 
         let response = self.client.chat(&[message], None).await?;
         match response.response.content {
-            crate::agent::providers::LLMResponseContent::Text(text) => Ok(text),
+            LLMResponseContent::Text(text) => Ok(text),
             _ => anyhow::bail!("Unexpected response from vision model (received tool calls)"),
         }
     }
