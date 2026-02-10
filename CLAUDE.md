@@ -1,6 +1,4 @@
-# CLAUDE.md
 
-```markdown
 # CLAUDE.md
 
 **Zier-Alpha** is a local-first **Cognitive Kernel** and process orchestrator. It implements the **VIZIER** architecture: a strictly typed, trust-aware loop that decouples input (Ingress) from reasoning (Agent), enforced by a secure Control Plane.
