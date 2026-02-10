@@ -159,13 +159,35 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     let bus = std::sync::Arc::new(IngressBus::new(100));
     println!("  Ingress Bus: initialized");
 
+    // VIZIER: Initialize Scheduler
+    let mut scheduler = Scheduler::new(bus.clone()).await?;
+    if let Ok(home) = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    {
+        let scheduler_config_path = home.home_dir().join(".zier-alpha/scheduler.toml");
+        if scheduler_config_path.exists() {
+            scheduler.load_jobs(&scheduler_config_path).await?;
+            println!(
+                "  Scheduler: loaded from {}",
+                scheduler_config_path.display()
+            );
+        }
+    }
+
+    // Capture jobs for ingress loop before moving scheduler into Arc<Mutex>
+    let scheduler_jobs = scheduler.jobs.clone();
+
+    // Wrap scheduler for sharing
+    let scheduler = std::sync::Arc::new(tokio::sync::Mutex::new(scheduler));
+
     // VIZIER: Initialize Scripting Service
-    // TODO: Load policy from config. For now, strict default.
     let script_service = ScriptService::new(
         Default::default(), 
         config.workspace_path(),
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        config.workdir.strategy.clone()
+        config.workdir.strategy.clone(),
+        Some(bus.clone()),
+        Some(scheduler.clone())
     )?;
     let script_loader = ScriptLoader::new(script_service.clone());
 
@@ -186,21 +208,11 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     }
     println!("  Script Tools: {} loaded", script_tools.len());
 
-    // VIZIER: Initialize Scheduler
-    let mut scheduler = Scheduler::new(bus.clone()).await?;
-    if let Ok(home) = directories::BaseDirs::new()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
+    // Start Scheduler
     {
-        let scheduler_config_path = home.home_dir().join(".zier-alpha/scheduler.toml");
-        if scheduler_config_path.exists() {
-            scheduler.load_jobs(&scheduler_config_path).await?;
-            println!(
-                "  Scheduler: loaded from {}",
-                scheduler_config_path.display()
-            );
-        }
+        let scheduler = scheduler.lock().await;
+        scheduler.start().await?;
     }
-    scheduler.start().await?;
     println!("  Scheduler: started");
 
     // VIZIER: Initialize Prompt Registry
@@ -221,8 +233,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     let config_clone = config.clone();
     let agent_id_clone = agent_id.to_string();
     let prompts_clone = prompt_registry.clone();
-    let script_tools_clone = script_tools.clone();
-    let jobs_clone = scheduler.jobs.clone();
+    let script_service_clone = script_service.clone();
 
     tokio::spawn(async move {
         ingress_loop(
@@ -230,8 +241,8 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
             config_clone,
             agent_id_clone,
             prompts_clone,
-            script_tools_clone,
-            jobs_clone,
+            script_service_clone,
+            scheduler_jobs,
         )
         .await;
     });

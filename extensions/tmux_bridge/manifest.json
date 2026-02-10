@@ -1,0 +1,11 @@
+{
+  "name": "tmux_bridge",
+  "version": "1.0.0",
+  "description": "Manage background processes via tmux with LLM-optimized observability",
+  "permissions": ["os.exec", "ingress.push", "scheduler.register"],
+  "entrypoint": "main.js",
+  "hooks": {
+    "on_status": "hooks/on_status.js",
+    "on_init": "hooks/on_init.js"
+  }
+}

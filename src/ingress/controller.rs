@@ -5,6 +5,7 @@ use crate::memory::{ArtifactWriter, MemoryManager};
 use crate::prompts::PromptRegistry;
 use crate::scheduler::JobConfig;
 use crate::state::session_manager::GlobalSessionManager;
+use crate::scripting::ScriptService;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -17,7 +18,7 @@ pub async fn ingress_loop(
     config: Config,
     owner_agent_id: String,
     prompts: Arc<PromptRegistry>,
-    script_tools: Vec<ScriptTool>,
+    script_service: ScriptService,
     jobs: Vec<JobConfig>,
 ) {
     let mut rx = receiver.lock().await;
@@ -46,8 +47,27 @@ pub async fn ingress_loop(
         .as_ref()
         .map(|t| TelegramClient::new(t.clone()));
 
+    // Get initial script tools
+    let script_tools_def = match script_service.get_tools().await {
+        Ok(t) => t,
+        Err(e) => {
+            error!("Failed to get tools: {}", e);
+            Vec::new()
+        }
+    };
+    let mut script_tools: Vec<ScriptTool> = Vec::new();
+    for def in script_tools_def {
+        script_tools.push(ScriptTool::new(def, script_service.clone()));
+    }
+
     while let Some(msg) = rx.recv().await {
         info!("Processing ingress: {}", msg);
+
+        // Fetch status lines (plugins might have updated)
+        let status_lines = match script_service.get_status_lines().await {
+            Ok(lines) => lines,
+            Err(_) => Vec::new(),
+        };
 
         // Determine Context Strategy based on source/trust
         let strategy = if msg.source.starts_with("telegram:") {
@@ -82,8 +102,9 @@ pub async fn ingress_loop(
             }
         };
 
-        // Set the shared session
+        // Set the shared session and status lines
         agent.set_session(Arc::clone(&session));
+        agent.set_status_lines(status_lines);
 
         match msg.trust {
             TrustLevel::OwnerCommand => {
@@ -160,6 +181,15 @@ pub async fn ingress_loop(
                 }
             }
             TrustLevel::TrustedEvent => {
+                if msg.payload.starts_with("EXECUTE_SCRIPT: ") {
+                    let script_path = msg.payload.trim_start_matches("EXECUTE_SCRIPT: ");
+                    info!("Executing scheduled script: {}", script_path);
+                    if let Err(e) = script_service.load_script(script_path).await {
+                        error!("Failed to execute script {}: {}", script_path, e);
+                    }
+                    continue;
+                }
+
                 let full_tools = crate::agent::tools::registry::ToolRegistry::build(
                     &config,
                     Some(Arc::new(memory.clone())),

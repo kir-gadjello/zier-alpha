@@ -90,7 +90,7 @@ async fn test_deno_tool_routing() {
         allow_write: vec![workspace_dir.to_string_lossy().to_string(), project_dir.to_string_lossy().to_string()],
     };
 
-    let service = ScriptService::new(policy, workspace_dir.clone(), project_dir.clone(), WorkdirStrategy::Overlay).unwrap();
+    let service = ScriptService::new(policy, workspace_dir.clone(), project_dir.clone(), WorkdirStrategy::Overlay, None, None).unwrap();
 
     let script_content = r#"
         pi.registerTool({

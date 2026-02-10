@@ -73,6 +73,33 @@ impl Scheduler {
         Ok(())
     }
 
+    pub async fn register_dynamic_job(&self, name: String, schedule: String, script_path: String) -> Result<()> {
+        let bus = self.bus.clone();
+        let job_name = name.clone();
+        let script = script_path.clone();
+
+        let job = Job::new_async(schedule.as_str(), move |_uuid, _l| {
+            let bus = bus.clone();
+            let name = job_name.clone();
+            let script = script.clone();
+            Box::pin(async move {
+                 let payload = format!("EXECUTE_SCRIPT: {}", script);
+                 let msg = crate::ingress::IngressMessage::new(
+                     format!("scheduler:{}", name),
+                     payload,
+                     crate::ingress::TrustLevel::TrustedEvent
+                 );
+                 if let Err(e) = bus.push(msg).await {
+                     error!("Failed to push dynamic job {}: {}", name, e);
+                 }
+            })
+        })?;
+
+        self.scheduler.add(job).await?;
+        info!("Registered dynamic job: {} ({}) -> {}", name, schedule, script_path);
+        Ok(())
+    }
+
     pub async fn start(&self) -> Result<()> {
         self.scheduler.start().await?;
         Ok(())
