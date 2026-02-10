@@ -1,0 +1,7 @@
+{
+  "name": "hive",
+  "version": "0.1.0",
+  "description": "Recursive subagent delegation system for Zier Alpha",
+  "permissions": ["os.exec", "fs.read", "fs.write", "env.get"],
+  "entrypoint": "main.js"
+}

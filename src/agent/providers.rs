@@ -1869,7 +1869,29 @@ impl LLMProvider for MockProvider {
     async fn chat(&self, messages: &[Message], _tools: Option<&[ToolSchema]>) -> Result<LLMResponse> {
         let last_msg = messages.last().ok_or_else(|| anyhow::anyhow!("No messages"))?;
         
+        // If last message is tool result with Error, return it.
+        if last_msg.role == Role::Tool {
+             println!("DEBUG: MockProvider saw tool output: '{}'", last_msg.content);
+             if last_msg.content.starts_with("Error:") {
+                 return Ok(LLMResponse::text(format!("Tool failed: {}", last_msg.content)));
+             }
+        }
+
         // Mock logic for testing tool routing and strategies
+        if let Some(json_tool_req) = last_msg.content.strip_prefix("test_tool_json:") {
+            // Format: test_tool_json:tool_name|json_args
+            let parts: Vec<&str> = json_tool_req.splitn(2, '|').collect();
+            if parts.len() == 2 {
+                let tool_name = parts[0];
+                let json_args = parts[1];
+                return Ok(LLMResponse::tool_calls(vec![ToolCall {
+                    id: "test_call".to_string(),
+                    name: tool_name.to_string(),
+                    arguments: json_args.to_string(),
+                }]));
+            }
+        }
+
         if let Some(tool_req) = last_msg.content.strip_prefix("test_tool:") {
             let parts: Vec<&str> = tool_req.split('|').collect();
             if parts.len() >= 3 {

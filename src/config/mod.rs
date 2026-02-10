@@ -73,6 +73,33 @@ pub struct Config {
 
     #[serde(default)]
     pub workdir: WorkdirConfig,
+
+    #[serde(default)]
+    pub extensions: ExtensionsConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExtensionsConfig {
+    #[serde(default)]
+    pub hive: Option<HiveExtensionConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HiveExtensionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_agents_dir")]
+    pub agents_dir: String,
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
+    #[serde(default = "default_ipc_mode")]
+    pub ipc_mode: String,
+    #[serde(default = "default_model")] // Use agent default model?
+    pub default_model: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_true")]
+    pub cleanup_temp_files: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,6 +461,10 @@ fn default_log_level() -> String {
 fn default_log_file() -> String {
     "~/.zier-alpha/logs/agent.log".to_string()
 }
+fn default_agents_dir() -> String { "agents".to_string() }
+fn default_max_depth() -> usize { 3 }
+fn default_ipc_mode() -> String { "artifact".to_string() }
+fn default_timeout() -> u64 { 300 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
