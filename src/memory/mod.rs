@@ -22,7 +22,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::runtime::Handle;
+
 use tracing::{debug, info, warn};
 
 use crate::config::{Config, MemoryConfig};

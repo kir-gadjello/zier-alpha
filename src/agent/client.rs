@@ -54,7 +54,7 @@ impl SmartClient {
         }
     }
 
-    fn check_fallback_allowed(&self, error: &anyhow::Error, config: &ModelConfig) -> bool {
+    pub fn check_fallback_allowed(&self, error: &anyhow::Error, config: &ModelConfig) -> bool {
         let settings = match &config.fallback_settings {
             Some(s) => s,
             None => return true, // Default to allowing fallback if no settings

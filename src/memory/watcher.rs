@@ -3,7 +3,7 @@
 use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
-use std::time::Duration;
+
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
