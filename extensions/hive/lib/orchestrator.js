@@ -16,19 +16,20 @@ export async function runAgent(agentName, task, contextMode, attachments) {
 
     const uuid = crypto.randomUUID();
     const parentSessionId = zier.os.env.get("ZIER_SESSION_ID") || "root";
-    const ipcPath = `/tmp/zier-hive-${parentSessionId}-${agentName}-${uuid}.json`;
+    const tempDir = zier.os.tempDir();
+    const ipcPath = `${tempDir}/zier-hive-${parentSessionId}-${agentName}-${uuid}.json`;
     let hydrationPath = null;
     let hydrationArgs = [];
 
     // Handle hydration (fork mode)
     if (contextMode === "fork") {
         try {
-            const home = zier.os.env.get("HOME");
+            const home = zier.os.homeDir() || zier.os.env.get("HOME");
             const agentId = zier.os.env.get("ZIER_ALPHA_AGENT") || "main";
             // Check if ZIER_SESSION_ID is a full path or just ID. Assuming ID.
             const sessionPath = `${home}/.zier-alpha/agents/${agentId}/sessions/${parentSessionId}.jsonl`;
 
-            hydrationPath = `/tmp/zier-hive-${parentSessionId}-${agentName}-${uuid}.jsonl`;
+            hydrationPath = `${tempDir}/zier-hive-${parentSessionId}-${agentName}-${uuid}.jsonl`;
 
             // Read session file and write to temp hydration file
             const sessionContent = pi.readFile(sessionPath);

@@ -176,9 +176,27 @@ pub fn op_random_uuid() -> String {
 #[op2]
 #[string]
 pub fn op_env_get(
+    state: &mut OpState,
     #[string] key: String,
 ) -> Option<String> {
+    let sandbox = state.borrow::<SandboxState>();
+    if !sandbox.policy.allow_env {
+        return None;
+    }
     std::env::var(key).ok()
+}
+
+#[op2]
+#[string]
+pub fn op_temp_dir() -> String {
+    std::env::temp_dir().to_string_lossy().to_string()
+}
+
+#[op2]
+#[string]
+pub fn op_home_dir() -> Option<String> {
+    directories::BaseDirs::new()
+        .map(|b| b.home_dir().to_string_lossy().to_string())
 }
 
 #[op2(async)]
@@ -382,6 +400,8 @@ deno_core::extension!(
         op_sleep,
         op_random_uuid,
         op_env_get,
+        op_temp_dir,
+        op_home_dir,
         op_fetch,
         op_log,
         op_register_tool,
@@ -469,7 +489,9 @@ impl DenoRuntime {
                     exec: (cmd, opts) => Deno.core.ops.op_zier_exec(cmd, opts || {}),
                     env: {
                         get: (key) => Deno.core.ops.op_env_get(key)
-                    }
+                    },
+                    tempDir: () => Deno.core.ops.op_temp_dir(),
+                    homeDir: () => Deno.core.ops.op_home_dir()
                 },
                 ingress: {
                     push: (payload, source) => Deno.core.ops.op_zier_ingress_push(payload, source || "script")

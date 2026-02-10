@@ -104,8 +104,14 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                  let mut policy = zier_alpha::config::SandboxPolicy::default();
                  policy.allow_read.push("agents".to_string());
                  policy.allow_read.push("extensions".to_string());
-                 policy.allow_read.push("/tmp".to_string());
-                 policy.allow_write.push("/tmp".to_string());
+                 // Allow temp dir (platform agnostic)
+                 let temp_dir = std::env::temp_dir().to_string_lossy().to_string();
+                 policy.allow_read.push(temp_dir.clone());
+                 policy.allow_write.push(temp_dir);
+
+                 // Allow env access for extension communication
+                 policy.allow_env = true;
+
                  // Allow reading workspace
                  policy.allow_read.push(config.workspace_path().to_string_lossy().to_string());
                  policy.allow_write.push(config.workspace_path().to_string_lossy().to_string());
