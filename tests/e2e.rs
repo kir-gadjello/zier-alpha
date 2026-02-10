@@ -1,8 +1,9 @@
-use zier_alpha::config::{Config, MemoryConfig, AgentConfig, ServerConfig};
+use zier_alpha::config::{Config, MemoryConfig, AgentConfig, ServerConfig, SandboxPolicy, WorkdirStrategy};
 use zier_alpha::ingress::{IngressBus, IngressMessage, TrustLevel};
 use zier_alpha::ingress::controller::ingress_loop;
 use zier_alpha::prompts::PromptRegistry;
 use zier_alpha::scheduler::JobConfig;
+use zier_alpha::scripting::ScriptService;
 use std::sync::Arc;
 use tempfile::TempDir;
 use std::time::Duration;
@@ -44,7 +45,16 @@ async fn test_e2e_flow() {
 
     let bus = IngressBus::new(10);
     let prompts = Arc::new(PromptRegistry::new());
-    let script_tools = vec![];
+    let policy = SandboxPolicy::default();
+    let script_service = ScriptService::new(
+        policy,
+        workspace_path.clone(),
+        workspace_path.clone(),
+        WorkdirStrategy::Overlay,
+        None,
+        None
+    ).unwrap();
+
     let jobs = vec![
         JobConfig {
             name: "test_job".to_string(),
@@ -82,7 +92,7 @@ async fn test_e2e_flow() {
             config_clone,
             "main".to_string(),
             prompts_clone,
-            script_tools,
+            script_service,
             jobs,
         ).await;
     });

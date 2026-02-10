@@ -18,7 +18,9 @@ async fn test_deno_tool_registration_and_execution() {
         policy, 
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
-        WorkdirStrategy::Overlay
+        WorkdirStrategy::Overlay,
+        None,
+        None
     ).expect("Failed to create script service");
 
     // 3. Create a JS script that registers a tool
@@ -75,7 +77,9 @@ async fn test_deno_sandbox_fs_allowed() {
         policy, 
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
-        WorkdirStrategy::Overlay
+        WorkdirStrategy::Overlay,
+        None,
+        None
     ).unwrap();
 
     let script_content = format!(r#"
@@ -125,7 +129,9 @@ async fn test_deno_sandbox_fs_denied() {
         policy, 
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
-        WorkdirStrategy::Overlay
+        WorkdirStrategy::Overlay,
+        None,
+        None
     ).unwrap();
 
     let script_content = r#"

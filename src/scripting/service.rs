@@ -1,10 +1,13 @@
 use crate::config::{SandboxPolicy, WorkdirStrategy};
 use crate::scripting::deno::{DenoRuntime, DenoToolDefinition};
 use anyhow::Result;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use std::thread;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::error;
+use crate::ingress::IngressBus;
+use crate::scheduler::Scheduler;
 
 enum ScriptCommand {
     LoadScript {
@@ -19,6 +22,9 @@ enum ScriptCommand {
     GetTools {
         resp: oneshot::Sender<Vec<DenoToolDefinition>>,
     },
+    GetStatus {
+        resp: oneshot::Sender<Result<Vec<String>>>,
+    },
 }
 
 #[derive(Clone)]
@@ -27,7 +33,14 @@ pub struct ScriptService {
 }
 
 impl ScriptService {
-    pub fn new(policy: SandboxPolicy, workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Result<Self> {
+    pub fn new(
+        policy: SandboxPolicy,
+        workspace: PathBuf,
+        project_dir: PathBuf,
+        strategy: WorkdirStrategy,
+        ingress_bus: Option<Arc<IngressBus>>,
+        scheduler: Option<Arc<Mutex<Scheduler>>>
+    ) -> Result<Self> {
         let (tx, mut rx) = mpsc::channel(32);
 
         // Spawn a dedicated OS thread for V8 (since JsRuntime is !Send)
@@ -39,7 +52,7 @@ impl ScriptService {
             match runtime {
                 Ok(rt) => {
                     rt.block_on(async move {
-                        let mut deno = match DenoRuntime::new(policy, workspace, project_dir, strategy) {
+                        let mut deno = match DenoRuntime::new(policy, workspace, project_dir, strategy, ingress_bus, scheduler) {
                             Ok(d) => d,
                             Err(e) => {
                                 error!("Failed to initialize Deno runtime: {}", e);
@@ -60,6 +73,10 @@ impl ScriptService {
                                 ScriptCommand::GetTools { resp } => {
                                     let tools = deno.get_registered_tools();
                                     let _ = resp.send(tools);
+                                }
+                                ScriptCommand::GetStatus { resp } => {
+                                    let res = deno.get_status().await;
+                                    let _ = resp.send(res.map_err(|e| anyhow::anyhow!(e)));
                                 }
                             }
                         }
@@ -90,5 +107,11 @@ impl ScriptService {
         let (tx, rx) = oneshot::channel();
         self.sender.send(ScriptCommand::GetTools { resp: tx }).await?;
         Ok(rx.await?)
+    }
+
+    pub async fn get_status_lines(&self) -> Result<Vec<String>> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(ScriptCommand::GetStatus { resp: tx }).await?;
+        rx.await?
     }
 }

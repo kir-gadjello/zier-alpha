@@ -168,6 +168,15 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
         lines.push(String::new());
     }
 
+    // Background Processes section
+    if let Some(ref status) = params.status_lines {
+        if !status.is_empty() {
+            lines.push("## Background Processes".to_string());
+            lines.extend(status.clone());
+            lines.push(String::new());
+        }
+    }
+
     // Silent replies section
     lines.push("## Silent Replies".to_string());
     lines.push(format!(
@@ -226,6 +235,7 @@ pub struct SystemPromptParams<'a> {
     pub current_time: Option<String>,
     pub timezone: Option<String>,
     pub skills_prompt: Option<String>,
+    pub status_lines: Option<Vec<String>>,
 }
 
 impl<'a> SystemPromptParams<'a> {
@@ -252,6 +262,7 @@ impl<'a> SystemPromptParams<'a> {
                 Some(timezone)
             },
             skills_prompt: None,
+            status_lines: None,
         }
     }
 
@@ -270,6 +281,11 @@ impl<'a> SystemPromptParams<'a> {
         if !prompt.is_empty() {
             self.skills_prompt = Some(prompt);
         }
+        self
+    }
+
+    pub fn with_status_lines(mut self, status: Vec<String>) -> Self {
+        self.status_lines = Some(status);
         self
     }
 }

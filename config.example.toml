@@ -1,64 +1,26 @@
 # Zier Alpha Configuration
-# Copy to ~/.zier-alpha/config.toml
+# Auto-created on first run. Edit as needed.
 
 [agent]
-# Default model to use for chat
-#
-# Format: "provider/model-id" (OpenClaw-compatible)
-#
-# Anthropic API (recommended, requires ANTHROPIC_API_KEY):
-#   - "anthropic/claude-opus-4-5" (recommended)
-#   - "anthropic/claude-sonnet-4-5"
-#
-# Short aliases (auto-resolved to latest 4.5 models):
-#   - "opus"   → anthropic/claude-opus-4-5
-#   - "sonnet" → anthropic/claude-sonnet-4-5
-#   - "gpt"    → openai/gpt-4o
-#
-# OpenAI API (requires OPENAI_API_KEY):
-#   - "openai/gpt-4o", "openai/gpt-4o-mini", "openai/gpt-4-turbo"
-#
-# Claude CLI (local, no API key needed):
-#   - "claude-cli/opus", "claude-cli/sonnet", "claude-cli/haiku"
-#
-# Ollama (local):
-#   - "ollama/llama3", "ollama/mistral", etc.
-#
+# Default model: claude-cli/opus, anthropic/claude-sonnet-4-5, openai/gpt-4o, etc.
 default_model = "claude-cli/opus"
-
-# Context window size (in tokens)
 context_window = 128000
-
-# Reserve tokens for response
 reserve_tokens = 8000
 
-# Anthropic configuration (REQUIRED for default model)
-# Get your API key at: https://console.anthropic.com/
-[providers.anthropic]
-api_key = "${ANTHROPIC_API_KEY}"  # Set: export ANTHROPIC_API_KEY="sk-ant-..."
-base_url = "https://api.anthropic.com"
+# Anthropic API (for anthropic/* models)
+# [providers.anthropic]
+# api_key = "${ANTHROPIC_API_KEY}"
 
-# OpenAI configuration (optional)
+# OpenAI API (for openai/* models)
 # [providers.openai]
 # api_key = "${OPENAI_API_KEY}"
-# base_url = "https://api.openai.com/v1"
 
-# Ollama configuration (for local models)
-# [providers.ollama]
-# endpoint = "http://localhost:11434"
-# model = "llama3"
-
-# Claude CLI configuration (uses local claude CLI command)
-# Requires claude CLI to be installed: https://github.com/anthropics/claude-code
-# [providers.claude_cli]
-# command = "claude"
-# model = "opus"  # opus, sonnet, or haiku
+# Claude CLI (for claude-cli/* models, requires claude CLI installed)
+[providers.claude_cli]
+command = "claude"
 
 [heartbeat]
-# Enable automatic heartbeat
 enabled = true
-
-# How often to check HEARTBEAT.md
 interval = "30m"
 
 # Only run during these hours (optional)
@@ -67,63 +29,39 @@ interval = "30m"
 # end = "22:00"
 
 [memory]
-# Where to store memory files
+# Workspace directory for memory files (MEMORY.md, HEARTBEAT.md, etc.)
+# Can also be set via environment variables:
+#   ZIER_ALPHA_WORKSPACE=/path/to/workspace  - absolute path override
+#   ZIER_ALPHA_PROFILE=work                  - uses ~/.zier-alpha/workspace-work
 workspace = "~/.zier-alpha/workspace"
 
-# Embedding provider for semantic search: "none" (default), "local", "gguf", "openai"
-# - "none": FTS-only search (default, no vector dependencies)
-# - "local": Uses FastEmbed/ONNX (requires 'fastembed' feature)
-# - "gguf": Uses llama.cpp for GGUF models (requires 'gguf' feature)
-# - "openai": Uses OpenAI embeddings (requires providers.openai config)
+# Embedding provider: "none" (default), "local" (requires 'fastembed' feature), "openai"
 embedding_provider = "none"
 
-# Embedding model for local provider (FastEmbed):
-#
-# English:
-#   - all-MiniLM-L6-v2   (default, ~80MB, fastest)
-#   - bge-base-en-v1.5   (~430MB, higher quality)
-#
-# Chinese:
-#   - bge-small-zh-v1.5  (~95MB, Chinese-specific)
-#
-# Multilingual (Chinese, Japanese, Korean, 100+ languages):
-#   - multilingual-e5-small  (~470MB, compact)
-#   - multilingual-e5-base   (~1.1GB, recommended for Chinese)
-#   - bge-m3                 (~2.2GB, best quality)
-#
-# For OpenAI provider: text-embedding-3-small, text-embedding-3-large
-#
-# For GGUF provider (requires --features gguf):
-#   - embeddinggemma-300M-Q8_0.gguf  (~320MB, 1024 dims, multilingual)
-#   - nomic-embed-text-v1.5.Q8_0.gguf (~270MB, 768 dims)
-#   Note: Download models from HuggingFace and place in embedding_cache_dir
-embedding_model = "all-MiniLM-L6-v2"
-
-# Cache directory for local embedding models (ONNX format)
-# Models are downloaded from HuggingFace on first use
-# Default: ~/.cache/zier-alpha/models
-# Can also be set via FASTEMBED_CACHE_DIR environment variable
-# embedding_cache_dir = "~/.cache/zier-alpha/models"
-
-# Chunk size for indexing (tokens)
-chunk_size = 400
-
-# Overlap between chunks (tokens)
-chunk_overlap = 80
+# Session memory settings (for /new command)
+# session_max_messages = 15    # Max messages to save (0 = unlimited)
+# session_max_chars = 0        # Max chars per message (0 = unlimited, preserves full content)
 
 [server]
-# Enable HTTP server
 enabled = true
-
-# Port to listen on
 port = 31327
+bind = "127.0.0.1"
 
-# Bind address (127.0.0.1 for localhost only)
+[server.openai_proxy]
+enabled = true
+port = 37777
 bind = "127.0.0.1"
 
 [logging]
-# Log level: trace, debug, info, warn, error
 level = "info"
 
-# Log file path
-file = "~/.zier-alpha/logs/agent.log"
+[workdir]
+# Strategy for handling project directories: "overlay" (default) or "mount"
+# - "overlay": Cognitive files go to workspace, others to project dir.
+# - "mount": Everything is in workspace; project dir is mounted at ./project.
+strategy = "overlay"
+
+# Tmux Bridge Plugin Configuration
+[tmux_bridge]
+# The plugin uses the default "zier" socket. No explicit config required yet.
+# To enable global CWD (unsafe), verify scripting policy in src/scripting/safety.rs

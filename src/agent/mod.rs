@@ -91,6 +91,7 @@ pub struct Agent {
     compaction_strategy: Box<dyn CompactionStrategy>,
     /// Project working directory (Worksite)
     project_dir: PathBuf,
+    status_lines: Vec<String>,
 }
 
 impl Agent {
@@ -137,7 +138,12 @@ impl Agent {
             context_strategy,
             compaction_strategy: Box::new(NativeCompactor),
             project_dir,
+            status_lines: Vec::new(),
         })
+    }
+
+    pub fn set_status_lines(&mut self, status: Vec<String>) {
+        self.status_lines = status;
     }
 
     pub fn model(&self) -> &str {
@@ -258,7 +264,8 @@ impl Agent {
             system_prompt::SystemPromptParams::new(self.memory.workspace(), &self.config.model)
                 .with_project(&self.project_dir, self.app_config.workdir.clone())
                 .with_tools(tool_names)
-                .with_skills_prompt(skills_prompt);
+                .with_skills_prompt(skills_prompt)
+                .with_status_lines(self.status_lines.clone());
         let system_prompt = system_prompt::build_system_prompt(system_prompt_params);
 
         // Load memory context depending on strategy
