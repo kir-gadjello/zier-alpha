@@ -91,7 +91,7 @@ async fn worker_loop(
     // Send ready message
     let _ = tx.send(WorkerMessage::Ready {
         model: agent.model().to_string(),
-        memory_chunks: agent.memory_chunk_count(),
+        memory_chunks: agent.memory_chunk_count().await,
         has_embeddings: agent.has_embeddings(),
     });
 

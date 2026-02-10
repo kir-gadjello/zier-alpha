@@ -11,6 +11,7 @@ use std::sync::Mutex as StdMutex;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{debug, info};
 
+use crate::agent::llm_error::LlmError;
 use crate::config::Config;
 
 /// Image attachment for multimodal messages
@@ -471,7 +472,18 @@ impl LLMProvider for OpenAIProvider {
 
         // Check for errors
         if let Some(error) = response_body.get("error") {
-            anyhow::bail!("OpenAI API error: {}", error);
+            let message = error["message"].as_str().unwrap_or("Unknown error").to_string();
+            let code = error["code"].as_str(); // might be string or null
+
+            if let Some(c) = code {
+                if c == "rate_limit_exceeded" {
+                     anyhow::bail!(LlmError::RateLimit(message));
+                }
+                if c == "context_length_exceeded" {
+                     anyhow::bail!(LlmError::ContextWindowExceeded(message));
+                }
+            }
+            anyhow::bail!(LlmError::ProviderError { status: 400, message });
         }
 
         let choice = response_body["choices"]
@@ -696,15 +708,28 @@ impl LLMProvider for AnthropicProvider {
             .send()
             .await?;
 
+        // Check for errors
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let response_body: Value = response.json().await.unwrap_or(json!({"error": {"message": "Unknown error"}}));
+            let error_msg = response_body["error"]["message"].as_str().unwrap_or("Unknown error").to_string();
+
+            if status == 429 {
+                anyhow::bail!(LlmError::RateLimit(error_msg));
+            }
+            anyhow::bail!(LlmError::ProviderError { status, message: error_msg });
+        }
+
         let response_body: Value = response.json().await?;
         debug!(
             "Anthropic response: {}",
             serde_json::to_string_pretty(&response_body)?
         );
 
-        // Check for errors
+        // Check for errors in body (though usually handled by status check)
         if let Some(error) = response_body.get("error") {
-            anyhow::bail!("Anthropic API error: {}", error);
+            let message = error["message"].as_str().unwrap_or("Unknown error").to_string();
+            anyhow::bail!(LlmError::ProviderError { status: 400, message });
         }
 
         let content = response_body["content"]
@@ -809,8 +834,12 @@ impl LLMProvider for AnthropicProvider {
 
         // Check for error status
         if !response.status().is_success() {
+            let status = response.status().as_u16();
             let error_body = response.text().await?;
-            anyhow::bail!("Anthropic API error: {}", error_body);
+            if status == 429 {
+                anyhow::bail!(LlmError::RateLimit(error_body));
+            }
+            anyhow::bail!(LlmError::ProviderError { status, message: error_body });
         }
 
         // Anthropic streams Server-Sent Events (SSE)

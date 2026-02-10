@@ -7,7 +7,9 @@ mod session_store;
 mod skills;
 mod system_prompt;
 pub mod tools;
+pub mod llm_error;
 
+pub use llm_error::LlmError;
 pub use providers::{
     ImageAttachment, LLMProvider, LLMResponse, LLMResponseContent, Message, Role, StreamChunk,
     StreamEvent, StreamResult, ToolCall, ToolSchema, Usage,
@@ -78,17 +80,18 @@ pub struct AgentConfig {
     pub reserve_tokens: usize,
 }
 
+#[derive(Clone)]
 pub struct Agent {
     config: AgentConfig,
     app_config: Config,
     client: SmartClient,
     session: Arc<RwLock<Session>>,
     memory: Arc<MemoryManager>,
-    tools: Vec<Box<dyn Tool>>,
+    tools: Vec<Arc<dyn Tool>>,
     /// Cumulative token usage for this session
     cumulative_usage: Usage,
     context_strategy: ContextStrategy,
-    compaction_strategy: Box<dyn CompactionStrategy>,
+    compaction_strategy: Arc<dyn CompactionStrategy>,
     /// Project working directory (Worksite)
     project_dir: PathBuf,
     status_lines: Vec<String>,
@@ -136,7 +139,7 @@ impl Agent {
             tools,
             cumulative_usage: Usage::default(),
             context_strategy,
-            compaction_strategy: Box::new(NativeCompactor),
+            compaction_strategy: Arc::new(NativeCompactor),
             project_dir,
             status_lines: Vec::new(),
         })
@@ -151,7 +154,7 @@ impl Agent {
     }
 
     /// Check if a tool requires user approval before execution
-    pub fn set_tools(&mut self, tools: Vec<Box<dyn Tool>>) {
+    pub fn set_tools(&mut self, tools: Vec<Arc<dyn Tool>>) {
         self.tools = tools;
     }
 
@@ -176,8 +179,8 @@ impl Agent {
         Ok(())
     }
 
-    pub fn memory_chunk_count(&self) -> usize {
-        self.memory.chunk_count().unwrap_or(0)
+    pub async fn memory_chunk_count(&self) -> usize {
+        self.memory.chunk_count().await.unwrap_or(0)
     }
 
     pub fn has_embeddings(&self) -> bool {
@@ -198,8 +201,16 @@ impl Agent {
         self.session = session;
     }
 
-    pub fn set_compaction_strategy(&mut self, strategy: Box<dyn CompactionStrategy>) {
+    pub fn set_compaction_strategy(&mut self, strategy: Arc<dyn CompactionStrategy>) {
         self.compaction_strategy = strategy;
+    }
+
+    pub fn set_context_strategy(&mut self, strategy: ContextStrategy) {
+        self.context_strategy = strategy;
+    }
+
+    pub fn tools(&self) -> &[Arc<dyn Tool>] {
+        &self.tools
     }
 
     /// Get current context usage info
@@ -801,11 +812,11 @@ impl Agent {
     }
 
     pub async fn search_memory(&self, query: &str) -> Result<Vec<MemoryChunk>> {
-        self.memory.search(query, 10)
+        self.memory.search(query, 10).await
     }
 
     pub async fn reindex_memory(&self) -> Result<(usize, usize, usize)> {
-        let stats = self.memory.reindex(true)?;
+        let stats = self.memory.reindex(true).await?;
 
         // Generate embeddings for new chunks (if embedding provider is configured)
         let (_, embedded) = self.memory.generate_embeddings(50).await?;

@@ -14,7 +14,7 @@ async fn test_tmux_bridge_lifecycle() {
 
     // Initialize services
     let bus = Arc::new(IngressBus::new(100));
-    let mut scheduler = Scheduler::new(bus.clone()).await.unwrap();
+    let scheduler = Scheduler::new(bus.clone()).await.unwrap();
     scheduler.start().await.unwrap();
     let scheduler = Arc::new(Mutex::new(scheduler));
 

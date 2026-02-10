@@ -194,7 +194,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         env!("CARGO_PKG_VERSION"),
         agent_id,
         agent.model(),
-        agent.memory_chunk_count(),
+        agent.memory_chunk_count().await,
         embedding_status,
         skills_status
     );
@@ -793,7 +793,7 @@ async fn handle_command(
             println!("  Compactions: {}", status.compaction_count);
 
             println!("\nMemory:");
-            println!("  Chunks: {}", agent.memory_chunk_count());
+            println!("  Chunks: {}", agent.memory_chunk_count().await);
             if agent.has_embeddings() {
                 println!("  Embeddings: enabled");
             }

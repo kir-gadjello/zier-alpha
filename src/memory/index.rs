@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::task;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -175,7 +176,7 @@ impl MemoryIndex {
     }
 
     /// Index a file, returning true if it was updated
-    pub fn index_file(&self, path: &Path, force: bool) -> Result<bool> {
+    pub async fn index_file(&self, path: &Path, force: bool) -> Result<bool> {
         let content = fs::read_to_string(path)?;
         let file_hash = hash_content(&content);
         let metadata = fs::metadata(path)?;
@@ -191,69 +192,74 @@ impl MemoryIndex {
             .to_string_lossy()
             .to_string();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+        let conn = self.conn.clone();
+        let chunk_size = self.chunk_size;
+        let chunk_overlap = self.chunk_overlap;
 
-        // Check if file has changed
-        if !force {
-            let existing: Option<String> = conn
-                .query_row(
-                    "SELECT hash FROM files WHERE path = ?1",
-                    params![&relative_path],
-                    |row| row.get(0),
-                )
-                .ok();
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-            if existing.as_deref() == Some(&file_hash) {
-                debug!("File unchanged, skipping: {}", relative_path);
-                return Ok(false);
+            // Check if file has changed
+            if !force {
+                let existing: Option<String> = conn
+                    .query_row(
+                        "SELECT hash FROM files WHERE path = ?1",
+                        params![&relative_path],
+                        |row| row.get(0),
+                    )
+                    .ok();
+
+                if existing.as_deref() == Some(&file_hash) {
+                    debug!("File unchanged, skipping: {}", relative_path);
+                    return Ok(false);
+                }
             }
-        }
 
-        debug!("Indexing file: {}", relative_path);
+            debug!("Indexing file: {}", relative_path);
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs() as i64;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs() as i64;
 
-        // Update file record (OpenClaw-compatible columns)
-        conn.execute(
-            "INSERT OR REPLACE INTO files (path, source, hash, mtime, size) VALUES (?1, 'memory', ?2, ?3, ?4)",
-            params![&relative_path, &file_hash, mtime, size],
-        )?;
-
-        // Delete existing chunks and their FTS entries
-        Self::delete_chunks_for_path(&conn, &relative_path)?;
-
-        // Create new chunks (OpenClaw-compatible)
-        let chunks = chunk_text(&content, self.chunk_size, self.chunk_overlap);
-
-        for chunk in chunks.iter() {
-            let chunk_id = Uuid::new_v4().to_string();
-            let chunk_hash = hash_content(&chunk.content);
-
+            // Update file record (OpenClaw-compatible columns)
             conn.execute(
-                r#"INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+                "INSERT OR REPLACE INTO files (path, source, hash, mtime, size) VALUES (?1, 'memory', ?2, ?3, ?4)",
+                params![&relative_path, &file_hash, mtime, size],
+            )?;
+
+            // Delete existing chunks and their FTS entries
+            Self::delete_chunks_for_path(&conn, &relative_path)?;
+
+            // Create new chunks (OpenClaw-compatible)
+            let chunks = chunk_text(&content, chunk_size, chunk_overlap);
+
+            for chunk in chunks.iter() {
+                let chunk_id = Uuid::new_v4().to_string();
+                let chunk_hash = hash_content(&chunk.content);
+
+                conn.execute(
+                    r#"INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
                    VALUES (?1, ?2, 'memory', ?3, ?4, ?5, '', ?6, '', ?7)"#,
-                params![&chunk_id, &relative_path, chunk.line_start, chunk.line_end, &chunk_hash, &chunk.content, now],
-            )?;
+                    params![&chunk_id, &relative_path, chunk.line_start, chunk.line_end, &chunk_hash, &chunk.content, now],
+                )?;
 
-            // Insert into FTS
-            Self::insert_fts(
-                &conn,
-                &chunk_id,
-                &relative_path,
-                "memory",
-                "",
-                chunk.line_start,
-                chunk.line_end,
-                &chunk.content,
-            )?;
-        }
+                // Insert into FTS
+                Self::insert_fts(
+                    &conn,
+                    &chunk_id,
+                    &relative_path,
+                    "memory",
+                    "",
+                    chunk.line_start,
+                    chunk.line_end,
+                    &chunk.content,
+                )?;
+            }
 
-        Ok(true)
+            Ok(true)
+        }).await?
     }
 
     /// Delete chunks for a path and their FTS entries
@@ -275,34 +281,41 @@ impl MemoryIndex {
     }
 
     /// Remove a file and its chunks from the index (for deleted files)
-    pub fn remove_file(&self, relative_path: &str) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+    pub async fn remove_file(&self, relative_path: &str) -> Result<()> {
+        let conn = self.conn.clone();
+        let relative_path = relative_path.to_string();
 
-        Self::delete_chunks_for_path(&conn, relative_path)?;
-        conn.execute("DELETE FROM files WHERE path = ?1", params![relative_path])?;
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-        debug!("Removed deleted file from index: {}", relative_path);
-        Ok(())
+            Self::delete_chunks_for_path(&conn, &relative_path)?;
+            conn.execute("DELETE FROM files WHERE path = ?1", params![&relative_path])?;
+
+            debug!("Removed deleted file from index: {}", relative_path);
+            Ok(())
+        }).await?
     }
 
     /// Get all indexed file paths
-    pub fn indexed_files(&self) -> Result<Vec<String>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+    pub async fn indexed_files(&self) -> Result<Vec<String>> {
+        let conn = self.conn.clone();
 
-        let mut stmt = conn.prepare("SELECT path FROM files")?;
-        let rows = stmt.query_map([], |row| row.get(0))?;
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-        let mut paths = Vec::new();
-        for row in rows {
-            paths.push(row?);
-        }
-        Ok(paths)
+            let mut stmt = conn.prepare("SELECT path FROM files")?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+
+            let mut paths = Vec::new();
+            for row in rows {
+                paths.push(row?);
+            }
+            Ok(paths)
+        }).await?
     }
 
     /// Insert into FTS table
@@ -325,74 +338,83 @@ impl MemoryIndex {
     }
 
     /// Search using FTS5
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryChunk>> {
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryChunk>> {
         let fts_query = match build_fts_query(query) {
             Some(q) => q,
             None => return Ok(Vec::new()),
         };
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+        let conn = self.conn.clone();
+        let query_clone = fts_query.clone();
 
-        // OpenClaw-compatible: use 'path', 'start_line', 'end_line', 'text' columns
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT fts.path, fts.start_line, fts.end_line, fts.text, bm25(chunks_fts) as score
-            FROM chunks_fts fts
-            WHERE chunks_fts MATCH ?1
-            ORDER BY score
-            LIMIT ?2
-            "#,
-        )?;
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-        let rows = stmt.query_map(params![&fts_query, limit as i64], |row| {
-            Ok(MemoryChunk {
-                file: row.get(0)?,
-                line_start: row.get(1)?,
-                line_end: row.get(2)?,
-                content: row.get(3)?,
-                score: row.get::<_, f64>(4)?.abs(), // BM25 returns negative scores
-            })
-        })?;
+            // OpenClaw-compatible: use 'path', 'start_line', 'end_line', 'text' columns
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT fts.path, fts.start_line, fts.end_line, fts.text, bm25(chunks_fts) as score
+                FROM chunks_fts fts
+                WHERE chunks_fts MATCH ?1
+                ORDER BY score
+                LIMIT ?2
+                "#,
+            )?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
+            let rows = stmt.query_map(params![&query_clone, limit as i64], |row| {
+                Ok(MemoryChunk {
+                    file: row.get(0)?,
+                    line_start: row.get(1)?,
+                    line_end: row.get(2)?,
+                    content: row.get(3)?,
+                    score: row.get::<_, f64>(4)?.abs(), // BM25 returns negative scores
+                })
+            })?;
 
-        Ok(results)
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?);
+            }
+
+            Ok(results)
+        }).await?
     }
 
     /// Get total chunk count
-    pub fn chunk_count(&self) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
-        Ok(count as usize)
+    pub async fn chunk_count(&self) -> Result<usize> {
+        let conn = self.conn.clone();
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let count: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
+            Ok(count as usize)
+        }).await?
     }
 
     /// Get chunk count for a specific file
-    pub fn file_chunk_count(&self, path: &Path) -> Result<usize> {
+    pub async fn file_chunk_count(&self, path: &Path) -> Result<usize> {
         let relative_path = path
             .strip_prefix(&self.workspace)
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM chunks WHERE path = ?1",
-            params![&relative_path],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
+        let conn = self.conn.clone();
+
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM chunks WHERE path = ?1",
+                params![&relative_path],
+                |row| row.get(0),
+            )?;
+            Ok(count as usize)
+        }).await?
     }
 
     /// Get database size in bytes
@@ -436,55 +458,65 @@ impl MemoryIndex {
     }
 
     /// Get chunks that need embeddings (OpenClaw-compatible: id is TEXT, text column)
-    pub fn chunks_without_embeddings(&self, limit: usize) -> Result<Vec<(String, String)>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+    pub async fn chunks_without_embeddings(&self, limit: usize) -> Result<Vec<(String, String)>> {
+        let conn = self.conn.clone();
 
-        let mut stmt = conn.prepare(
-            "SELECT id, text FROM chunks WHERE embedding = '' OR embedding IS NULL LIMIT ?1",
-        )?;
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-        let rows = stmt.query_map(params![limit as i64], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
+            let mut stmt = conn.prepare(
+                "SELECT id, text FROM chunks WHERE embedding = '' OR embedding IS NULL LIMIT ?1",
+            )?;
 
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
+            let rows = stmt.query_map(params![limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
 
-        Ok(results)
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?);
+            }
+
+            Ok(results)
+        }).await?
     }
 
     /// Store embedding for a chunk (OpenClaw-compatible: id is TEXT, model column)
-    pub fn store_embedding(&self, chunk_id: &str, embedding: &[f32], model: &str) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+    pub async fn store_embedding(&self, chunk_id: &str, embedding: &[f32], model: &str) -> Result<()> {
+        let conn = self.conn.clone();
+        let chunk_id = chunk_id.to_string();
+        let embedding = embedding.to_vec();
+        let model = model.to_string();
+        let has_vec_extension = self.has_vec_extension;
 
-        let embedding_json = serialize_embedding(embedding);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs() as i64;
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-        conn.execute(
-            "UPDATE chunks SET embedding = ?1, model = ?2, updated_at = ?3 WHERE id = ?4",
-            params![&embedding_json, model, now, chunk_id],
-        )?;
+            let embedding_json = serialize_embedding(&embedding);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs() as i64;
 
-        // Also store in vec table if sqlite-vec is available
-        if self.has_vec_extension {
-            let embedding_blob = embedding_to_blob(embedding);
-            let _ = conn.execute(
-                "INSERT OR REPLACE INTO chunks_vec (id, embedding) VALUES (?1, ?2)",
-                params![chunk_id, &embedding_blob],
-            );
-        }
+            conn.execute(
+                "UPDATE chunks SET embedding = ?1, model = ?2, updated_at = ?3 WHERE id = ?4",
+                params![&embedding_json, &model, now, &chunk_id],
+            )?;
 
-        Ok(())
+            // Also store in vec table if sqlite-vec is available
+            if has_vec_extension {
+                let embedding_blob = embedding_to_blob(&embedding);
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO chunks_vec (id, embedding) VALUES (?1, ?2)",
+                    params![chunk_id, &embedding_blob],
+                );
+            }
+
+            Ok(())
+        }).await?
     }
 
     // ========================================================================
@@ -492,30 +524,36 @@ impl MemoryIndex {
     // ========================================================================
 
     /// Get cached embedding by content hash
-    pub fn get_cached_embedding(
+    pub async fn get_cached_embedding(
         &self,
         provider: &str,
         model: &str,
         text_hash: &str,
     ) -> Result<Option<Vec<f32>>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+        let conn = self.conn.clone();
+        let provider = provider.to_string();
+        let model = model.to_string();
+        let text_hash = text_hash.to_string();
 
-        let result: Option<String> = conn
-            .query_row(
-                "SELECT embedding FROM embedding_cache WHERE provider = ?1 AND model = ?2 AND hash = ?3",
-                params![provider, model, text_hash],
-                |row| row.get(0),
-            )
-            .ok();
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-        Ok(result.map(|json| deserialize_embedding(&json)))
+            let result: Option<String> = conn
+                .query_row(
+                    "SELECT embedding FROM embedding_cache WHERE provider = ?1 AND model = ?2 AND hash = ?3",
+                    params![&provider, &model, &text_hash],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            Ok(result.map(|json| deserialize_embedding(&json)))
+        }).await?
     }
 
     /// Store embedding in cache
-    pub fn cache_embedding(
+    pub async fn cache_embedding(
         &self,
         provider: &str,
         model: &str,
@@ -523,24 +561,32 @@ impl MemoryIndex {
         text_hash: &str,
         embedding: &[f32],
     ) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+        let conn = self.conn.clone();
+        let provider = provider.to_string();
+        let model = model.to_string();
+        let provider_key = provider_key.to_string();
+        let text_hash = text_hash.to_string();
+        let embedding = embedding.to_vec();
 
-        let embedding_json = serialize_embedding(embedding);
-        let dims = embedding.len() as i32;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs() as i64;
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-        conn.execute(
-            "INSERT OR REPLACE INTO embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at)
+            let embedding_json = serialize_embedding(&embedding);
+            let dims = embedding.len() as i32;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs() as i64;
+
+            conn.execute(
+                "INSERT OR REPLACE INTO embedding_cache (provider, model, provider_key, hash, embedding, dims, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![provider, model, provider_key, text_hash, &embedding_json, dims, now],
-        )?;
+                params![&provider, &model, &provider_key, &text_hash, &embedding_json, dims, now],
+            )?;
 
-        Ok(())
+            Ok(())
+        }).await?
     }
 
     /// Check if sqlite-vec is available
@@ -550,32 +596,37 @@ impl MemoryIndex {
 
     /// Vector search using embeddings (OpenClaw-compatible columns)
     /// Uses sqlite-vec if available for fast search, otherwise falls back to in-memory scan
-    pub fn search_vector(
+    pub async fn search_vector(
         &self,
         query_embedding: &[f32],
         model: &str,
         limit: usize,
     ) -> Result<Vec<MemoryChunk>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+        let conn = self.conn.clone();
+        let query_embedding = query_embedding.to_vec();
+        let model = model.to_string();
+        let has_vec_extension = self.has_vec_extension;
 
-        // Try sqlite-vec fast path if available
-        if self.has_vec_extension {
-            if let Ok(results) = self.search_vector_fast(&conn, query_embedding, model, limit) {
-                return Ok(results);
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+
+            // Try sqlite-vec fast path if available
+            if has_vec_extension {
+                if let Ok(results) = Self::search_vector_fast(&conn, &query_embedding, &model, limit) {
+                    return Ok(results);
+                }
+                warn!("sqlite-vec search failed, falling back to in-memory scan");
             }
-            warn!("sqlite-vec search failed, falling back to in-memory scan");
-        }
 
-        // Fallback: in-memory scan (slower but always works)
-        self.search_vector_scan(&conn, query_embedding, model, limit)
+            // Fallback: in-memory scan (slower but always works)
+            Self::search_vector_scan(&conn, &query_embedding, &model, limit)
+        }).await?
     }
 
     /// Fast vector search using sqlite-vec extension
     fn search_vector_fast(
-        &self,
         conn: &Connection,
         query_embedding: &[f32],
         model: &str,
@@ -615,7 +666,6 @@ impl MemoryIndex {
 
     /// In-memory vector scan (fallback when sqlite-vec not available)
     fn search_vector_scan(
-        &self,
         conn: &Connection,
         query_embedding: &[f32],
         model: &str,
@@ -672,7 +722,7 @@ impl MemoryIndex {
     }
 
     /// Hybrid search: combine FTS and vector results
-    pub fn search_hybrid(
+    pub async fn search_hybrid(
         &self,
         query: &str,
         query_embedding: Option<&[f32]>,
@@ -682,11 +732,11 @@ impl MemoryIndex {
         vector_weight: f32,
     ) -> Result<Vec<MemoryChunk>> {
         // Get FTS results
-        let fts_results = self.search(query, limit * 2)?;
+        let fts_results = self.search(query, limit * 2).await?;
 
         // Get vector results if embedding provided
         let vector_results = if let Some(embedding) = query_embedding {
-            self.search_vector(embedding, model, limit * 2)?
+            self.search_vector(embedding, model, limit * 2).await?
         } else {
             Vec::new()
         };
@@ -732,19 +782,23 @@ impl MemoryIndex {
     }
 
     /// Count chunks with embeddings (OpenClaw-compatible: model column)
-    pub fn embedded_chunk_count(&self, model: &str) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+    pub async fn embedded_chunk_count(&self, model: &str) -> Result<usize> {
+        let conn = self.conn.clone();
+        let model = model.to_string();
 
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM chunks WHERE embedding != '' AND embedding IS NOT NULL AND model = ?1",
-            params![model],
-            |row| row.get(0),
-        )?;
+        task::spawn_blocking(move || {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
 
-        Ok(count as usize)
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM chunks WHERE embedding != '' AND embedding IS NOT NULL AND model = ?1",
+                params![&model],
+                |row| row.get(0),
+            )?;
+
+            Ok(count as usize)
+        }).await?
     }
 }
 
@@ -861,8 +915,8 @@ mod tests {
         assert_eq!(chunks[0].line_start, 1);
     }
 
-    #[test]
-    fn test_memory_index() -> Result<()> {
+    #[tokio::test]
+    async fn test_memory_index() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let workspace = temp_dir.path();
 
@@ -874,11 +928,11 @@ mod tests {
         )?;
 
         let index = MemoryIndex::new(workspace)?;
-        index.index_file(&test_file, false)?;
+        index.index_file(&test_file, false).await?;
 
-        assert!(index.chunk_count()? > 0);
+        assert!(index.chunk_count().await? > 0);
 
-        let results = index.search("test document", 10)?;
+        let results = index.search("test document", 10).await?;
         assert!(!results.is_empty());
 
         Ok(())

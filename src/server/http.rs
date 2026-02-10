@@ -415,7 +415,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
     Json(StatusResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
         model: state.config.agent.default_model.clone(),
-        memory_chunks: state.memory.chunk_count().unwrap_or(0),
+        memory_chunks: state.memory.chunk_count().await.unwrap_or(0),
         active_sessions: sessions.len(),
     })
 }
@@ -909,19 +909,19 @@ async fn memory_search(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SearchQuery>,
 ) -> Response {
-    match memory_search_inner(&state.memory, &query.q, query.limit) {
+    match memory_search_inner(&state.memory, &query.q, query.limit).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-fn memory_search_inner(
+async fn memory_search_inner(
     memory: &MemoryManager,
     query: &str,
     limit: Option<usize>,
 ) -> Result<SearchResponse, anyhow::Error> {
     let limit = limit.unwrap_or(10);
-    let results = memory.search(query, limit)?;
+    let results = memory.search(query, limit).await?;
 
     let results: Vec<SearchResult> = results
         .into_iter()
@@ -950,14 +950,14 @@ struct StatsResponse {
 }
 
 async fn memory_stats(State(state): State<Arc<AppState>>) -> Response {
-    match memory_stats_inner(&state.memory) {
+    match memory_stats_inner(&state.memory).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-fn memory_stats_inner(memory: &MemoryManager) -> Result<StatsResponse, anyhow::Error> {
-    let stats = memory.stats()?;
+async fn memory_stats_inner(memory: &MemoryManager) -> Result<StatsResponse, anyhow::Error> {
+    let stats = memory.stats().await?;
 
     Ok(StatsResponse {
         workspace: stats.workspace,
@@ -986,26 +986,17 @@ async fn memory_reindex(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ReindexRequest>,
 ) -> Response {
-    // Run reindex in blocking task since it uses sqlite
-    let memory = state.memory.clone();
-    let force = request.force;
-
-    match tokio::task::spawn_blocking(move || memory_reindex_inner(&memory, force)).await {
-        Ok(Ok(response)) => Json(response).into_response(),
-        Ok(Err(e)) => AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        Err(e) => AppError(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Task error: {}", e),
-        )
-        .into_response(),
+    match memory_reindex_inner(&state.memory, request.force).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-fn memory_reindex_inner(
+async fn memory_reindex_inner(
     memory: &MemoryManager,
     force: bool,
 ) -> Result<ReindexResponse, anyhow::Error> {
-    let stats = memory.reindex(force)?;
+    let stats = memory.reindex(force).await?;
 
     Ok(ReindexResponse {
         files_processed: stats.files_processed,

@@ -5,6 +5,7 @@ use zier_alpha::scripting::ScriptService;
 use tempfile::TempDir;
 use std::fs;
 use std::io::Write;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_workdir_overlay_strategy() {
@@ -132,7 +133,7 @@ async fn test_deno_tool_routing() {
     // Inject the script tool into the agent
     let tools = service.get_tools().await.unwrap();
     let script_tool = zier_alpha::agent::ScriptTool::new(tools[0].clone(), service);
-    agent.set_tools(vec![Box::new(script_tool)]);
+    agent.set_tools(vec![Arc::new(script_tool)]);
 
     // 1. Write to MEMORY.md via Deno (should go to workspace)
     agent.chat("test_tool:test_write|MEMORY.md|Deno Cognitive Content").await.unwrap();

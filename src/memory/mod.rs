@@ -22,7 +22,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::runtime::Handle;
+
 use tracing::{debug, info, warn};
 
 use crate::config::{Config, MemoryConfig};
@@ -324,52 +324,44 @@ impl MemoryManager {
     }
 
     /// Search memory using hybrid search (FTS + semantic if available)
-    pub fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryChunk>> {
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryChunk>> {
         // If we have an embedding provider, try hybrid search
         if let Some(ref provider) = self.embedding_provider {
             // Try to get query embedding (may fail if no API key, rate limited, etc.)
-            if let Ok(handle) = Handle::try_current() {
-                let provider = provider.clone();
-                let query_string = query.to_string();
-                let model = provider.model().to_string();
+            let provider = provider.clone();
+            let query_string = query.to_string();
+            let model = provider.model().to_string();
 
-                // Run embedding in blocking context
-                let embedding_result = std::thread::spawn(move || {
-                    handle.block_on(async { provider.embed(&query_string).await })
-                })
-                .join()
-                .map_err(|_| anyhow::anyhow!("Thread panicked"))?;
-
-                if let Ok(embedding) = embedding_result {
-                    debug!("Using hybrid search with {} dimensions", embedding.len());
-                    return self.index.search_hybrid(
-                        query,
-                        Some(&embedding),
-                        &model,
-                        limit,
-                        0.3, // FTS weight
-                        0.7, // Vector weight
-                    );
-                }
+            // Run embedding (embedding provider is likely async)
+            if let Ok(embedding) = provider.embed(&query_string).await {
+                debug!("Using hybrid search with {} dimensions", embedding.len());
+                return self.index.search_hybrid(
+                    query,
+                    Some(&embedding),
+                    &model,
+                    limit,
+                    0.3, // FTS weight
+                    0.7, // Vector weight
+                ).await;
             }
         }
 
         // Fallback to FTS-only search
-        self.index.search(query, limit)
+        self.index.search(query, limit).await
     }
 
     /// Search memory using FTS only (faster, no API calls)
-    pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<MemoryChunk>> {
-        self.index.search(query, limit)
+    pub async fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<MemoryChunk>> {
+        self.index.search(query, limit).await
     }
 
     /// Get total chunk count
-    pub fn chunk_count(&self) -> Result<usize> {
-        self.index.chunk_count()
+    pub async fn chunk_count(&self) -> Result<usize> {
+        self.index.chunk_count().await
     }
 
     /// Reindex all memory files
-    pub fn reindex(&self, force: bool) -> Result<ReindexStats> {
+    pub async fn reindex(&self, force: bool) -> Result<ReindexStats> {
         let start = std::time::Instant::now();
         let mut stats = ReindexStats {
             files_processed: 0,
@@ -379,7 +371,7 @@ impl MemoryManager {
         };
 
         // First, clean up deleted files from the index
-        let files_removed = self.cleanup_deleted_files()?;
+        let files_removed = self.cleanup_deleted_files().await?;
         if files_removed > 0 {
             info!("Removed {} deleted files from index", files_removed);
         }
@@ -393,7 +385,7 @@ impl MemoryManager {
         {
             if entry.is_file() {
                 stats.files_processed += 1;
-                if self.index.index_file(&entry, force)? {
+                if self.index.index_file(&entry, force).await? {
                     stats.files_updated += 1;
                 }
             }
@@ -428,14 +420,14 @@ impl MemoryManager {
             {
                 if entry.is_file() {
                     stats.files_processed += 1;
-                    if self.index.index_file(&entry, force)? {
+                    if self.index.index_file(&entry, force).await? {
                         stats.files_updated += 1;
                     }
                 }
             }
         }
 
-        stats.chunks_indexed = self.index.chunk_count()?;
+        stats.chunks_indexed = self.index.chunk_count().await?;
         stats.duration = start.elapsed();
 
         info!("Reindex complete: {:?}", stats);
@@ -443,15 +435,15 @@ impl MemoryManager {
     }
 
     /// Remove files from index that no longer exist on disk
-    fn cleanup_deleted_files(&self) -> Result<usize> {
-        let indexed_files = self.index.indexed_files()?;
+    async fn cleanup_deleted_files(&self) -> Result<usize> {
+        let indexed_files = self.index.indexed_files().await?;
         let mut removed = 0;
 
         for relative_path in indexed_files {
             let full_path = self.workspace.join(&relative_path);
             if !full_path.exists() {
                 debug!("Cleaning up deleted file: {}", relative_path);
-                self.index.remove_file(&relative_path)?;
+                self.index.remove_file(&relative_path).await?;
                 removed += 1;
             }
         }
@@ -460,7 +452,7 @@ impl MemoryManager {
     }
 
     /// Get memory statistics
-    pub fn stats(&self) -> Result<MemoryStats> {
+    pub async fn stats(&self) -> Result<MemoryStats> {
         let mut files = Vec::new();
         let mut total_chunks = 0;
 
@@ -474,7 +466,7 @@ impl MemoryManager {
             if entry.is_file() {
                 let content = fs::read_to_string(&entry)?;
                 let lines = content.lines().count();
-                let chunks = self.index.file_chunk_count(&entry)?;
+                let chunks = self.index.file_chunk_count(&entry).await?;
                 total_chunks += chunks;
 
                 let display_name = entry
@@ -518,7 +510,7 @@ impl MemoryManager {
                 if entry.is_file() {
                     let content = fs::read_to_string(&entry)?;
                     let lines = content.lines().count();
-                    let chunks = self.index.file_chunk_count(&entry)?;
+                    let chunks = self.index.file_chunk_count(&entry).await?;
                     total_chunks += chunks;
 
                     let display_name = if let Ok(rel) = entry.strip_prefix(&base_path) {
@@ -619,7 +611,7 @@ impl MemoryManager {
 
         loop {
             // Get chunks without embeddings
-            let chunks = self.index.chunks_without_embeddings(batch_size)?;
+            let chunks = self.index.chunks_without_embeddings(batch_size).await?;
             if chunks.is_empty() {
                 break;
             }
@@ -636,7 +628,7 @@ impl MemoryManager {
                 // Check cache first
                 if let Ok(Some(cached)) =
                     self.index
-                        .get_cached_embedding(&provider_id, &model, &text_hash)
+                        .get_cached_embedding(&provider_id, &model, &text_hash).await
                 {
                     from_cache.push((chunk_id.clone(), cached));
                     cache_hits += 1;
@@ -647,7 +639,7 @@ impl MemoryManager {
 
             // Store cached embeddings
             for (chunk_id, embedding) in from_cache {
-                if let Err(e) = self.index.store_embedding(&chunk_id, &embedding, &model) {
+                if let Err(e) = self.index.store_embedding(&chunk_id, &embedding, &model).await {
                     warn!(
                         "Failed to store cached embedding for chunk {}: {}",
                         chunk_id, e
@@ -667,7 +659,7 @@ impl MemoryManager {
                             to_embed.iter().zip(embeddings.iter())
                         {
                             // Store in chunk
-                            if let Err(e) = self.index.store_embedding(chunk_id, embedding, &model)
+                            if let Err(e) = self.index.store_embedding(chunk_id, embedding, &model).await
                             {
                                 warn!("Failed to store embedding for chunk {}: {}", chunk_id, e);
                             } else {
@@ -681,7 +673,7 @@ impl MemoryManager {
                                 "", // provider_key (API key identifier, can be empty)
                                 text_hash,
                                 embedding,
-                            ) {
+                            ).await {
                                 debug!("Failed to cache embedding: {}", e);
                             }
                         }
@@ -713,12 +705,12 @@ impl MemoryManager {
     }
 
     /// Get count of chunks with embeddings
-    pub fn embedded_chunk_count(&self) -> Result<usize> {
+    pub async fn embedded_chunk_count(&self) -> Result<usize> {
         let model = self
             .embedding_provider
             .as_ref()
             .map(|p| p.model().to_string())
             .unwrap_or_default();
-        self.index.embedded_chunk_count(&model)
+        self.index.embedded_chunk_count(&model).await
     }
 }

@@ -32,7 +32,7 @@ pub trait Tool: Send + Sync {
 pub fn create_default_tools(
     config: &Config,
     memory: Option<Arc<MemoryManager>>,
-) -> Result<Vec<Box<dyn Tool>>> {
+) -> Result<Vec<Arc<dyn Tool>>> {
     create_default_tools_with_project(config, memory, std::env::current_dir()?)
 }
 
@@ -40,26 +40,26 @@ pub fn create_default_tools_with_project(
     config: &Config,
     memory: Option<Arc<MemoryManager>>,
     project_dir: PathBuf,
-) -> Result<Vec<Box<dyn Tool>>> {
+) -> Result<Vec<Arc<dyn Tool>>> {
     let workspace = config.workspace_path();
 
     // Use indexed memory search if MemoryManager is provided, otherwise fallback to grep-based
-    let memory_search_tool: Box<dyn Tool> = if let Some(ref mem) = memory {
-        Box::new(MemorySearchToolWithIndex::new(Arc::clone(mem)))
+    let memory_search_tool: Arc<dyn Tool> = if let Some(ref mem) = memory {
+        Arc::new(MemorySearchToolWithIndex::new(Arc::clone(mem)))
     } else {
-        Box::new(MemorySearchTool::new(workspace.clone()))
+        Arc::new(MemorySearchTool::new(workspace.clone()))
     };
 
     let strategy = &config.workdir.strategy;
 
     Ok(vec![
-        Box::new(BashTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), config.tools.bash_timeout_ms)),
-        Box::new(ReadFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
-        Box::new(WriteFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
-        Box::new(EditFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
+        Arc::new(BashTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), config.tools.bash_timeout_ms)),
+        Arc::new(ReadFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
+        Arc::new(WriteFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
+        Arc::new(EditFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
         memory_search_tool,
-        Box::new(MemoryGetTool::new(workspace)),
-        Box::new(WebFetchTool::new(config.tools.web_fetch_max_bytes)),
+        Arc::new(MemoryGetTool::new(workspace)),
+        Arc::new(WebFetchTool::new(config.tools.web_fetch_max_bytes)),
     ])
 }
 
@@ -607,7 +607,7 @@ impl Tool for MemorySearchToolWithIndex {
             search_type, query, limit
         );
 
-        let results = self.memory.search(query, limit)?;
+        let results = self.memory.search(query, limit).await?;
 
         if results.is_empty() {
             return Ok("No results found".to_string());
