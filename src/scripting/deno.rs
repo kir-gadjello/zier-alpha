@@ -123,6 +123,26 @@ pub fn op_fs_remove(
     }
 }
 
+#[op2]
+#[serde]
+pub fn op_fs_read_dir(
+    state: &mut OpState,
+    #[string] path: String,
+) -> Result<Vec<String>, std::io::Error> {
+    let sandbox = state.borrow::<SandboxState>();
+    // Check permission (read)
+    let abs_path = check_path(&path, &sandbox.policy.allow_read, false, &sandbox)?;
+
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(abs_path)? {
+        let entry = entry?;
+        if let Ok(name) = entry.file_name().into_string() {
+            entries.push(name);
+        }
+    }
+    Ok(entries)
+}
+
 #[op2(fast)]
 pub fn op_write_file_exclusive(
     state: &mut OpState,
@@ -151,6 +171,32 @@ pub async fn op_sleep(#[serde] ms: u64) {
 #[string]
 pub fn op_random_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+#[op2]
+#[string]
+pub fn op_env_get(
+    state: &mut OpState,
+    #[string] key: String,
+) -> Option<String> {
+    let sandbox = state.borrow::<SandboxState>();
+    if !sandbox.policy.allow_env {
+        return None;
+    }
+    std::env::var(key).ok()
+}
+
+#[op2]
+#[string]
+pub fn op_temp_dir() -> String {
+    std::env::temp_dir().to_string_lossy().to_string()
+}
+
+#[op2]
+#[string]
+pub fn op_home_dir() -> Option<String> {
+    directories::BaseDirs::new()
+        .map(|b| b.home_dir().to_string_lossy().to_string())
 }
 
 #[op2(async)]
@@ -349,9 +395,13 @@ deno_core::extension!(
         op_write_file,
         op_fs_mkdir,
         op_fs_remove,
+        op_fs_read_dir,
         op_write_file_exclusive,
         op_sleep,
         op_random_uuid,
+        op_env_get,
+        op_temp_dir,
+        op_home_dir,
         op_fetch,
         op_log,
         op_register_tool,
@@ -417,6 +467,7 @@ impl DenoRuntime {
                 fetch: (url) => Deno.core.ops.op_fetch(url),
 
                 fileSystem: {
+                    readDir: (path) => Deno.core.ops.op_fs_read_dir(path),
                     mkdir: (path) => Deno.core.ops.op_fs_mkdir(path),
                     remove: (path) => Deno.core.ops.op_fs_remove(path),
                     writeFileExclusive: (path, content) => Deno.core.ops.op_write_file_exclusive(path, content)
@@ -435,7 +486,12 @@ impl DenoRuntime {
             // Zier Alpha Namespace
             globalThis.zier = {
                 os: {
-                    exec: (cmd, opts) => Deno.core.ops.op_zier_exec(cmd, opts || {})
+                    exec: (cmd, opts) => Deno.core.ops.op_zier_exec(cmd, opts || {}),
+                    env: {
+                        get: (key) => Deno.core.ops.op_env_get(key)
+                    },
+                    tempDir: () => Deno.core.ops.op_temp_dir(),
+                    homeDir: () => Deno.core.ops.op_home_dir()
                 },
                 ingress: {
                     push: (payload, source) => Deno.core.ops.op_zier_ingress_push(payload, source || "script")

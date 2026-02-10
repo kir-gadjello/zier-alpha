@@ -467,6 +467,10 @@ impl Session {
         Self::load_from_path(&path, session_id)
     }
 
+    pub fn load_file(path: &PathBuf, session_id: &str) -> Result<Self> {
+        Self::load_from_path(path, session_id)
+    }
+
     fn load_from_path(path: &PathBuf, session_id: &str) -> Result<Self> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);

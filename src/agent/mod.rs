@@ -301,6 +301,21 @@ impl Agent {
         Ok(())
     }
 
+    pub async fn hydrate_from_file(&mut self, path: &PathBuf) -> Result<()> {
+        let current_id = self.session.read().await.id().to_string();
+        // Load session from file, using current ID so we preserve the session identity
+        let loaded = Session::load_file(path, &current_id)?;
+
+        // Overwrite current session
+        {
+            let mut session = self.session.write().await;
+            *session = loaded;
+        }
+
+        info!("Hydrated session from {}", path.display());
+        Ok(())
+    }
+
     pub async fn set_system_prompt(&mut self, prompt: &str) {
         self.session.write().await.set_system_context(prompt.to_string());
     }

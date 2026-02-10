@@ -14,6 +14,10 @@ pub struct SandboxPolicy {
     /// List of paths/globs to allow write access to.
     #[serde(default)]
     pub allow_write: Vec<String>,
+
+    /// Allow reading environment variables
+    #[serde(default)]
+    pub allow_env: bool,
 }
 
 impl Default for SandboxPolicy {
@@ -27,6 +31,7 @@ impl Default for SandboxPolicy {
             // By default, allow writing to a specific temp directory if needed,
             // but for now we keep it strict.
             allow_write: vec![],
+            allow_env: false,
         }
     }
 }
