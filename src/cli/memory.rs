@@ -53,7 +53,7 @@ pub async fn run(args: MemoryArgs, agent_id: &str) -> Result<()> {
 }
 
 async fn search_memory(memory: &MemoryManager, query: &str, limit: usize) -> Result<()> {
-    let results = memory.search(query, limit)?;
+    let results = memory.search(query, limit).await?;
 
     if results.is_empty() {
         println!("No results found for '{}'", query);
@@ -95,7 +95,7 @@ async fn reindex_memory(memory: &MemoryManager, force: bool) -> Result<()> {
         if force { " (full)" } else { "" }
     );
 
-    let stats = memory.reindex(force)?;
+    let stats = memory.reindex(force).await?;
 
     println!("Reindex complete:");
     println!("  Files processed: {}", stats.files_processed);
@@ -119,7 +119,7 @@ async fn reindex_memory(memory: &MemoryManager, force: bool) -> Result<()> {
 }
 
 async fn show_stats(memory: &MemoryManager) -> Result<()> {
-    let stats = memory.stats()?;
+    let stats = memory.stats().await?;
 
     println!("Memory Statistics");
     println!("-----------------");

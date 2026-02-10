@@ -2,6 +2,7 @@ use crate::agent::providers::{
     create_provider, AnthropicProvider, ClaudeCliProvider, LLMProvider, LLMResponse, Message,
     OllamaProvider, OpenAIProvider, StreamResult, ToolSchema,
 };
+use crate::agent::llm_error::LlmError;
 use crate::config::{
     models::{resolve_model_config, ModelConfig},
     Config,
@@ -19,6 +20,7 @@ pub struct SmartResponse {
     pub latency_ms: u64,
 }
 
+#[derive(Clone)]
 pub struct SmartClient {
     config: Config,
     model_alias: String,
@@ -60,22 +62,32 @@ impl SmartClient {
 
         let err_str = error.to_string();
 
-        // Extract status code if present (e.g. "429 Too Many Requests")
-        let status_code = err_str
+        // Extract status code from LlmError if available
+        let status_code = if let Some(llm_err) = error.downcast_ref::<LlmError>() {
+             if let Some(code) = llm_err.status_code() {
+                 code.to_string()
+             } else {
+                 "500".to_string()
+             }
+        } else {
+            // Default to 500 if unknown, or try parsing string (legacy behavior)
+            err_str
             .split_whitespace()
             .find(|w| w.chars().all(char::is_numeric) && w.len() == 3)
-            .unwrap_or("500"); // Default to 500 if unknown
+            .unwrap_or("500")
+            .to_string()
+        };
 
         // Check allow list
         for pattern in &settings.allow {
-            if glob_match(pattern, status_code) {
+            if glob_match(pattern, &status_code) {
                 return true;
             }
         }
 
         // Check deny list
         for pattern in &settings.deny {
-            if glob_match(pattern, status_code) {
+            if glob_match(pattern, &status_code) {
                 return false;
             }
         }

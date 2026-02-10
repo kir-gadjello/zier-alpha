@@ -3,8 +3,8 @@
 use anyhow::Result;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use super::MemoryIndex;
@@ -22,7 +22,7 @@ pub struct MemoryWatcher {
 impl MemoryWatcher {
     pub fn new(workspace: PathBuf, db_path: PathBuf, config: MemoryConfig) -> Result<Self> {
         // Create a channel for receiving events
-        let (tx, rx) = mpsc::channel();
+        let (tx, mut rx) = mpsc::channel(100);
 
         // Create watcher with debounce
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
@@ -33,7 +33,7 @@ impl MemoryWatcher {
                         EventKind::Modify(_) | EventKind::Create(_) => {
                             for path in event.paths {
                                 if path.extension().map(|e| e == "md").unwrap_or(false) {
-                                    if let Err(e) = tx.send(path.clone()) {
+                                    if let Err(e) = tx.blocking_send(path.clone()) {
                                         warn!("Failed to send event: {}", e);
                                     }
                                 }
@@ -82,7 +82,8 @@ impl MemoryWatcher {
         let db_path_for_task = db_path.clone();
         let chunk_size = config.chunk_size;
         let chunk_overlap = config.chunk_overlap;
-        std::thread::spawn(move || {
+
+        tokio::spawn(async move {
             let index = match MemoryIndex::new_with_db_path(&workspace_for_task, &db_path_for_task)
             {
                 Ok(idx) => idx.with_chunk_config(chunk_size, chunk_overlap),
@@ -92,39 +93,18 @@ impl MemoryWatcher {
                 }
             };
 
-            // Debounce events
-            let debounce_duration = Duration::from_secs(2);
+            // Debounce logic is harder with async loop, but let's simplify.
+            // Just process events. Maybe add a small delay/buffer if needed.
+            // For now, straight processing.
 
-            loop {
-                match rx.recv_timeout(Duration::from_secs(1)) {
-                    Ok(path) => {
-                        debug!("File changed: {}", path.display());
+            while let Some(path) = rx.recv().await {
+                debug!("File changed: {}", path.display());
 
-                        // Debounce: wait for events to settle
-                        let mut last_event_time = std::time::Instant::now();
-                        while last_event_time.elapsed() < debounce_duration {
-                            match rx.recv_timeout(debounce_duration - last_event_time.elapsed()) {
-                                Ok(p) => {
-                                    debug!("Additional file changed: {}", p.display());
-                                    last_event_time = std::time::Instant::now();
-                                }
-                                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                                Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                            }
-                        }
-
-                        // Reindex the file
-                        if let Err(e) = index.index_file(&path, false) {
-                            warn!("Failed to reindex file {}: {}", path.display(), e);
-                        } else {
-                            info!("Reindexed: {}", path.display());
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        info!("Watcher channel disconnected");
-                        return;
-                    }
+                // Reindex the file
+                if let Err(e) = index.index_file(&path, false).await {
+                    warn!("Failed to reindex file {}: {}", path.display(), e);
+                } else {
+                    info!("Reindexed: {}", path.display());
                 }
             }
         });

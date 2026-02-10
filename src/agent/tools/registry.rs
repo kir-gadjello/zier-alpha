@@ -16,8 +16,8 @@ impl ToolRegistry {
         memory: Option<Arc<MemoryManager>>,
         script_tools: Vec<ScriptTool>,
         project_dir: PathBuf,
-    ) -> Result<Vec<Box<dyn Tool>>> {
-        let mut tools_map: HashMap<String, Box<dyn Tool>> = HashMap::new();
+    ) -> Result<Vec<Arc<dyn Tool>>> {
+        let mut tools_map: HashMap<String, Arc<dyn Tool>> = HashMap::new();
 
         // 1. Load Builtins
         let builtins = create_default_tools_with_project(config, memory, project_dir)?;
@@ -38,7 +38,7 @@ impl ToolRegistry {
             if tools_map.contains_key(tool.name()) {
                 warn!("Overriding builtin tool '{}' with script tool", tool.name());
             }
-            tools_map.insert(tool.name().to_string(), Box::new(tool));
+            tools_map.insert(tool.name().to_string(), Arc::new(tool));
         }
 
         Ok(tools_map.into_values().collect())
