@@ -216,6 +216,7 @@ pub async fn op_zier_exec(
     let (policy, project_dir) = {
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
+        // Here we call check_command with cmd
         (sandbox.safety_policy.check_command(&cmd, opts.cwd.as_deref().map(Path::new)).map_err(|e: anyhow::Error| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?, sandbox.project_dir.clone())
     };
 
@@ -225,10 +226,11 @@ pub async fn op_zier_exec(
             tracing::warn!("Soft block triggered: {}", msg);
         },
         CommandSafety::RequireApproval(msg) => {
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("Command requires approval: {}", msg)));
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Command requires approval: {}", msg)));
         },
         CommandSafety::HardBlock(msg) => {
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("Command blocked by safety policy: {}", msg)));
+            tracing::warn!("Blocking command: {}", msg);
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Command blocked by safety policy: {}", msg)));
         },
     }
 
@@ -253,7 +255,7 @@ pub async fn op_zier_exec(
         for key in env.keys() {
             let key_upper = key.to_uppercase();
             if key_upper == "PATH" || key_upper == "HOME" || key_upper.starts_with("LD_") || key_upper == "SHELL" || key_upper == "PYTHONPATH" {
-                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("Setting environment variable {} is not allowed", key)));
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Setting environment variable {} is not allowed", key)));
             }
         }
         command.envs(env);

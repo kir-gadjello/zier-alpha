@@ -22,7 +22,20 @@ async function withLock(fn) {
             await globalThis.pi.fileSystem.writeFileExclusive(LOCK_PATH, String(Date.now()));
             break;
         } catch (error) {
-            // Assume error means file exists (locked)
+            // Check for stale lock
+            try {
+                const lockTime = await globalThis.pi.readFile(LOCK_PATH);
+                if (Date.now() - Number(lockTime) > 5000) {
+                    // Stale lock (> 5s), force remove and retry immediately
+                    try {
+                        await globalThis.pi.fileSystem.remove(LOCK_PATH);
+                    } catch {}
+                    continue;
+                }
+            } catch (readError) {
+                // If read fails, maybe it was just deleted? Retry.
+            }
+
             retries--;
             if (retries === 0) throw new Error("Could not acquire state lock");
             await sleep(50);

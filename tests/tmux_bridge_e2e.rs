@@ -131,4 +131,79 @@ async fn test_tmux_bridge_lifecycle() {
 
     // Clean up last session
     service.execute_tool("tmux_control", &kill_args).await.unwrap();
+
+    // 10. Test Security Blocking (Command Heuristic)
+    println!("Testing security block (rm -rf)...");
+    let rm_args = serde_json::json!({
+        "name": "dangerous",
+        "command": "rm -rf /"
+    }).to_string();
+
+    let rm_result = service.execute_tool("tmux_spawn", &rm_args).await;
+    // The tool returns <error> in stdout, not Err in result
+    let rm_xml = rm_result.unwrap();
+    println!("Security check result: {}", rm_xml);
+    assert!(rm_xml.contains("error"));
+    // Allow either "safety policy" (if mapped correctly) or "invalid_argument" (if mapped to EINVAL)
+    // But we prefer "safety policy".
+    if !rm_xml.contains("safety policy") {
+        println!("WARNING: Error message did not contain 'safety policy', got: {}", rm_xml);
+        // If it's invalid_argument, accept it for now but note it's suboptimal.
+        // assert!(rm_xml.contains("invalid_argument"));
+        // Actually, let's enforce "safety policy" because I changed ErrorKind to Other.
+        assert!(rm_xml.contains("safety policy"));
+    }
+
+    // 11. Test Expect Tool (Interactive Automation)
+    println!("Testing expect tool...");
+
+    // Create a script to avoid shell chaining violation (since ; and && are blocked)
+    let script_path = workspace.join("interactive.py");
+    std::fs::write(&script_path, "import time; time.sleep(1); print('Enter password:', flush=True); time.sleep(5)").unwrap();
+
+    let expect_server_args = serde_json::json!({
+        "name": "interactive_server",
+        "command": format!("python3 {}", script_path.to_string_lossy())
+    }).to_string();
+
+    let spawn_res = service.execute_tool("tmux_spawn", &expect_server_args).await.unwrap();
+    println!("Spawn interactive: {}", spawn_res);
+    assert!(!spawn_res.contains("error"));
+
+    let expect_args = serde_json::json!({
+        "id": "interactive_server",
+        "pattern": "Enter password:",
+        "send": "my_secret",
+        "timeout": 3000
+    }).to_string();
+
+    let expect_res = service.execute_tool("tmux_expect", &expect_args).await.unwrap();
+    println!("Expect result: {}", expect_res);
+
+    assert!(expect_res.contains("<success>true</success>"));
+    assert!(expect_res.contains("sent response"));
+
+    // Verify input was received by checking history?
+    // tmux send-keys puts input into the pane, so it should be visible in history if echo is on.
+    // Or at least verify the expect tool claimed success.
+
+    // 12. Test Diff Tool
+    println!("Testing diff tool...");
+    let diff_args = serde_json::json!({
+        "id": "interactive_server"
+    }).to_string();
+
+    let diff_res = service.execute_tool("tmux_diff", &diff_args).await.unwrap();
+    println!("Diff result: {}", diff_res);
+
+    assert!(diff_res.contains("status"));
+    assert!(diff_res.contains("recent_logs"));
+    assert!(diff_res.contains("Enter password:")); // Should be in logs
+
+    // Cleanup
+    let kill_interactive = serde_json::json!({
+        "id": "interactive_server",
+        "action": "kill"
+    }).to_string();
+    service.execute_tool("tmux_control", &kill_interactive).await.unwrap();
 }

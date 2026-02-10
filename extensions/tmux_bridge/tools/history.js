@@ -1,5 +1,5 @@
 import { loadState } from "../lib/state.js";
-import { wrapXml, parseTime } from "../lib/utils.js";
+import { wrapXml, parseTime, stripAnsi } from "../lib/utils.js";
 
 const historyTool = {
     name: "tmux_history",
@@ -41,16 +41,58 @@ const historyTool = {
 
 const diffTool = {
     name: "tmux_diff",
-    description: "Show changes since last check (placeholder implementation)",
+    description: "Show status, recent events, and tail logs for a session to understand recent changes.",
     parameters: {
         type: "object",
         properties: {
-            id: { type: "string", description: "Session name" }
+            id: { type: "string", description: "Session name" },
+            since: { type: "string", description: "Time window for events (default '5m')" }
         },
         required: ["id"]
     },
     execute: async (ctx, args) => {
-        return wrapXml("diff_result", "Not fully implemented: use tmux_inspect tail/grep for now.");
+        const { id, since = "5m" } = args;
+        const state = await loadState();
+        const session = state.sessions[id];
+
+        if (!session) return wrapXml("error", "Session not found");
+
+        // 1. Get Events
+        const sinceTime = parseTime(since);
+        const recentEvents = (state.events || [])
+            .filter(e => e.sessionId === id && e.timestamp >= sinceTime);
+
+        let eventOutput = "";
+        for (const e of recentEvents) {
+            eventOutput += wrapXml("event",
+                wrapXml("type", e.type) +
+                wrapXml("payload", e.payload) +
+                wrapXml("timestamp", new Date(e.timestamp).toISOString())
+            );
+        }
+
+        // 2. Get Logs (Tail 20)
+        let logs = "";
+        try {
+            const logRes = await globalThis.zier.os.exec(["tmux", "-L", "zier", "capture-pane", "-t", session.tmux_id, "-p", "-S", "-20"]);
+            if (logRes.code === 0) {
+                logs = stripAnsi(logRes.stdout);
+            }
+        } catch {}
+
+        // 3. Status
+        // Check if actually running
+        let status = "unknown";
+        try {
+            const check = await globalThis.zier.os.exec(["tmux", "-L", "zier", "has-session", "-t", session.tmux_id]);
+            status = (check.code === 0) ? "running" : "dead";
+        } catch {}
+
+        return wrapXml("diff_result",
+            wrapXml("status", status) +
+            wrapXml("events", eventOutput || "None") +
+            wrapXml("recent_logs", logs)
+        );
     }
 };
 

@@ -41,7 +41,7 @@ const tool = {
         // tools/monitor.js -> ../monitor_daemon.js
         const currentUrl = import.meta.url;
         // e.g. file:///home/user/.zier/extensions/tmux_bridge/tools/monitor.js
-        const currentPath = currentUrl.replace("file://", "");
+        const currentPath = decodeURIComponent(currentUrl.replace("file://", ""));
         const toolsDir = currentPath.substring(0, currentPath.lastIndexOf('/'));
         const baseDir = toolsDir.substring(0, toolsDir.lastIndexOf('/'));
         const daemonPath = baseDir + "/monitor_daemon.js";
