@@ -1867,25 +1867,27 @@ impl LLMProvider for MockProvider {
             }
         }
 
-        let has_write_memory = messages.iter().any(|m| m.role == Role::User && m.content.contains("write memory"));
-        let last_is_tool = messages.last().map(|m| m.role == Role::Tool).unwrap_or(false);
+        let write_memory_msg = messages.iter().find(|m| m.role == Role::User && m.content.contains("write memory"));
+        let tool_result_success = messages.iter().any(|m| m.role == Role::Tool && m.content.contains("Successfully wrote"));
         
         // Mock logic: if user asks to "write memory", simulate tool call followed by text
-        if has_write_memory {
-            // First turn: return tool call
-            if !last_is_tool {
-                 return Ok(LLMResponse::tool_calls(vec![ToolCall {
-                    id: "call_1".to_string(),
-                    name: "write_file".to_string(),
-                    arguments: json!({
-                        "path": "MEMORY.md",
-                        "content": "Name: Kira"
-                    }).to_string(),
-                }]));
+        if let Some(msg) = write_memory_msg {
+            let name = msg.content.split_whitespace().last().unwrap_or("Kira");
+            
+            // If we already have a successful tool result, return the final answer
+            if tool_result_success {
+                return Ok(LLMResponse::text(format!("I've saved your name as {} in MEMORY.md.", name)));
             }
             
-            // Second turn (after tool result): return success text
-            return Ok(LLMResponse::text("I've saved your name as Kira in MEMORY.md.".to_string()));
+            // Otherwise, trigger the tool call
+            return Ok(LLMResponse::tool_calls(vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "write_file".to_string(),
+                arguments: json!({
+                    "path": "MEMORY.md",
+                    "content": format!("Name: {}", name)
+                }).to_string(),
+            }]));
         }
 
         Ok(LLMResponse::text("Mock response".to_string()))

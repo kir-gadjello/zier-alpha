@@ -259,6 +259,10 @@ pub struct ServerConfig {
     #[serde(default = "default_bind")]
     pub bind: String,
 
+    /// OpenAI-compatible proxy settings
+    #[serde(default)]
+    pub openai_proxy: OpenAIProxyConfig,
+
     /// Telegram mode: "webhook" or "polling"
     #[serde(default)]
     pub telegram_mode: TelegramMode,
@@ -275,6 +279,32 @@ pub struct ServerConfig {
     /// Long polling timeout in seconds (default 30)
     #[serde(default = "default_poll_timeout")]
     pub telegram_poll_timeout: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIProxyConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    #[serde(default = "default_openai_proxy_port")]
+    pub port: u16,
+
+    #[serde(default = "default_bind")]
+    pub bind: String,
+}
+
+impl Default for OpenAIProxyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            port: default_openai_proxy_port(),
+            bind: default_bind(),
+        }
+    }
+}
+
+fn default_openai_proxy_port() -> u16 {
+    37777
 }
 
 fn default_poll_timeout() -> u64 {
@@ -463,6 +493,7 @@ impl Default for ServerConfig {
             enabled: default_true(),
             port: default_port(),
             bind: default_bind(),
+            openai_proxy: OpenAIProxyConfig::default(),
             telegram_mode: TelegramMode::default(),
             owner_telegram_id: None,
             telegram_secret_token: None,
@@ -559,6 +590,9 @@ impl Config {
             ["server", "enabled"] => Ok(self.server.enabled.to_string()),
             ["server", "port"] => Ok(self.server.port.to_string()),
             ["server", "bind"] => Ok(self.server.bind.clone()),
+            ["server", "openai_proxy", "enabled"] => Ok(self.server.openai_proxy.enabled.to_string()),
+            ["server", "openai_proxy", "port"] => Ok(self.server.openai_proxy.port.to_string()),
+            ["server", "openai_proxy", "bind"] => Ok(self.server.openai_proxy.bind.clone()),
             ["memory", "workspace"] => Ok(self.memory.workspace.clone()),
             ["logging", "level"] => Ok(self.logging.level.clone()),
             _ => anyhow::bail!("Unknown config key: {}", key),
@@ -577,6 +611,9 @@ impl Config {
             ["server", "enabled"] => self.server.enabled = value.parse()?,
             ["server", "port"] => self.server.port = value.parse()?,
             ["server", "bind"] => self.server.bind = value.to_string(),
+            ["server", "openai_proxy", "enabled"] => self.server.openai_proxy.enabled = value.parse()?,
+            ["server", "openai_proxy", "port"] => self.server.openai_proxy.port = value.parse()?,
+            ["server", "openai_proxy", "bind"] => self.server.openai_proxy.bind = value.to_string(),
             ["memory", "workspace"] => self.memory.workspace = value.to_string(),
             ["logging", "level"] => self.logging.level = value.to_string(),
             _ => anyhow::bail!("Unknown config key: {}", key),
@@ -679,6 +716,11 @@ embedding_provider = "none"
 [server]
 enabled = true
 port = 31327
+bind = "127.0.0.1"
+
+[server.openai_proxy]
+enabled = true
+port = 37777
 bind = "127.0.0.1"
 
 [logging]

@@ -57,22 +57,22 @@ pub struct Server {
     bus: Option<Arc<IngressBus>>,
 }
 
-struct SessionEntry {
-    agent: Agent,
-    last_accessed: Instant,
+pub struct SessionEntry {
+    pub agent: Arc<Mutex<Agent>>,
+    pub last_accessed: Instant,
     /// Whether session has unsaved changes
-    dirty: bool,
+    pub dirty: bool,
 }
 
 pub struct AppState {
     pub config: Config,
-    sessions: Mutex<HashMap<String, SessionEntry>>,
+    pub sessions: Mutex<HashMap<String, SessionEntry>>,
     /// Shared MemoryManager to avoid reinitializing embedding provider
-    memory: MemoryManager,
+    pub memory: MemoryManager,
     /// In-process turn gate shared with heartbeat runner
-    turn_gate: TurnGate,
+    pub turn_gate: TurnGate,
     /// Cross-process workspace lock
-    workspace_lock: WorkspaceLock,
+    pub workspace_lock: WorkspaceLock,
     pub bus: Option<Arc<IngressBus>>,
 }
 
@@ -175,8 +175,10 @@ impl Server {
             .route("/api/saved-sessions/{session_id}", get(get_saved_session))
             .route("/api/logs/daemon", get(get_daemon_logs))
             .route("/webhooks/telegram", post(crate::server::telegram::webhook_handler))
-            .layer(cors)
-            .with_state(state);
+            .route("/v1/chat/completions", post(crate::server::openai::chat_completions))
+            .route("/v1/models", get(crate::server::openai::list_models))
+            .layer(cors.clone())
+            .with_state(state.clone());
 
         let addr: SocketAddr =
             format!("{}:{}", self.config.server.bind, self.config.server.port).parse()?;
@@ -184,6 +186,34 @@ impl Server {
         info!("Starting HTTP server on http://{}", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
+        
+        // Start OpenAI proxy if enabled
+        if self.config.server.openai_proxy.enabled {
+            let openai_addr: SocketAddr = format!(
+                "{}:{}",
+                self.config.server.openai_proxy.bind,
+                self.config.server.openai_proxy.port
+            ).parse()?;
+            
+            let openai_state = state.clone();
+            let openai_cors = cors.clone();
+            
+            tokio::spawn(async move {
+                let openai_app = Router::new()
+                    .route("/v1/chat/completions", post(crate::server::openai::chat_completions))
+                    .route("/v1/models", get(crate::server::openai::list_models))
+                    .layer(openai_cors)
+                    .with_state(openai_state);
+                
+                info!("Starting OpenAI-compatible proxy on http://{}", openai_addr);
+                if let Ok(listener) = tokio::net::TcpListener::bind(openai_addr).await {
+                    if let Err(e) = axum::serve(listener, openai_app).await {
+                        info!("OpenAI proxy error: {}", e);
+                    }
+                }
+            });
+        }
+
         axum::serve(listener, app).await?;
 
         Ok(())
@@ -191,7 +221,7 @@ impl Server {
 }
 
 // Error response type
-struct AppError(StatusCode, String);
+pub struct AppError(pub StatusCode, pub String);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
@@ -240,7 +270,7 @@ async fn load_persisted_sessions(state: &Arc<AppState>) -> Result<(), anyhow::Er
             sessions.insert(
                 session_info.id.clone(),
                 SessionEntry {
-                    agent,
+                    agent: Arc::new(Mutex::new(agent)),
                     last_accessed: Instant::now(),
                     dirty: false,
                 },
@@ -263,7 +293,8 @@ async fn save_dirty_sessions(state: &Arc<AppState>) {
 
     for (id, entry) in sessions.iter_mut() {
         if entry.dirty {
-            if let Err(e) = entry.agent.save_session_for_agent(HTTP_AGENT_ID).await {
+            let agent = entry.agent.lock().await;
+            if let Err(e) = agent.save_session_for_agent(HTTP_AGENT_ID).await {
                 debug!("Failed to save session {}: {}", id, e);
             } else {
                 entry.dirty = false;
@@ -329,7 +360,7 @@ async fn get_or_create_session(
     sessions.insert(
         new_id.clone(),
         SessionEntry {
-            agent,
+            agent: Arc::new(Mutex::new(agent)),
             last_accessed: Instant::now(),
             dirty: true, // New sessions should be saved
         },
@@ -477,10 +508,11 @@ async fn get_session_status(
 
     match sessions.get(&session_id) {
         Some(entry) => {
-            let status = entry.agent.session_status().await;
+            let agent = entry.agent.lock().await;
+            let status = agent.session_status().await;
             Json(SessionStatusResponse {
                 session_id,
-                model: entry.agent.model().to_string(),
+                model: agent.model().to_string(),
                 message_count: status.message_count,
                 token_count: status.token_count,
                 idle_seconds: entry.last_accessed.elapsed().as_secs(),
@@ -519,8 +551,8 @@ async fn get_session_messages(
         Some(entry) => {
             entry.last_accessed = Instant::now();
 
-            let messages: Vec<ActiveSessionMessage> = entry
-                .agent
+            let agent = entry.agent.lock().await;
+            let messages: Vec<ActiveSessionMessage> = agent
                 .raw_session_messages()
                 .await
                 .iter()
@@ -580,7 +612,8 @@ async fn compact_session(
         Some(entry) => {
             entry.last_accessed = Instant::now();
 
-            match entry.agent.compact_session().await {
+            let mut agent = entry.agent.lock().await;
+            match agent.compact_session().await {
                 Ok((before, after)) => Json(json!({
                     "session_id": session_id,
                     "token_count_before": before,
@@ -606,7 +639,7 @@ async fn clear_session(
     match sessions.get_mut(&session_id) {
         Some(entry) => {
             entry.last_accessed = Instant::now();
-            entry.agent.clear_session().await;
+            entry.agent.lock().await.clear_session().await;
             Json(json!({"session_id": session_id, "cleared": true})).into_response()
         }
         None => AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response(),
@@ -630,7 +663,7 @@ async fn set_session_model(
         Some(entry) => {
             entry.last_accessed = Instant::now();
 
-            match entry.agent.set_model(&request.model) {
+            match entry.agent.lock().await.set_model(&request.model) {
                 Ok(()) => Json(json!({
                     "session_id": session_id,
                     "model": request.model,
@@ -690,36 +723,47 @@ async fn chat(State(state): State<Arc<AppState>>, Json(request): Json<ChatReques
     };
 
     // Get agent from session
-    let mut sessions = state.sessions.lock().await;
-    let entry = match sessions.get_mut(&session_id) {
-        Some(e) => e,
-        None => {
-            return AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response()
-        }
+    let agent = {
+        let mut sessions = state.sessions.lock().await;
+        let entry = match sessions.get_mut(&session_id) {
+            Some(e) => e,
+            None => {
+                return AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response()
+            }
+        };
+
+        entry.last_accessed = Instant::now();
+        entry.agent.clone()
     };
 
-    entry.last_accessed = Instant::now();
+    let mut agent_lock = agent.lock().await;
 
     // Switch model if requested
     if let Some(ref model) = request.model {
-        if let Err(e) = entry.agent.set_model(model) {
+        if let Err(e) = agent_lock.set_model(model) {
             return AppError(StatusCode::BAD_REQUEST, format!("Invalid model: {}", e))
                 .into_response();
         }
     }
 
-    let result = entry.agent.chat(&request.message).await;
+    let result = agent_lock.chat(&request.message).await;
 
     // Release workspace lock explicitly before returning
     drop(ws_guard);
 
     match result {
         Ok(response) => {
-            entry.dirty = true;
+            // Update dirty flag
+            {
+                let mut sessions = state.sessions.lock().await;
+                if let Some(entry) = sessions.get_mut(&session_id) {
+                    entry.dirty = true;
+                }
+            }
             Json(ChatResponse {
                 response,
                 session_id,
-                model: entry.agent.model().to_string(),
+                model: agent_lock.model().to_string(),
             })
             .into_response()
         }
@@ -765,20 +809,26 @@ async fn chat_stream(
             }
         };
 
-        let mut sessions = state_clone.sessions.lock().await;
-        let entry = match sessions.get_mut(&session_id) {
-            Some(e) => e,
-            None => {
-                yield Ok(Event::default().data(json!({"error": "Session not found"}).to_string()));
-                return;
-            }
+        // Get agent from session
+        let agent = {
+            let mut sessions = state_clone.sessions.lock().await;
+            let entry = match sessions.get_mut(&session_id) {
+                Some(e) => e,
+                None => {
+                    yield Ok(Event::default().data(json!({"error": "Session not found"}).to_string()));
+                    return;
+                }
+            };
+
+            entry.last_accessed = Instant::now();
+            entry.dirty = true;
+            entry.agent.clone()
         };
 
-        entry.last_accessed = Instant::now();
-        entry.dirty = true;
+        let mut agent_lock = agent.lock().await;
 
         // Use streaming with tools
-        match entry.agent.chat_stream_with_tools(&message, Vec::new()).await {
+        match agent_lock.chat_stream_with_tools(&message, Vec::new()).await {
             Ok(event_stream) => {
                 use futures::StreamExt;
 
@@ -1455,25 +1505,37 @@ async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
                             };
 
                         // Process chat
-                        let mut sessions = state.sessions.lock().await;
-                        let entry = match sessions.get_mut(&session_id) {
-                            Some(e) => e,
-                            None => {
-                                let error = WsOutgoing::Error {
-                                    message: "Session not found".to_string(),
-                                };
-                                if let Ok(json) = serde_json::to_string(&error) {
-                                    let _ = sender.send(WsMessage::Text(json.into())).await;
+                        let agent = {
+                            let mut sessions = state.sessions.lock().await;
+                            let entry = match sessions.get_mut(&session_id) {
+                                Some(e) => e,
+                                None => {
+                                    let error = WsOutgoing::Error {
+                                        message: "Session not found".to_string(),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&error) {
+                                        let _ = sender.send(WsMessage::Text(json.into())).await;
+                                    }
+                                    current_session_id = None;
+                                    continue;
                                 }
-                                current_session_id = None;
-                                continue;
-                            }
+                            };
+
+                            entry.last_accessed = Instant::now();
+                            entry.agent.clone()
                         };
 
-                        entry.last_accessed = Instant::now();
+                        let mut agent_lock = agent.lock().await;
 
-                        match entry.agent.chat(&message).await {
+                        match agent_lock.chat(&message).await {
                             Ok(response) => {
+                                // Update dirty flag
+                                {
+                                    let mut sessions = state.sessions.lock().await;
+                                    if let Some(entry) = sessions.get_mut(&session_id) {
+                                        entry.dirty = true;
+                                    }
+                                }
                                 // Send response as content
                                 let content = WsOutgoing::Content { delta: response };
                                 if let Ok(json) = serde_json::to_string(&content) {
