@@ -1,3 +1,4 @@
+```
 o         .      o     .        o          .      o      .
               ᛏᚷᚱᛟᛏᛏᛟᛋᚨᚱᚢᚷᚱᛟᛏᛏᛟᛋᚨᚱᚢᚷᚱᛟᛏᛏᛟᛋᛋᛟᛏᛏᛟᚱᚷᚢᚱᚨᛋᛟᛏᛏᛟᚱᚷᚢᚱᚨᛋᛟᛏ
             ╔════════════════════════════════════════════════════════════════════╗
@@ -14,7 +15,7 @@ o         .      o     .        o          .      o      .
             ╚════════════════════════════════════════════════════════════════════╝
                  ᚨᚠᚢᚦᚨᚱᚲᚷᚱᛟᛏᛏᛟᛋᚨᚱᚢᚠᚦᚨᚱᚲᚷᚱᛟᛏᛏᛟᛟᛏᛏᛟᚱᚷᚲᚱᚨᚦᚠᚢᚱᚨᛋᛟᛏᛏᛟᚱᚷᚲ
                   °   .    o    .   °    .   o    .    °    .   o    .   °
-
+```
 # Zier-Alpha
 
 A local-first cognitive kernel engineered in Rust. This is the alpha foundation of Vizier, a silicon-based Staffer that enforces a strict separation between cognition and execution. Featuring persistent memory and autonomous agency, it reserves the root context for reasoning while strictly confining tool use to secure, discrete environments.
