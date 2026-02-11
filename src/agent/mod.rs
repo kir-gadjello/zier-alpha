@@ -8,6 +8,7 @@ mod skills;
 mod system_prompt;
 pub mod tools;
 pub mod llm_error;
+pub mod mcp_manager;
 
 pub use llm_error::LlmError;
 pub use providers::{

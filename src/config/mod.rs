@@ -73,6 +73,15 @@ pub struct Config {
 
     #[serde(default)]
     pub workdir: WorkdirConfig,
+
+    #[serde(default)]
+    pub extensions: ExtensionsConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExtensionsConfig {
+    #[serde(default)]
+    pub mcp: Option<crate::agent::mcp_manager::McpConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

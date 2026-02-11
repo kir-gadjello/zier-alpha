@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tracing::error;
 use crate::ingress::IngressBus;
 use crate::scheduler::Scheduler;
+use crate::agent::mcp_manager::McpManager;
 
 enum ScriptCommand {
     LoadScript {
@@ -52,7 +53,10 @@ impl ScriptService {
             match runtime {
                 Ok(rt) => {
                     rt.block_on(async move {
-                        let mut deno = match DenoRuntime::new(policy, workspace, project_dir, strategy, ingress_bus, scheduler) {
+                        // Initialize MCP Manager with 600s idle timeout
+                        let mcp_manager = McpManager::new(600);
+
+                        let mut deno = match DenoRuntime::new(policy, workspace, project_dir, strategy, ingress_bus, scheduler, Some(mcp_manager)) {
                             Ok(d) => d,
                             Err(e) => {
                                 error!("Failed to initialize Deno runtime: {}", e);
