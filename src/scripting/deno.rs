@@ -12,6 +12,7 @@ use crate::agent::tools::resolve_path;
 use crate::scripting::safety::{SafetyPolicy, CommandSafety};
 use crate::ingress::{IngressBus, IngressMessage, TrustLevel};
 use crate::scheduler::Scheduler;
+use crate::agent::mcp_manager::{McpManager, ServerConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DenoToolDefinition {
@@ -29,6 +30,7 @@ pub struct SandboxState {
     pub safety_policy: SafetyPolicy,
     pub ingress_bus: Option<Arc<IngressBus>>,
     pub scheduler: Option<Arc<Mutex<Scheduler>>>,
+    pub mcp_manager: Option<Arc<McpManager>>,
 }
 
 fn check_path(path: &str, allowed_paths: &[String], is_write: bool, state: &SandboxState) -> Result<PathBuf, std::io::Error> {
@@ -367,6 +369,109 @@ pub async fn op_zier_scheduler_register(
     }
 }
 
+// MCP Operations
+#[op2(async)]
+pub async fn op_zier_mcp_initialize(
+    state: Rc<RefCell<OpState>>,
+    #[serde] configs: Vec<ServerConfig>,
+) -> Result<(), std::io::Error> {
+    let manager = {
+        let state = state.borrow();
+        let sandbox = state.borrow::<SandboxState>();
+        sandbox.mcp_manager.clone()
+    };
+
+    if let Some(manager) = manager {
+        manager.initialize(configs).await;
+        Ok(())
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+    }
+}
+
+#[op2(async)]
+pub async fn op_zier_mcp_ensure_server(
+    state: Rc<RefCell<OpState>>,
+    #[string] server_name: String,
+) -> Result<(), std::io::Error> {
+    let manager = {
+        let state = state.borrow();
+        let sandbox = state.borrow::<SandboxState>();
+        sandbox.mcp_manager.clone()
+    };
+
+    if let Some(manager) = manager {
+        manager.ensure_server(&server_name).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        Ok(())
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+    }
+}
+
+#[op2(async)]
+#[serde]
+pub async fn op_zier_mcp_list_tools(
+    state: Rc<RefCell<OpState>>,
+    #[string] server_name: String,
+) -> Result<Vec<serde_json::Value>, std::io::Error> {
+    let manager = {
+        let state = state.borrow();
+        let sandbox = state.borrow::<SandboxState>();
+        sandbox.mcp_manager.clone()
+    };
+
+    if let Some(manager) = manager {
+        let tools = manager.list_tools(&server_name).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        Ok(tools)
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+    }
+}
+
+#[op2(async)]
+#[serde]
+pub async fn op_zier_mcp_call(
+    state: Rc<RefCell<OpState>>,
+    #[string] server_name: String,
+    #[string] tool_name: String,
+    #[serde] args: serde_json::Value,
+) -> Result<serde_json::Value, std::io::Error> {
+    let manager = {
+        let state = state.borrow();
+        let sandbox = state.borrow::<SandboxState>();
+        sandbox.mcp_manager.clone()
+    };
+
+    if let Some(manager) = manager {
+        let res = manager.call(&server_name, "tools/call", serde_json::json!({
+            "name": tool_name,
+            "arguments": args
+        })).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        Ok(res)
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+    }
+}
+
+#[op2(async)]
+pub async fn op_zier_mcp_shutdown(
+    state: Rc<RefCell<OpState>>,
+    #[string] server_name: Option<String>,
+) -> Result<(), std::io::Error> {
+    let manager = {
+        let state = state.borrow();
+        let sandbox = state.borrow::<SandboxState>();
+        sandbox.mcp_manager.clone()
+    };
+
+    if let Some(manager) = manager {
+        manager.shutdown(server_name.as_deref()).await;
+        Ok(())
+    } else {
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+    }
+}
+
 // Needed to make SandboxState cloneable for above usage or just re-borrow
 impl Clone for SandboxState {
     fn clone(&self) -> Self {
@@ -384,6 +489,7 @@ impl Clone for SandboxState {
             },
             ingress_bus: self.ingress_bus.clone(),
             scheduler: self.scheduler.clone(),
+            mcp_manager: self.mcp_manager.clone(),
         }
     }
 }
@@ -407,7 +513,12 @@ deno_core::extension!(
         op_register_tool,
         op_zier_exec,
         op_zier_ingress_push,
-        op_zier_scheduler_register
+        op_zier_scheduler_register,
+        op_zier_mcp_initialize,
+        op_zier_mcp_ensure_server,
+        op_zier_mcp_list_tools,
+        op_zier_mcp_call,
+        op_zier_mcp_shutdown
     ],
 );
 
@@ -422,7 +533,8 @@ impl DenoRuntime {
         project_dir: PathBuf,
         strategy: WorkdirStrategy,
         ingress_bus: Option<Arc<IngressBus>>,
-        scheduler: Option<Arc<Mutex<Scheduler>>>
+        scheduler: Option<Arc<Mutex<Scheduler>>>,
+        mcp_manager: Option<Arc<McpManager>>
     ) -> Result<Self, AnyError> {
         let loader = std::rc::Rc::new(deno_core::FsModuleLoader);
         let mut runtime = JsRuntime::new(RuntimeOptions {
@@ -442,13 +554,14 @@ impl DenoRuntime {
             safety_policy,
             ingress_bus,
             scheduler,
+            mcp_manager,
         };
         runtime.op_state().borrow_mut().put(state);
 
         let bootstrap_code = r#"
             globalThis.console = { log: (msg) => Deno.core.ops.op_log(String(msg)) };
             globalThis.setTimeout = (callback, delay) => {
-                Deno.core.ops.op_sleep(delay).then(callback);
+                Deno.core.ops.op_sleep(delay).then(() => callback());
                 return 0; // dummy handle
             };
             globalThis.crypto = {
@@ -499,6 +612,13 @@ impl DenoRuntime {
                 scheduler: {
                     register: (name, cron, script_path) => Deno.core.ops.op_zier_scheduler_register(name, cron, script_path)
                 },
+                mcp: {
+                    initialize: (configs) => Deno.core.ops.op_zier_mcp_initialize(configs),
+                    ensureServer: (name) => Deno.core.ops.op_zier_mcp_ensure_server(name),
+                    listTools: (name) => Deno.core.ops.op_zier_mcp_list_tools(name),
+                    call: (server, tool, args) => Deno.core.ops.op_zier_mcp_call(server, tool, args),
+                    shutdown: (name) => Deno.core.ops.op_zier_mcp_shutdown(name)
+                },
                 hooks: {
                     on_status: undefined
                 },
@@ -535,33 +655,7 @@ impl DenoRuntime {
         );
 
         let promise_global = self.runtime.execute_script("<tool_exec>", code)?;
-        
-        let result_global = loop {
-            let state = {
-                let scope = &mut self.runtime.handle_scope();
-                let promise_local = v8::Local::new(scope, &promise_global);
-                let promise = v8::Local::<v8::Promise>::try_from(promise_local)?;
-                
-                match promise.state() {
-                    v8::PromiseState::Pending => None,
-                    v8::PromiseState::Fulfilled => {
-                        let value = promise.result(scope);
-                        Some(Ok(v8::Global::new(scope, value)))
-                    }
-                    v8::PromiseState::Rejected => {
-                        let exception = promise.result(scope);
-                        let msg = exception.to_rust_string_lossy(scope);
-                        Some(Err(anyhow::anyhow!("Promise rejected: {}", msg)))
-                    }
-                }
-            };
-
-            if let Some(res) = state {
-                break res?;
-            }
-
-            self.runtime.run_event_loop(Default::default()).await?;
-        };
+        let result_global = self.runtime.resolve_value(promise_global).await?;
 
         let scope = &mut self.runtime.handle_scope();
         let value = v8::Local::new(scope, result_global);

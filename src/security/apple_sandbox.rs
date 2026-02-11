@@ -64,6 +64,7 @@ mod tests {
             allow_network: false,
             allow_read: vec!["/tmp".to_string()],
             allow_write: vec![],
+            allow_env: false,
         };
         let profile = compile_profile(&policy, "/usr/bin/python3", "/tmp/script.py");
 
@@ -81,6 +82,7 @@ mod tests {
             allow_network: true,
             allow_read: vec![],
             allow_write: vec![],
+            allow_env: false,
         };
         let profile = compile_profile(&policy, "/bin/bash", "/tmp/script.sh");
 

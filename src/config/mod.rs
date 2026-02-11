@@ -82,6 +82,8 @@ pub struct Config {
 pub struct ExtensionsConfig {
     #[serde(default)]
     pub hive: Option<HiveExtensionConfig>,
+    #[serde(default)]
+    pub mcp: Option<crate::agent::mcp_manager::McpConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

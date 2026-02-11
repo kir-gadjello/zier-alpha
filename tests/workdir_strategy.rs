@@ -89,6 +89,7 @@ async fn test_deno_tool_routing() {
         allow_network: false,
         allow_read: vec![workspace_dir.to_string_lossy().to_string(), project_dir.to_string_lossy().to_string()],
         allow_write: vec![workspace_dir.to_string_lossy().to_string(), project_dir.to_string_lossy().to_string()],
+        allow_env: false,
     };
 
     let service = ScriptService::new(policy, workspace_dir.clone(), project_dir.clone(), WorkdirStrategy::Overlay, None, None).unwrap();
