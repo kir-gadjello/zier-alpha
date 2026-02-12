@@ -99,26 +99,8 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
             if let Some(path) = hive_path {
                  tracing::info!("Loading Hive extension from: {}", path.display());
 
-                 // Initialize ScriptService
-                 // Configure permissive policy for Hive extension (needs to read agents, write tmp files)
-                 let mut policy = zier_alpha::config::SandboxPolicy::default();
-                 policy.allow_read.push("agents".to_string());
-                 policy.allow_read.push("extensions".to_string());
-                 // Allow temp dir (platform agnostic)
-                 let temp_dir = std::env::temp_dir().to_string_lossy().to_string();
-                 policy.allow_read.push(temp_dir.clone());
-                 policy.allow_write.push(temp_dir);
-
-                 // Allow env access for extension communication
-                 policy.allow_env = true;
-
-                 // Allow reading workspace
-                 policy.allow_read.push(config.workspace_path().to_string_lossy().to_string());
-                 policy.allow_write.push(config.workspace_path().to_string_lossy().to_string());
-                 // Allow project dir
-                 policy.allow_read.push(project_dir.to_string_lossy().to_string());
-                 policy.allow_write.push(project_dir.to_string_lossy().to_string());
-
+                 // Initialize ScriptService with extension policy
+                 let policy = crate::cli::common::make_extension_policy(&project_dir, &config.workspace_path());
                  let service = ScriptService::new(
                      policy,
                      config.workspace_path(),

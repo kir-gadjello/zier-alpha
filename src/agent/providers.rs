@@ -1920,16 +1920,16 @@ impl LLMProvider for MockProvider {
 
         let write_memory_msg = messages.iter().find(|m| m.role == Role::User && m.content.contains("write memory"));
         let tool_result_success = messages.iter().any(|m| m.role == Role::Tool && m.content.contains("Successfully wrote"));
-        
+
         // Mock logic: if user asks to "write memory", simulate tool call followed by text
         if let Some(msg) = write_memory_msg {
             let name = msg.content.split_whitespace().last().unwrap_or("Kira");
-            
+
             // If we already have a successful tool result, return the final answer
             if tool_result_success {
                 return Ok(LLMResponse::text(format!("I've saved your name as {} in MEMORY.md.", name)));
             }
-            
+
             // Otherwise, trigger the tool call
             return Ok(LLMResponse::tool_calls(vec![ToolCall {
                 id: "call_1".to_string(),
@@ -1939,6 +1939,21 @@ impl LLMProvider for MockProvider {
                     "content": format!("Name: {}", name)
                 }).to_string(),
             }]));
+        }
+
+        // Special case for Hive hydration test: if the latest user message asks "What is the secret code?"
+        // and any prior user message contains "secret code is 42", return the secret.
+        if messages.len() >= 2 {
+            // Find the last user message
+            let last_user_msg = messages.iter().filter(|m| m.role == Role::User).last().unwrap();
+            if last_user_msg.content.contains("What is the secret code") {
+                // Search backwards for a prior user message with the secret
+                for msg in messages.iter().rev().skip(1) {
+                    if msg.role == Role::User && msg.content.contains("secret code is 42") {
+                        return Ok(LLMResponse::text("The secret code is 42".to_string()));
+                    }
+                }
+            }
         }
 
         Ok(LLMResponse::text("Mock response".to_string()))

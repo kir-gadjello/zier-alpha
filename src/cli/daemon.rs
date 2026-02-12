@@ -180,11 +180,16 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     // Wrap scheduler for sharing
     let scheduler = std::sync::Arc::new(tokio::sync::Mutex::new(scheduler));
 
+    // Determine project directory for extension sandbox
+    let project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Build a permissive policy for extensions
+    let extension_policy = crate::cli::common::make_extension_policy(&project_dir, &config.workspace_path());
+
     // VIZIER: Initialize Scripting Service
     let script_service = ScriptService::new(
-        Default::default(), 
+        extension_policy,
         config.workspace_path(),
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        project_dir.clone(),
         config.workdir.strategy.clone(),
         Some(bus.clone()),
         Some(scheduler.clone())

@@ -9,11 +9,14 @@ use std::path::PathBuf;
 use zier_alpha::agent::{
     extract_tool_detail, get_last_session_id_for_agent, get_skills_summary,
     list_sessions_for_agent, load_skills, parse_skill_command, search_sessions_for_agent, Agent,
-    AgentConfig, ContextStrategy, ImageAttachment, Skill,
+    AgentConfig, ContextStrategy, ImageAttachment, Skill, ScriptTool,
 };
 use zier_alpha::concurrency::WorkspaceLock;
 use zier_alpha::config::Config;
 use zier_alpha::memory::MemoryManager;
+use zier_alpha::scripting::ScriptService;
+use std::sync::Arc;
+use crate::cli::common::make_extension_policy;
 
 /// Adjust a byte index to the nearest valid UTF-8 char boundary (searching forward).
 fn floor_char_boundary(s: &str, index: usize) -> usize {
@@ -142,7 +145,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         reserve_tokens: config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Full, project_dir).await?;
+    let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Full, project_dir.clone()).await?;
     let workspace_lock = WorkspaceLock::new()?;
 
     // Determine session to use
@@ -202,6 +205,77 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
 
     // Store agent_id for command handling
     let agent_id = agent_id.to_string();
+
+    // Load enabled extensions (e.g., Hive)
+    if let Some(ref hive_config) = config.extensions.hive {
+        if hive_config.enabled {
+            // Find hive extension path
+            let mut hive_path = None;
+            // 1. Check user config dir (~/.zier-alpha/extensions/hive/main.js)
+            if let Ok(config_path) = Config::config_path() {
+                if let Some(parent) = config_path.parent() {
+                    let p = parent.join("extensions").join("hive").join("main.js");
+                    if p.exists() {
+                        hive_path = Some(p);
+                    }
+                }
+            }
+            // 2. Check relative to binary/installed location
+            if hive_path.is_none() {
+                if let Ok(exe_path) = std::env::current_exe() {
+                    if let Some(parent) = exe_path.parent() {
+                        // Check ../extensions/hive/main.js (installed structure)
+                        let p = parent.join("../extensions/hive/main.js");
+                        if p.exists() {
+                            hive_path = Some(p);
+                        } else {
+                            // Check extensions/hive/main.js relative to cwd (dev)
+                            let p = std::env::current_dir().unwrap_or_default().join("extensions/hive/main.js");
+                            if p.exists() {
+                                hive_path = Some(p);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(path) = hive_path {
+                tracing::info!("Loading Hive extension from: {}", path.display());
+                let policy = make_extension_policy(&project_dir, &config.workspace_path());
+                let service = match ScriptService::new(
+                    policy,
+                    config.workspace_path(),
+                    project_dir.clone(),
+                    config.workdir.strategy.clone(),
+                    None,
+                    None
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!("Failed to initialize ScriptService for Hive: {}", e);
+                        return Err(e);
+                    }
+                };
+                if let Err(e) = service.load_script(path.to_str().unwrap()).await {
+                    tracing::error!("Failed to load Hive extension: {}", e);
+                } else {
+                    match service.get_tools().await {
+                        Ok(tools) => {
+                            let mut current_tools = agent.tools().to_vec();
+                            for tool_def in tools {
+                                current_tools.push(Arc::new(ScriptTool::new(tool_def, service.clone())));
+                            }
+                            agent.set_tools(current_tools);
+                            tracing::info!("Hive extension loaded successfully");
+                        }
+                        Err(e) => tracing::error!("Failed to get tools from Hive extension: {}", e),
+                    }
+                }
+            } else {
+                tracing::warn!("Hive extension enabled but main.js not found");
+            }
+        }
+    }
 
     let mut rl = DefaultEditor::new()?;
     let mut stdout = io::stdout();

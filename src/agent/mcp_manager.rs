@@ -131,7 +131,6 @@ impl McpManager {
             if let Some(handle) = servers.get(server_name) {
                 // Check if process is still running
                 if let Ok(Some(_)) = handle.process.write().await.try_wait() {
-                    // Process exited
                     remove_stale = true;
                 } else {
                     let mut last_used = handle.last_used.write().await;
@@ -139,18 +138,16 @@ impl McpManager {
                     return Ok(());
                 }
             }
-            drop(servers); // Drop read lock before acquiring write lock
+            drop(servers); // Release read lock before acquiring write lock
 
             if remove_stale {
                 info!("Removing stale MCP server: {}", server_name);
                 let mut servers = self.servers.write().await;
-                // Double check
                 let is_dead = if let Some(handle) = servers.get(server_name) {
                     matches!(handle.process.write().await.try_wait(), Ok(Some(_)))
                 } else {
                     false
                 };
-
                 if is_dead {
                     servers.remove(server_name);
                 }
@@ -183,7 +180,6 @@ impl McpManager {
         let (tx, mut rx) = mpsc::channel::<JsonRpcRequest>(32);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
-        // Pending requests map: ID -> Sender
         let pending = Arc::new(RwLock::new(HashMap::<u64, oneshot::Sender<Result<serde_json::Value>>>::new()));
 
         // Writer task
@@ -200,7 +196,7 @@ impl McpManager {
                     break;
                 }
                 if let Err(e) = writer_stdin.flush().await {
-                     error!("Failed to flush stdin: {}", e);
+                    error!("Failed to flush stdin: {}", e);
                     break;
                 }
             }
@@ -210,7 +206,6 @@ impl McpManager {
         let reader_stdout = BufReader::new(stdout);
         let pending_clone = pending.clone();
         let server_name_clone = server_name.to_string();
-
         tokio::spawn(async move {
             let mut lines = reader_stdout.lines();
             loop {
@@ -237,7 +232,7 @@ impl McpManager {
                                     }
                                 }
                             }
-                            Ok(None) => break, // EOF
+                            Ok(None) => break,
                             Err(e) => {
                                 error!("[{}] Error reading stdout: {}", server_name_clone, e);
                                 break;
@@ -250,7 +245,7 @@ impl McpManager {
                     }
                 }
             }
-            // Cleanup pending requests
+            // Notify any pending requests
             let mut map = pending_clone.write().await;
             for (_, tx) in map.drain() {
                 let _ = tx.send(Err(anyhow!("Server terminated")));
@@ -267,7 +262,7 @@ impl McpManager {
             }
         });
 
-        // Initial handshake
+        // Handshake with cleanup on any error after this point
         let init_req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "initialize".to_string(),
@@ -285,26 +280,54 @@ impl McpManager {
             map.insert(0, resp_tx);
         }
 
+        // Send initialize request
         if let Err(e) = tx.send(init_req).await {
-             return Err(anyhow!("Failed to send initialize request: {}", e));
+            // Cleanup
+            let _ = shutdown_tx.send(());
+            // Drop tx (implicitly when function returns)
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(anyhow!("Failed to send initialize request: {}", e));
         }
 
+        // Wait for response with timeout
         match tokio::time::timeout(Duration::from_secs(10), resp_rx).await {
             Ok(Ok(Ok(_))) => {
-                 // Send 'notifications/initialized'
-                 let notif = JsonRpcRequest {
+                // Send 'notifications/initialized'
+                let notif = JsonRpcRequest {
                     jsonrpc: "2.0".to_string(),
                     method: "notifications/initialized".to_string(),
                     params: serde_json::json!({}),
                     id: None,
                 };
-                 let _ = tx.send(notif).await;
-            },
-            Ok(Ok(Err(e))) => return Err(anyhow!("Initialize failed: {}", e)),
-            Ok(Err(_)) => return Err(anyhow!("Initialize response channel closed")),
-            Err(_) => return Err(anyhow!("Initialize timed out")),
+                if let Err(e) = tx.send(notif).await {
+                    let _ = shutdown_tx.send(());
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    return Err(anyhow!("Failed to send initialized notification: {}", e));
+                }
+            }
+            Ok(Ok(Err(e))) => {
+                let _ = shutdown_tx.send(());
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(anyhow!("Initialize failed: {}", e));
+            }
+            Ok(Err(_)) => {
+                let _ = shutdown_tx.send(());
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(anyhow!("Initialize response channel closed"));
+            }
+            Err(_) => {
+                let _ = shutdown_tx.send(());
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(anyhow!("Initialize timed out"));
+            }
         }
 
+        // Create handle after successful handshake
         let handle = ServerHandle {
             process: Arc::new(RwLock::new(child)),
             sender: tx,
@@ -313,28 +336,24 @@ impl McpManager {
             pending,
         };
 
-        // 3. Acquire write lock & Double check
+        // Insert into map, handling concurrent insertion
         let mut servers = self.servers.write().await;
-
         if let Some(existing) = servers.get(server_name) {
             info!("Server {} started concurrently by another task. Using existing instance.", server_name);
-
-            // Kill our redundant process
+            // Cleanup our redundant process
             if let Some(tx) = handle.shutdown_tx.write().await.take() {
                 let _ = tx.send(());
             }
             let mut process = handle.process.write().await;
             let _ = process.kill().await;
             let _ = process.wait().await;
-
-            // Update existing last_used
+            // Update last_used on existing
             let mut last_used = existing.last_used.write().await;
             *last_used = Instant::now();
             return Ok(());
         }
 
         servers.insert(server_name.to_string(), handle);
-
         Ok(())
     }
 

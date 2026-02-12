@@ -205,7 +205,7 @@ You are EchoBot.
     // The orchestrator throws if it fails to write the hydration file.
 
     assert!(output_fork.status.success());
-    assert!(stdout_fork.contains("Mock response"));
+    assert!(stdout_fork.contains("The secret code is 42"), "Expected hydrated response with secret, got: {}", stdout_fork);
 
     Ok(())
 }

@@ -1,5 +1,6 @@
 pub mod ask;
 pub mod chat;
+pub mod common;
 pub mod config;
 pub mod daemon;
 #[cfg(feature = "desktop")]
