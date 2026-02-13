@@ -46,7 +46,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, error};
 
 pub use client::{SmartClient, SmartResponse};
 pub use compaction::{CompactionStrategy, NativeCompactor, ScriptCompactor};
@@ -107,7 +107,7 @@ impl Agent {
         config: AgentConfig,
         app_config: &Config,
         memory: MemoryManager,
-        context_strategy: ContextStrategy,
+        _context_strategy: ContextStrategy,
         project_dir: PathBuf,
     ) -> Result<Self> {
         let client = SmartClient::new(app_config.clone(), config.model.clone());

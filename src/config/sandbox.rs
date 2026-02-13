@@ -24,10 +24,6 @@ pub struct SandboxPolicy {
     pub enable_os_sandbox: bool,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 impl Default for SandboxPolicy {
     fn default() -> Self {
         Self {

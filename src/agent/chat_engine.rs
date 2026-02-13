@@ -3,9 +3,9 @@ use tracing::{info, debug};
 use futures::StreamExt;
 use crate::agent::{
     SmartClient, ToolExecutor, SessionManager,
-    Role, Message, LLMResponseContent, ToolResult, ToolCall, StreamEvent, StreamResult,
+    Role, Message, LLMResponseContent, ToolResult, StreamEvent, StreamResult,
     ImageAttachment, is_silent_reply, SILENT_REPLY_TOKEN,
-    AgentConfig, SmartResponse, ToolSchema, Usage
+    AgentConfig, SmartResponse, Usage
 };
 use crate::capabilities::vision::VisionService;
 use crate::config::Config;

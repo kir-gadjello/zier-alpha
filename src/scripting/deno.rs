@@ -138,7 +138,7 @@ fn parse_capabilities(code: &str, project_dir: &Path, workspace: &Path) -> Capab
     caps
 }
 
-fn resolve_path_relative(path: &str, project_dir: &Path, workspace: &Path) -> PathBuf {
+fn resolve_path_relative(path: &str, project_dir: &Path, _workspace: &Path) -> PathBuf {
     if path.starts_with("/") {
         PathBuf::from(path)
     } else if path.starts_with("~") {
@@ -749,7 +749,7 @@ impl DenoRuntime {
 
         // Parse capabilities
         {
-            let mut op_state = self.runtime.op_state();
+            let op_state = self.runtime.op_state();
             let mut state = op_state.borrow_mut();
             let sandbox = state.borrow_mut::<SandboxState>();
 
@@ -766,8 +766,49 @@ impl DenoRuntime {
 
             // To detect "no comments", parse_capabilities logic needs adjustment or we check if code contains "@capability".
             if code.contains("// @capability") {
-                // Enforce declared capabilities
-                // TODO: Verify against policy?
+                // Enforce declared capabilities, but ensure they are within the policy
+                let policy = &sandbox.policy;
+
+                // Verify read paths
+                for path in &declared_caps.read {
+                    let mut allowed = false;
+                    for allowed_path in &policy.allow_read {
+                        let allowed_path = PathBuf::from(shellexpand::tilde(allowed_path).to_string());
+                        if path.starts_with(&allowed_path) {
+                            allowed = true;
+                            break;
+                        }
+                    }
+                    if !allowed {
+                        return Err(anyhow::anyhow!("Script declared capability to read '{}' which is not allowed by sandbox policy", path.display()));
+                    }
+                }
+
+                // Verify write paths
+                for path in &declared_caps.write {
+                    let mut allowed = false;
+                    for allowed_path in &policy.allow_write {
+                        let allowed_path = PathBuf::from(shellexpand::tilde(allowed_path).to_string());
+                        if path.starts_with(&allowed_path) {
+                            allowed = true;
+                            break;
+                        }
+                    }
+                    if !allowed {
+                        return Err(anyhow::anyhow!("Script declared capability to write '{}' which is not allowed by sandbox policy", path.display()));
+                    }
+                }
+
+                // Verify net
+                if declared_caps.net && !policy.allow_network {
+                    return Err(anyhow::anyhow!("Script declared capability 'net' which is not allowed by sandbox policy"));
+                }
+
+                // Verify env
+                if declared_caps.env && !policy.allow_env {
+                    return Err(anyhow::anyhow!("Script declared capability 'env' which is not allowed by sandbox policy"));
+                }
+
                 sandbox.capabilities = declared_caps;
             }
         }

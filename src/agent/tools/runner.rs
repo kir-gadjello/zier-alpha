@@ -2,7 +2,6 @@ use anyhow::{Result, Context};
 use std::process::Stdio;
 use tokio::process::Command;
 use std::path::PathBuf;
-use tracing::{warn, debug};
 
 #[cfg(target_os = "macos")]
 pub async fn run_sandboxed_command(command: &str, args: &[String], cwd: &PathBuf, env: Option<std::collections::HashMap<String, String>>) -> Result<std::process::Output> {

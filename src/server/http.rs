@@ -16,7 +16,6 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use futures::{SinkExt, StreamExt};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

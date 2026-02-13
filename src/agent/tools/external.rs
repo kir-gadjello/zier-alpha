@@ -6,7 +6,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 use crate::agent::tools::Tool;
 use crate::agent::providers::ToolSchema;
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct ExternalTool {
@@ -30,57 +30,26 @@ impl ExternalTool {
         Self { name, description, command, args, working_dir, sandbox }
     }
 
-    #[cfg(target_os = "macos")]
     async fn run_sandboxed(&self, extra_args: &[String]) -> Result<String> {
-        // macOS sandbox-exec
-        // We use a strict profile denying network and limiting file access
-        let profile = r#"
-(version 1)
-(allow default)
-(deny network*)
-(allow file-read* (subpath "/"))
-(allow file-write* (subpath "/tmp"))
-"#;
-        // Note: Writing a temporary profile file is safer than passing inline if complex
-        // For simplicity, we assume the command is simple.
-        // But `sandbox-exec` expects the profile content via `-p`.
+        // Use shared runner for sandboxing
+        // We need to construct full args list
+        let mut full_args = self.args.clone();
+        full_args.extend_from_slice(extra_args);
 
-        let mut cmd = Command::new("sandbox-exec");
-        cmd.arg("-p").arg(profile);
-        cmd.arg(&self.command);
-        cmd.args(&self.args);
-        cmd.args(extra_args);
+        let cwd = self.working_dir.clone().unwrap_or_else(|| std::path::PathBuf::from("."));
 
-        if let Some(dir) = &self.working_dir {
-            cmd.current_dir(dir);
+        debug!("Executing sandboxed external tool: {} {:?}", self.command, full_args);
+
+        let output = crate::agent::tools::runner::run_sandboxed_command(&self.command, &full_args, &cwd, None).await?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if !output.status.success() {
+            return Ok(format!("Command failed ({}):\nSTDOUT: {}\nSTDERR: {}", output.status, stdout, stderr));
         }
 
-        self.run_command(cmd).await
-    }
-
-    #[cfg(target_os = "linux")]
-    async fn run_sandboxed(&self, extra_args: &[String]) -> Result<String> {
-        // Linux: use unshare to create new namespaces (net, ipc, uts, pid)
-        // unshare -n -i -u -p -f --mount-proc cmd
-        // Note: requires unprivileged user namespaces enabled
-
-        let mut cmd = Command::new("unshare");
-        cmd.args(&["-n", "-i", "-u", "-p", "-f", "--mount-proc"]);
-        cmd.arg(&self.command);
-        cmd.args(&self.args);
-        cmd.args(extra_args);
-
-        if let Some(dir) = &self.working_dir {
-            cmd.current_dir(dir);
-        }
-
-        self.run_command(cmd).await
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    async fn run_sandboxed(&self, extra_args: &[String]) -> Result<String> {
-        warn!("Sandboxing not supported on this platform, running normally");
-        self.run_normal(extra_args).await
+        Ok(stdout.to_string())
     }
 
     async fn run_normal(&self, extra_args: &[String]) -> Result<String> {

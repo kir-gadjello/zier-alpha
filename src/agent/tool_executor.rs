@@ -1,8 +1,8 @@
 use anyhow::Result;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, warn};
-use crate::agent::{Tool, ToolCall, ToolResult, ToolSchema};
+use tracing::warn;
+use crate::agent::{Tool, ToolCall, ToolSchema};
 use crate::config::Config;
 use crate::agent::sanitize;
 
