@@ -27,6 +27,7 @@ async fn test_mcp_e2e() {
         allow_read: vec![mock_server_path.to_str().unwrap().to_string()],
         allow_write: vec![],
         allow_env: false,
+        enable_os_sandbox: false,
     };
 
     // 3. Initialize Service

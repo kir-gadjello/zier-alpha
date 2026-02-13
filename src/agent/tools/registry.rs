@@ -20,7 +20,7 @@ impl ToolRegistry {
         let mut tools_map: HashMap<String, Arc<dyn Tool>> = HashMap::new();
 
         // 1. Load Builtins
-        let builtins = create_default_tools_with_project(config, memory, project_dir)?;
+        let builtins = create_default_tools_with_project(config, memory, project_dir.clone())?;
 
         let allowed = &config.tools.allowed_builtin;
         let allow_all = allowed.contains(&"*".to_string());
@@ -33,7 +33,20 @@ impl ToolRegistry {
             }
         }
 
-        // 2. Load JS Tools (overwrite builtins)
+        // 2. Load External Tools
+        for (name, conf) in &config.tools.external {
+            let tool = crate::agent::tools::external::ExternalTool::new(
+                name.clone(),
+                conf.description.clone(),
+                conf.command.clone(),
+                conf.args.clone(),
+                Some(project_dir.clone()),
+                conf.sandbox,
+            );
+            tools_map.insert(name.clone(), Arc::new(tool));
+        }
+
+        // 3. Load JS Tools (overwrite builtins)
         for tool in script_tools {
             if tools_map.contains_key(tool.name()) {
                 warn!("Overriding builtin tool '{}' with script tool", tool.name());

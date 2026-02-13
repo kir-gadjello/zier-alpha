@@ -23,6 +23,7 @@ async fn test_tmux_bridge_lifecycle() {
         allow_read: vec!["/".to_string()], // Allow all for test convenience
         allow_write: vec![workspace.to_string_lossy().to_string()],
         allow_env: false,
+        enable_os_sandbox: false, // Disable OS sandboxing for tests in unprivileged env
     };
 
     let service = ScriptService::new(

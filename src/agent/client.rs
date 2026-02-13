@@ -35,10 +35,10 @@ impl SmartClient {
     }
 
     pub fn resolve_config(&self, model_alias: &str) -> Result<ModelConfig> {
-        if self.config.models.contains_key(model_alias) {
-            resolve_model_config(model_alias, &self.config.models)
+        let mut config = if self.config.models.contains_key(model_alias) {
+            resolve_model_config(model_alias, &self.config.models)?
         } else {
-            Ok(ModelConfig {
+            ModelConfig {
                 provider: None,
                 api_base: None,
                 api_key_env: None,
@@ -50,8 +50,16 @@ impl SmartClient {
                 fallback_settings: None,
                 aliases: None,
                 supports_vision: None,
-            })
+                tokenizer_name: None,
+            }
+        };
+
+        // Auto-detect tokenizer if not specified
+        if config.tokenizer_name.is_none() {
+            config.tokenizer_name = Some(detect_tokenizer(&config.model));
         }
+
+        Ok(config)
     }
 
     pub fn check_fallback_allowed(&self, error: &anyhow::Error, config: &ModelConfig) -> bool {
@@ -339,5 +347,15 @@ fn parse_provider_model(s: &str) -> (String, String) {
         ("anthropic".to_string(), s.to_string())
     } else {
         ("unknown".to_string(), s.to_string())
+    }
+}
+
+fn detect_tokenizer(model: &str) -> String {
+    if model.contains("gpt-4o") || model.contains("o1") {
+        "o200k_base".to_string()
+    } else if model.contains("gpt-4") || model.contains("gpt-3.5") || model.contains("claude") {
+        "cl100k_base".to_string()
+    } else {
+        "cl100k_base".to_string()
     }
 }

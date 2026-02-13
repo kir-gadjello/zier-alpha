@@ -41,7 +41,7 @@ impl GlobalSessionManager {
         }
 
         // Try load from disk
-        match Session::load(id) {
+        match Session::load(id).await {
             Ok(session) => {
                 let session_arc = Arc::new(RwLock::new(session));
                 sessions.insert(id.to_string(), Arc::clone(&session_arc));
@@ -91,13 +91,21 @@ impl GlobalSessionManager {
                 };
 
                 for (id, session_arc) in handles {
-                    // Try to acquire read lock on session
-                    // We use try_read to avoid blocking if session is busy being written to
-                    // If busy, skip save this cycle
-                    if let Ok(session) = session_arc.try_read() {
-                        // In real impl, check dirty flag. For now, just call save (fs overhead only if writes happen)
-                        if let Err(e) = session.save() {
-                            warn!("Failed to auto-save session {}: {}", id, e);
+                    // Try to acquire write lock on session if dirty
+                    // First check dirty with read lock to avoid contention
+                    let should_save = if let Ok(session) = session_arc.try_read() {
+                        session.dirty
+                    } else {
+                        false
+                    };
+
+                    if should_save {
+                        if let Ok(mut session) = session_arc.try_write() {
+                            if session.dirty {
+                                if let Err(e) = session.save().await {
+                                    warn!("Failed to auto-save session {}: {}", id, e);
+                                }
+                            }
                         }
                     }
                 }

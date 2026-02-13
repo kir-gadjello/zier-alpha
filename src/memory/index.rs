@@ -1,9 +1,10 @@
 use anyhow::{anyhow, Result};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task;
 use tracing::{debug, warn};
@@ -14,7 +15,7 @@ use super::search::MemoryChunk;
 
 #[derive(Clone)]
 pub struct MemoryIndex {
-    conn: Arc<Mutex<Connection>>,
+    pool: Pool<SqliteConnectionManager>,
     workspace: PathBuf,
     db_path: PathBuf,
     /// Whether sqlite-vec extension is loaded for fast vector search
@@ -41,7 +42,28 @@ impl MemoryIndex {
             fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(db_path)?;
+        let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
+            // Enable WAL mode and foreign keys for better performance/safety
+            conn.execute_batch(
+                r#"
+                PRAGMA journal_mode = WAL;
+                PRAGMA foreign_keys = ON;
+                "#,
+            )?;
+
+            // Try to load sqlite-vec extension
+            // We ignore errors here because we check for availability later
+            let _ = Self::try_load_sqlite_vec(conn);
+
+            Ok(())
+        });
+
+        let pool = Pool::new(manager)
+            .map_err(|e| anyhow!("Failed to create connection pool: {}", e))?;
+
+        // Get a connection to initialize schema
+        let conn = pool.get()
+            .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
         // Initialize OpenClaw-compatible schema
         conn.execute_batch(
@@ -97,8 +119,9 @@ impl MemoryIndex {
         // Create FTS5 table (OpenClaw-compatible with UNINDEXED columns)
         Self::ensure_fts_table(&conn)?;
 
-        // Try to load sqlite-vec extension for fast vector search
-        let has_vec_extension = Self::try_load_sqlite_vec(&conn);
+        // Check if sqlite-vec is actually available
+        let has_vec_extension = Self::check_vec_extension(&conn);
+
         if has_vec_extension {
             debug!("sqlite-vec extension loaded successfully");
             Self::ensure_vec_table(&conn)?;
@@ -107,7 +130,7 @@ impl MemoryIndex {
         }
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            pool,
             workspace: workspace.to_path_buf(),
             db_path: db_path.to_path_buf(),
             has_vec_extension,
@@ -155,6 +178,16 @@ impl MemoryIndex {
         false
     }
 
+    /// Check if sqlite-vec is working
+    fn check_vec_extension(conn: &Connection) -> bool {
+        // We can check by trying to query vec_version() or simply assuming success if try_load returned true
+        // But since try_load is called in with_init, we need to verify on this specific connection
+        // However, since we are using a pool, we can assume if it works here it works on others (since they use same init)
+
+        // Try to create a temporary virtual table or check version
+        conn.query_row("SELECT vec_version()", [], |_| Ok(())).is_ok()
+    }
+
     /// Create virtual table for vector search (requires sqlite-vec)
     fn ensure_vec_table(conn: &Connection) -> Result<()> {
         // Create chunks_vec virtual table if sqlite-vec is available
@@ -192,18 +225,19 @@ impl MemoryIndex {
             .to_string_lossy()
             .to_string();
 
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         let chunk_size = self.chunk_size;
         let chunk_overlap = self.chunk_overlap;
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let mut conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
+
+            let tx = conn.transaction()?;
 
             // Check if file has changed
             if !force {
-                let existing: Option<String> = conn
+                let existing: Option<String> = tx
                     .query_row(
                         "SELECT hash FROM files WHERE path = ?1",
                         params![&relative_path],
@@ -224,13 +258,13 @@ impl MemoryIndex {
                 .as_secs() as i64;
 
             // Update file record (OpenClaw-compatible columns)
-            conn.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO files (path, source, hash, mtime, size) VALUES (?1, 'memory', ?2, ?3, ?4)",
                 params![&relative_path, &file_hash, mtime, size],
             )?;
 
             // Delete existing chunks and their FTS entries
-            Self::delete_chunks_for_path(&conn, &relative_path)?;
+            Self::delete_chunks_for_path(&tx, &relative_path)?;
 
             // Create new chunks (OpenClaw-compatible)
             let chunks = chunk_text(&content, chunk_size, chunk_overlap);
@@ -239,7 +273,7 @@ impl MemoryIndex {
                 let chunk_id = Uuid::new_v4().to_string();
                 let chunk_hash = hash_content(&chunk.content);
 
-                conn.execute(
+                tx.execute(
                     r#"INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
                    VALUES (?1, ?2, 'memory', ?3, ?4, ?5, '', ?6, '', ?7)"#,
                     params![&chunk_id, &relative_path, chunk.line_start, chunk.line_end, &chunk_hash, &chunk.content, now],
@@ -247,7 +281,7 @@ impl MemoryIndex {
 
                 // Insert into FTS
                 Self::insert_fts(
-                    &conn,
+                    &tx,
                     &chunk_id,
                     &relative_path,
                     "memory",
@@ -258,6 +292,7 @@ impl MemoryIndex {
                 )?;
             }
 
+            tx.commit()?;
             Ok(true)
         }).await?
     }
@@ -282,16 +317,17 @@ impl MemoryIndex {
 
     /// Remove a file and its chunks from the index (for deleted files)
     pub async fn remove_file(&self, relative_path: &str) -> Result<()> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         let relative_path = relative_path.to_string();
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let mut conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
-            Self::delete_chunks_for_path(&conn, &relative_path)?;
-            conn.execute("DELETE FROM files WHERE path = ?1", params![&relative_path])?;
+            let tx = conn.transaction()?;
+            Self::delete_chunks_for_path(&tx, &relative_path)?;
+            tx.execute("DELETE FROM files WHERE path = ?1", params![&relative_path])?;
+            tx.commit()?;
 
             debug!("Removed deleted file from index: {}", relative_path);
             Ok(())
@@ -300,12 +336,11 @@ impl MemoryIndex {
 
     /// Get all indexed file paths
     pub async fn indexed_files(&self) -> Result<Vec<String>> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
             let mut stmt = conn.prepare("SELECT path FROM files")?;
             let rows = stmt.query_map([], |row| row.get(0))?;
@@ -344,13 +379,12 @@ impl MemoryIndex {
             None => return Ok(Vec::new()),
         };
 
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         let query_clone = fts_query.clone();
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
             // OpenClaw-compatible: use 'path', 'start_line', 'end_line', 'text' columns
             let mut stmt = conn.prepare(
@@ -384,11 +418,10 @@ impl MemoryIndex {
 
     /// Get total chunk count
     pub async fn chunk_count(&self) -> Result<usize> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
             let count: i64 = conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
             Ok(count as usize)
         }).await?
@@ -402,12 +435,11 @@ impl MemoryIndex {
             .to_string_lossy()
             .to_string();
 
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM chunks WHERE path = ?1",
                 params![&relative_path],
@@ -459,12 +491,11 @@ impl MemoryIndex {
 
     /// Get chunks that need embeddings (OpenClaw-compatible: id is TEXT, text column)
     pub async fn chunks_without_embeddings(&self, limit: usize) -> Result<Vec<(String, String)>> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
             let mut stmt = conn.prepare(
                 "SELECT id, text FROM chunks WHERE embedding = '' OR embedding IS NULL LIMIT ?1",
@@ -485,16 +516,15 @@ impl MemoryIndex {
 
     /// Store embedding for a chunk (OpenClaw-compatible: id is TEXT, model column)
     pub async fn store_embedding(&self, chunk_id: &str, embedding: &[f32], model: &str) -> Result<()> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         let chunk_id = chunk_id.to_string();
         let embedding = embedding.to_vec();
         let model = model.to_string();
         let has_vec_extension = self.has_vec_extension;
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
             let embedding_json = serialize_embedding(&embedding);
             let now = std::time::SystemTime::now()
@@ -530,15 +560,14 @@ impl MemoryIndex {
         model: &str,
         text_hash: &str,
     ) -> Result<Option<Vec<f32>>> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         let provider = provider.to_string();
         let model = model.to_string();
         let text_hash = text_hash.to_string();
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
             let result: Option<String> = conn
                 .query_row(
@@ -561,7 +590,7 @@ impl MemoryIndex {
         text_hash: &str,
         embedding: &[f32],
     ) -> Result<()> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         let provider = provider.to_string();
         let model = model.to_string();
         let provider_key = provider_key.to_string();
@@ -569,9 +598,8 @@ impl MemoryIndex {
         let embedding = embedding.to_vec();
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
             let embedding_json = serialize_embedding(&embedding);
             let dims = embedding.len() as i32;
@@ -602,15 +630,14 @@ impl MemoryIndex {
         model: &str,
         limit: usize,
     ) -> Result<Vec<MemoryChunk>> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         let query_embedding = query_embedding.to_vec();
         let model = model.to_string();
         let has_vec_extension = self.has_vec_extension;
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
             // Try sqlite-vec fast path if available
             if has_vec_extension {
@@ -783,13 +810,12 @@ impl MemoryIndex {
 
     /// Count chunks with embeddings (OpenClaw-compatible: model column)
     pub async fn embedded_chunk_count(&self, model: &str) -> Result<usize> {
-        let conn = self.conn.clone();
+        let pool = self.pool.clone();
         let model = model.to_string();
 
         task::spawn_blocking(move || {
-            let conn = conn
-                .lock()
-                .map_err(|e| anyhow!("Lock poisoned: {}", e))?;
+            let conn = pool.get()
+                .map_err(|e| anyhow!("Failed to get connection from pool: {}", e))?;
 
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM chunks WHERE embedding != '' AND embedding IS NOT NULL AND model = ?1",

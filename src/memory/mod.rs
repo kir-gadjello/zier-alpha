@@ -18,10 +18,10 @@ pub use workspace::{init_state_dir, init_workspace};
 
 use anyhow::Result;
 use chrono::Local;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs;
 
 use tracing::{debug, info, warn};
 
@@ -90,7 +90,7 @@ impl MemoryManager {
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Workspace has no parent directory"))?;
         let memory_dir = state_dir.join("memory");
-        std::fs::create_dir_all(&memory_dir)?;
+        std::fs::create_dir_all(&memory_dir)?; // Sync creation is fine during init
         let db_path = memory_dir.join(format!("{}.sqlite", agent_id));
 
         let index = MemoryIndex::new_with_db_path(&workspace, &db_path)?
@@ -220,60 +220,60 @@ impl MemoryManager {
     }
 
     /// Read the main MEMORY.md file
-    pub fn read_memory_file(&self) -> Result<String> {
+    pub async fn read_memory_file(&self) -> Result<String> {
         let path = self.workspace.join("MEMORY.md");
         if path.exists() {
-            Ok(fs::read_to_string(&path)?)
+            Ok(fs::read_to_string(&path).await?)
         } else {
             Ok(String::new())
         }
     }
 
     /// Read the HEARTBEAT.md file
-    pub fn read_heartbeat_file(&self) -> Result<String> {
+    pub async fn read_heartbeat_file(&self) -> Result<String> {
         let path = self.workspace.join("HEARTBEAT.md");
         if path.exists() {
-            Ok(fs::read_to_string(&path)?)
+            Ok(fs::read_to_string(&path).await?)
         } else {
             Ok(String::new())
         }
     }
 
     /// Read the SOUL.md file (persona/tone guidance)
-    pub fn read_soul_file(&self) -> Result<String> {
+    pub async fn read_soul_file(&self) -> Result<String> {
         let path = self.workspace.join("SOUL.md");
         if path.exists() {
-            Ok(fs::read_to_string(&path)?)
+            Ok(fs::read_to_string(&path).await?)
         } else {
             Ok(String::new())
         }
     }
 
     /// Read the USER.md file (OpenClaw-compatible: user info)
-    pub fn read_user_file(&self) -> Result<String> {
+    pub async fn read_user_file(&self) -> Result<String> {
         let path = self.workspace.join("USER.md");
         if path.exists() {
-            Ok(fs::read_to_string(&path)?)
+            Ok(fs::read_to_string(&path).await?)
         } else {
             Ok(String::new())
         }
     }
 
     /// Read the IDENTITY.md file (OpenClaw-compatible: agent identity context)
-    pub fn read_identity_file(&self) -> Result<String> {
+    pub async fn read_identity_file(&self) -> Result<String> {
         let path = self.workspace.join("IDENTITY.md");
         if path.exists() {
-            Ok(fs::read_to_string(&path)?)
+            Ok(fs::read_to_string(&path).await?)
         } else {
             Ok(String::new())
         }
     }
 
     /// Read the AGENTS.md file (OpenClaw-compatible: list of agents)
-    pub fn read_agents_file(&self) -> Result<String> {
+    pub async fn read_agents_file(&self) -> Result<String> {
         let path = self.workspace.join("AGENTS.md");
         if path.exists() {
-            Ok(fs::read_to_string(&path)?)
+            Ok(fs::read_to_string(&path).await?)
         } else {
             Ok(String::new())
         }
@@ -285,17 +285,17 @@ impl MemoryManager {
     }
 
     /// Read the TOOLS.md file (OpenClaw-compatible: local tool notes)
-    pub fn read_tools_file(&self) -> Result<String> {
+    pub async fn read_tools_file(&self) -> Result<String> {
         let path = self.workspace.join("TOOLS.md");
         if path.exists() {
-            Ok(fs::read_to_string(&path)?)
+            Ok(fs::read_to_string(&path).await?)
         } else {
             Ok(String::new())
         }
     }
 
     /// Read recent daily log files
-    pub fn read_recent_daily_logs(&self, days: usize) -> Result<String> {
+    pub async fn read_recent_daily_logs(&self, days: usize) -> Result<String> {
         let memory_dir = self.workspace.join("memory");
         if !memory_dir.exists() {
             return Ok(String::new());
@@ -310,7 +310,7 @@ impl MemoryManager {
             let path = memory_dir.join(&filename);
 
             if path.exists() {
-                if let Ok(file_content) = fs::read_to_string(&path) {
+                if let Ok(file_content) = fs::read_to_string(&path).await {
                     if !content.is_empty() {
                         content.push_str("\n---\n\n");
                     }
@@ -464,7 +464,7 @@ impl MemoryManager {
             .filter_map(|r| r.ok())
         {
             if entry.is_file() {
-                let content = fs::read_to_string(&entry)?;
+                let content = fs::read_to_string(&entry).await?;
                 let lines = content.lines().count();
                 let chunks = self.index.file_chunk_count(&entry).await?;
                 total_chunks += chunks;
@@ -508,7 +508,7 @@ impl MemoryManager {
                 .filter_map(|r| r.ok())
             {
                 if entry.is_file() {
-                    let content = fs::read_to_string(&entry)?;
+                    let content = fs::read_to_string(&entry).await?;
                     let lines = content.lines().count();
                     let chunks = self.index.file_chunk_count(&entry).await?;
                     total_chunks += chunks;
@@ -540,7 +540,7 @@ impl MemoryManager {
     }
 
     /// Get recent memory entries
-    pub fn recent_entries(&self, count: usize) -> Result<Vec<RecentEntry>> {
+    pub async fn recent_entries(&self, count: usize) -> Result<Vec<RecentEntry>> {
         let mut entries = Vec::new();
 
         let memory_dir = self.workspace.join("memory");
@@ -548,11 +548,13 @@ impl MemoryManager {
             return Ok(entries);
         }
 
-        // Get all daily log files sorted by date (newest first)
-        let mut files: Vec<_> = fs::read_dir(&memory_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map(|e| e == "md").unwrap_or(false))
-            .collect();
+        let mut read_dir = fs::read_dir(&memory_dir).await?;
+        let mut files = Vec::new();
+        while let Some(entry) = read_dir.next_entry().await? {
+            if entry.path().extension().map(|e| e == "md").unwrap_or(false) {
+                files.push(entry);
+            }
+        }
 
         files.sort_by_key(|f| std::cmp::Reverse(f.file_name()));
 
@@ -560,7 +562,7 @@ impl MemoryManager {
             let path = entry.path();
             let filename = path.file_name().unwrap().to_string_lossy().to_string();
 
-            if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(content) = fs::read_to_string(&path).await {
                 // Get last non-empty line as preview
                 let preview = content
                     .lines()

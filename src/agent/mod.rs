@@ -1,14 +1,18 @@
-mod client;
-mod compaction;
-mod providers;
-mod sanitize;
-mod session;
-mod session_store;
-mod skills;
-mod system_prompt;
+pub mod client;
+pub mod compaction;
+pub mod providers;
+pub mod sanitize;
+pub mod session;
+pub mod session_store;
+pub mod skills;
+pub mod system_prompt;
 pub mod tools;
 pub mod llm_error;
 pub mod mcp_manager;
+pub mod tool_executor;
+pub mod memory_context;
+pub mod session_manager;
+pub mod chat_engine;
 
 pub use llm_error::LlmError;
 pub use providers::{
@@ -32,16 +36,20 @@ pub use system_prompt::{
     SILENT_REPLY_TOKEN,
 };
 pub use tools::{create_default_tools, extract_tool_detail, ScriptTool, Tool, ToolResult};
+pub use tool_executor::ToolExecutor;
+pub use memory_context::MemoryContextBuilder;
+pub use session_manager::SessionManager;
+pub use chat_engine::ChatEngine;
+pub use mcp_manager::McpManager;
 
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn, error};
 
 pub use client::{SmartClient, SmartResponse};
 pub use compaction::{CompactionStrategy, NativeCompactor, ScriptCompactor};
-use crate::capabilities::vision::VisionService;
 use crate::config::Config;
 use crate::memory::{MemoryChunk, MemoryManager};
 
@@ -50,28 +58,6 @@ pub enum ContextStrategy {
     Full,
     Stateless,
     Episodic,
-}
-
-/// Soft threshold buffer before compaction (tokens)
-/// Memory flush runs when within this buffer of the hard limit
-const MEMORY_FLUSH_SOFT_THRESHOLD: usize = 4000;
-
-/// Generate a URL-safe slug from text (first 3-5 words, lowercased, hyphenated)
-fn generate_slug(text: &str) -> String {
-    text.split_whitespace()
-        .take(4)
-        .map(|w| {
-            w.chars()
-                .filter(|c| c.is_alphanumeric())
-                .collect::<String>()
-                .to_lowercase()
-        })
-        .filter(|w| !w.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-        .chars()
-        .take(30)
-        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -85,17 +71,20 @@ pub struct AgentConfig {
 pub struct Agent {
     config: AgentConfig,
     app_config: Config,
-    client: SmartClient,
-    session: Arc<RwLock<Session>>,
     memory: Arc<MemoryManager>,
-    tools: Vec<Arc<dyn Tool>>,
-    /// Cumulative token usage for this session
-    cumulative_usage: Usage,
-    context_strategy: ContextStrategy,
-    compaction_strategy: Arc<dyn CompactionStrategy>,
+
+    session_manager: SessionManager,
+    tool_executor: ToolExecutor,
+    memory_context: Arc<MemoryContextBuilder>,
+
+    chat_engine: Arc<ChatEngine>,
+    mcp_manager: Arc<McpManager>,
+
     /// Project working directory (Worksite)
     project_dir: PathBuf,
     status_lines: Vec<String>,
+
+    cumulative_usage: Usage,
 }
 
 impl Agent {
@@ -123,26 +112,93 @@ impl Agent {
     ) -> Result<Self> {
         let client = SmartClient::new(app_config.clone(), config.model.clone());
 
-        // Wrap memory in Arc so tools can share it
         let memory = Arc::new(memory);
-        let tools = tools::create_default_tools_with_project(
+        let mut tools = tools::create_default_tools_with_project(
             app_config, 
             Some(Arc::clone(&memory)), 
             project_dir.clone()
         )?;
 
+        // Initialize MCP Manager
+        let idle_timeout = app_config.extensions.mcp.as_ref().map(|c| c.idle_timeout_secs).unwrap_or(600);
+        let mcp_manager = McpManager::new(idle_timeout);
+
+        if let Some(mcp_config) = &app_config.extensions.mcp {
+            if !mcp_config.servers.is_empty() {
+                let server_configs: Vec<_> = mcp_config.servers.values().cloned().collect();
+                mcp_manager.initialize(server_configs).await;
+
+                // Connect to servers and load tools
+                // We do this eagerly for now to register tools
+                for (name, _) in &mcp_config.servers {
+                    match mcp_manager.ensure_server(name).await {
+                        Ok(_) => {
+                            match mcp_manager.list_tools(name).await {
+                                Ok(tool_defs) => {
+                                    for tool_def in tool_defs {
+                                        if let (Some(tname), Some(desc), Some(schema)) = (
+                                            tool_def.get("name").and_then(|v| v.as_str()),
+                                            tool_def.get("description").and_then(|v| v.as_str()),
+                                            tool_def.get("inputSchema")
+                                        ) {
+                                            let tool = crate::agent::tools::mcp::McpTool::new(
+                                                mcp_manager.clone(),
+                                                name.clone(),
+                                                tname.to_string(),
+                                                desc.to_string(),
+                                                schema.clone()
+                                            );
+                                            tools.push(Arc::new(tool));
+                                        }
+                                    }
+                                    info!("Loaded tools from MCP server: {}", name);
+                                }
+                                Err(e) => error!("Failed to list tools from MCP server {}: {}", name, e),
+                            }
+                        }
+                        Err(e) => error!("Failed to connect to MCP server {}: {}", name, e),
+                    }
+                }
+            }
+        }
+
+        // Load external tools from config
+        for (name, conf) in &app_config.tools.external {
+            let tool = crate::agent::tools::external::ExternalTool::new(
+                name.clone(),
+                conf.description.clone(),
+                conf.command.clone(),
+                conf.args.clone(),
+                Some(project_dir.clone()),
+                conf.sandbox,
+            );
+            tools.push(Arc::new(tool));
+        }
+
+        let session_manager = SessionManager::new(app_config.clone());
+        let tool_executor = ToolExecutor::new(tools, app_config.clone());
+        let memory_context = Arc::new(MemoryContextBuilder::new(memory.clone(), app_config.clone()));
+
+        let chat_engine = ChatEngine::new(
+            client,
+            session_manager.clone(),
+            tool_executor.clone(),
+            app_config.clone(),
+            config.clone(),
+        );
+
         Ok(Self {
             config,
             app_config: app_config.clone(),
-            client,
-            session: Arc::new(RwLock::new(Session::new())),
             memory,
-            tools,
-            cumulative_usage: Usage::default(),
-            context_strategy,
-            compaction_strategy: Arc::new(NativeCompactor),
+            session_manager,
+            tool_executor,
+            memory_context,
+            chat_engine: Arc::new(chat_engine),
+            mcp_manager,
             project_dir,
             status_lines: Vec::new(),
+            cumulative_usage: Usage::default(),
         })
     }
 
@@ -154,28 +210,33 @@ impl Agent {
         &self.config.model
     }
 
-    /// Check if a tool requires user approval before execution
     pub fn set_tools(&mut self, tools: Vec<Arc<dyn Tool>>) {
-        self.tools = tools;
+        self.tool_executor.set_tools(tools);
+        self.update_chat_engine();
+    }
+
+    fn update_chat_engine(&mut self) {
+        let client = SmartClient::new(self.app_config.clone(), self.config.model.clone());
+        self.chat_engine = Arc::new(ChatEngine::new(
+            client,
+            self.session_manager.clone(),
+            self.tool_executor.clone(),
+            self.app_config.clone(),
+            self.config.clone(),
+        ));
     }
 
     pub fn requires_approval(&self, tool_name: &str) -> bool {
-        self.app_config
-            .tools
-            .require_approval
-            .iter()
-            .any(|t| t == tool_name)
+        self.tool_executor.requires_approval(tool_name)
     }
 
-    /// Get the list of tools that require approval
     pub fn approval_required_tools(&self) -> &[String] {
-        &self.app_config.tools.require_approval
+        self.tool_executor.approval_required_tools()
     }
 
-    /// Switch to a different model
     pub fn set_model(&mut self, model: &str) -> Result<()> {
         self.config.model = model.to_string();
-        self.client = SmartClient::new(self.app_config.clone(), model.to_string());
+        self.update_chat_engine();
         info!("Switched to model: {}", model);
         Ok(())
     }
@@ -188,44 +249,43 @@ impl Agent {
         self.memory.has_embeddings()
     }
 
-    /// Get context window configuration
     pub fn context_window(&self) -> usize {
         self.config.context_window
     }
 
-    /// Get reserve tokens configuration
     pub fn reserve_tokens(&self) -> usize {
         self.config.reserve_tokens
     }
 
     pub fn set_session(&mut self, session: Arc<RwLock<Session>>) {
-        self.session = session;
+        self.session_manager.set_session(session);
+        self.update_chat_engine();
     }
 
     pub fn set_compaction_strategy(&mut self, strategy: Arc<dyn CompactionStrategy>) {
-        self.compaction_strategy = strategy;
+        self.session_manager.set_compaction_strategy(strategy);
+        self.update_chat_engine();
     }
 
-    pub fn set_context_strategy(&mut self, strategy: ContextStrategy) {
-        self.context_strategy = strategy;
+    pub fn set_context_strategy(&mut self, _strategy: ContextStrategy) {
     }
 
     pub fn tools(&self) -> &[Arc<dyn Tool>] {
-        &self.tools
+        self.tool_executor.tools()
     }
 
-    /// Get current context usage info
     pub async fn context_usage(&self) -> (usize, usize, usize) {
-        let used = self.session.read().await.token_count();
+        let session_arc = self.session_manager.session();
+        let used = session_arc.read().await.token_count();
         let available = self.config.context_window;
         let reserve = self.config.reserve_tokens;
         let usable = available.saturating_sub(reserve);
         (used, usable, available)
     }
 
-    /// Export session messages as markdown
     pub async fn export_markdown(&self) -> String {
-        let session = self.session.read().await;
+        let session_arc = self.session_manager.session();
+        let session = session_arc.read().await;
         let mut output = String::new();
         output.push_str("# Zier Alpha Session Export\n\n");
         output.push_str(&format!("Model: {}\n", self.config.model));
@@ -245,12 +305,10 @@ impl Agent {
         output
     }
 
-    /// Get cumulative token usage for this session
     pub fn usage(&self) -> &Usage {
         &self.cumulative_usage
     }
 
-    /// Add usage from an API response to cumulative totals
     fn add_usage(&mut self, usage: Option<Usage>) {
         if let Some(u) = usage {
             self.cumulative_usage.input_tokens += u.input_tokens;
@@ -259,19 +317,11 @@ impl Agent {
     }
 
     pub async fn new_session(&mut self) -> Result<()> {
-        // Reset session
-        {
-            let mut session = self.session.write().await;
-            *session = Session::new();
-        }
-
-        // Load skills from workspace
         let workspace_skills = skills::load_skills(self.memory.workspace()).unwrap_or_default();
         let skills_prompt = skills::build_skills_prompt(&workspace_skills);
         debug!("Loaded {} skills from workspace", workspace_skills.len());
 
-        // Build system prompt with identity, safety, workspace info
-        let tool_names: Vec<&str> = self.tools.iter().map(|t| t.name()).collect();
+        let tool_names: Vec<&str> = self.tool_executor.tools().iter().map(|t| t.name()).collect();
         let system_prompt_params =
             system_prompt::SystemPromptParams::new(self.memory.workspace(), &self.config.model)
                 .with_project(&self.project_dir, self.app_config.workdir.clone())
@@ -280,13 +330,8 @@ impl Agent {
                 .with_status_lines(self.status_lines.clone());
         let system_prompt = system_prompt::build_system_prompt(system_prompt_params);
 
-        // Load memory context depending on strategy
-        let memory_context = match self.context_strategy {
-            ContextStrategy::Stateless => String::new(),
-            _ => self.build_memory_context().await?,
-        };
+        let memory_context = self.memory_context.build_memory_context().await?;
 
-        // Combine system prompt with memory context
         let full_context = if memory_context.is_empty() {
             system_prompt
         } else {
@@ -296,535 +341,51 @@ impl Agent {
             )
         };
 
-        self.session.write().await.set_system_context(full_context);
-
-        info!("Created new session: {}", self.session.read().await.id());
-        Ok(())
+        self.session_manager.new_session(&self.memory, None, || full_context).await
     }
 
     pub async fn hydrate_from_file(&mut self, path: &PathBuf) -> Result<()> {
-        let current_id = self.session.read().await.id().to_string();
-        // Load session from file, using current ID so we preserve the session identity
-        let loaded = Session::load_file(path, &current_id)?;
-
-        // Overwrite current session
-        {
-            let mut session = self.session.write().await;
-            *session = loaded;
-        }
-
-        info!("Hydrated session from {}", path.display());
-        Ok(())
+        self.session_manager.hydrate_from_file(path).await
     }
 
     pub async fn set_system_prompt(&mut self, prompt: &str) {
-        self.session.write().await.set_system_context(prompt.to_string());
+        self.session_manager.session().write().await.set_system_context(prompt.to_string());
     }
 
     pub async fn resume_session(&mut self, session_id: &str) -> Result<()> {
-        let loaded = Session::load(session_id)?;
-        {
-            let mut session = self.session.write().await;
-            *session = loaded;
-        }
-        info!("Resumed session: {}", session_id);
-        Ok(())
+        self.session_manager.load_session(session_id).await
     }
 
     pub async fn chat(&mut self, message: &str) -> Result<String> {
-        self.chat_with_images(message, Vec::new()).await
+        let (response, usage) = self.chat_engine.chat(message).await?;
+        self.add_usage(usage);
+        Ok(response)
     }
 
     pub async fn chat_with_images(
         &mut self,
         message: &str,
-        mut images: Vec<ImageAttachment>,
+        images: Vec<ImageAttachment>,
     ) -> Result<String> {
-        // 1. Check vision support
-        let mut final_content = message.to_string();
-        let config = self.client.resolve_config(self.model())?;
-
-        if config.supports_vision == Some(false) && !images.is_empty() {
-            info!("Model {} does not support vision. Generating descriptions...", self.model());
-            let vision_service = VisionService::new(&self.app_config);
-
-            for (i, img) in images.iter().enumerate() {
-                match vision_service.describe_image(img).await {
-                    Ok(desc) => {
-                        final_content.push_str(&format!("\n\n[Image {} Description: {}]", i + 1, desc));
-                    }
-                    Err(e) => {
-                        final_content.push_str(&format!("\n\n[Image {} processing failed: {}]", i + 1, e));
-                    }
-                }
-            }
-            // Clear images since they are now described in text
-            images.clear();
-        }
-
-        // Add user message with images (or empty if processed)
-        self.session.write().await.add_message(Message {
-            role: Role::User,
-            content: final_content,
-            tool_calls: None,
-            tool_call_id: None,
-            images,
-        });
-
-        // Check if we should run pre-compaction memory flush (soft threshold)
-        if self.should_memory_flush().await {
-            info!("Running pre-compaction memory flush (soft threshold)");
-            self.memory_flush().await?;
-        }
-
-        // Check if we need to compact (hard limit)
-        if self.should_compact().await {
-            self.compact_session().await?;
-        }
-
-        // Build messages for LLM
-        let messages = self.session.read().await.messages_for_llm();
-
-        // Get available tools
-        let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
-
-        // Invoke LLM
-        let response = self
-            .client
-            .chat(&messages, Some(tool_schemas.as_slice()))
-            .await?;
-
-        let metadata = (response.used_model.clone(), response.latency_ms);
-
-        // Handle tool calls if any
-        let final_response = self.handle_response(response).await?;
-
-        // Add assistant response
-        self.session.write().await.add_message(Message {
-            role: Role::Assistant,
-            content: final_response.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
-
-        self.session.write().await.add_metadata_to_last_message(Some(metadata.0), Some(metadata.1));
-
-        Ok(final_response)
-    }
-
-    async fn handle_response(&mut self, response: SmartResponse) -> Result<String> {
-        // Track usage
-        self.add_usage(response.response.usage);
-
-        match response.response.content {
-            LLMResponseContent::Text(text) => Ok(text),
-            LLMResponseContent::ToolCalls(calls) => {
-                // Execute tool calls
-                let mut results = Vec::new();
-
-                for call in &calls {
-                    debug!(
-                        "Executing tool: {} with args: {}",
-                        call.name, call.arguments
-                    );
-
-                    let result = self.execute_tool(call).await;
-                    results.push(ToolResult {
-                        call_id: call.id.clone(),
-                        output: result.unwrap_or_else(|e| format!("Error: {}", e)),
-                    });
-                }
-
-                // Add tool call message
-                self.session.write().await.add_message(Message {
-                    role: Role::Assistant,
-                    content: String::new(),
-                    tool_calls: Some(calls),
-                    tool_call_id: None,
-                    images: Vec::new(),
-                });
-
-                // Add tool results
-                for result in &results {
-                    self.session.write().await.add_message(Message {
-                        role: Role::Tool,
-                        content: result.output.clone(),
-                        tool_calls: None,
-                        tool_call_id: Some(result.call_id.clone()),
-                        images: Vec::new(),
-                    });
-                }
-
-                // Continue conversation with tool results
-                let messages = self.session.read().await.messages_for_llm();
-                let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
-                let next_response = self
-                    .client
-                    .chat(&messages, Some(tool_schemas.as_slice()))
-                    .await?;
-
-                // Recursively handle (in case of more tool calls)
-                Box::pin(self.handle_response(next_response)).await
-            }
-        }
+        let (response, usage) = self.chat_engine.chat_with_images(message, images).await?;
+        self.add_usage(usage);
+        Ok(response)
     }
 
     pub async fn execute_tool(&self, call: &ToolCall) -> Result<String> {
-        for tool in &self.tools {
-            if tool.name() == call.name {
-                let raw_output = tool.execute(&call.arguments).await?;
-
-                // Apply sanitization if configured
-                if self.app_config.tools.use_content_delimiters {
-                    let max_chars = if self.app_config.tools.tool_output_max_chars > 0 {
-                        Some(self.app_config.tools.tool_output_max_chars)
-                    } else {
-                        None
-                    };
-                    let result = sanitize::wrap_tool_output(&call.name, &raw_output, max_chars);
-
-                    // Log warnings for suspicious patterns
-                    if self.app_config.tools.log_injection_warnings && !result.warnings.is_empty() {
-                        tracing::warn!(
-                            "Suspicious patterns detected in {} output: {:?}",
-                            call.name,
-                            result.warnings
-                        );
-                    }
-
-                    return Ok(result.content);
-                }
-
-                return Ok(raw_output);
-            }
-        }
-        anyhow::bail!("Unknown tool: {}", call.name)
-    }
-
-    async fn build_memory_context(&self) -> Result<String> {
-        let mut context = String::new();
-        let use_delimiters = self.app_config.tools.use_content_delimiters;
-
-        // Show welcome message on brand new workspace (first run)
-        if self.memory.is_brand_new() {
-            context.push_str(FIRST_RUN_WELCOME);
-            context.push_str("\n\n---\n\n");
-            info!("First run detected - showing welcome message");
-        }
-
-        // Load IDENTITY.md first (OpenClaw-compatible: agent identity context)
-        if let Ok(identity_content) = self.memory.read_identity_file() {
-            if !identity_content.is_empty() {
-                if use_delimiters {
-                    context.push_str(&sanitize::wrap_memory_content(
-                        "IDENTITY.md",
-                        &identity_content,
-                        sanitize::MemorySource::Identity,
-                    ));
-                } else {
-                    context.push_str("# Identity (IDENTITY.md)\n\n");
-                    context.push_str(&identity_content);
-                }
-                context.push_str("\n\n---\n\n");
-            }
-        }
-
-        // Load USER.md (OpenClaw-compatible: user info)
-        if let Ok(user_content) = self.memory.read_user_file() {
-            if !user_content.is_empty() {
-                if use_delimiters {
-                    context.push_str(&sanitize::wrap_memory_content(
-                        "USER.md",
-                        &user_content,
-                        sanitize::MemorySource::User,
-                    ));
-                } else {
-                    context.push_str("# User Info (USER.md)\n\n");
-                    context.push_str(&user_content);
-                }
-                context.push_str("\n\n---\n\n");
-            }
-        }
-
-        // Load SOUL.md (persona/tone) - this defines who the agent is
-        if let Ok(soul_content) = self.memory.read_soul_file() {
-            if !soul_content.is_empty() {
-                if use_delimiters {
-                    context.push_str(&sanitize::wrap_memory_content(
-                        "SOUL.md",
-                        &soul_content,
-                        sanitize::MemorySource::Soul,
-                    ));
-                } else {
-                    context.push_str(&soul_content);
-                }
-                context.push_str("\n\n---\n\n");
-            }
-        }
-
-        // Load AGENTS.md (OpenClaw-compatible: list of connected agents)
-        if let Ok(agents_content) = self.memory.read_agents_file() {
-            if !agents_content.is_empty() {
-                if use_delimiters {
-                    context.push_str(&sanitize::wrap_memory_content(
-                        "AGENTS.md",
-                        &agents_content,
-                        sanitize::MemorySource::Agents,
-                    ));
-                } else {
-                    context.push_str("# Available Agents (AGENTS.md)\n\n");
-                    context.push_str(&agents_content);
-                }
-                context.push_str("\n\n---\n\n");
-            }
-        }
-
-        // Load TOOLS.md (OpenClaw-compatible: local tool notes)
-        if let Ok(tools_content) = self.memory.read_tools_file() {
-            if !tools_content.is_empty() {
-                if use_delimiters {
-                    context.push_str(&sanitize::wrap_memory_content(
-                        "TOOLS.md",
-                        &tools_content,
-                        sanitize::MemorySource::Tools,
-                    ));
-                } else {
-                    context.push_str("# Tool Notes (TOOLS.md)\n\n");
-                    context.push_str(&tools_content);
-                }
-                context.push_str("\n\n---\n\n");
-            }
-        }
-
-        // Load MEMORY.md if it exists
-        if let Ok(memory_content) = self.memory.read_memory_file() {
-            if !memory_content.is_empty() {
-                if use_delimiters {
-                    context.push_str(&sanitize::wrap_memory_content(
-                        "MEMORY.md",
-                        &memory_content,
-                        sanitize::MemorySource::Memory,
-                    ));
-                } else {
-                    context.push_str("# Long-term Memory (MEMORY.md)\n\n");
-                    context.push_str(&memory_content);
-                }
-                context.push_str("\n\n");
-            }
-        }
-
-        // Load today's and yesterday's daily logs
-        if let Ok(recent_logs) = self.memory.read_recent_daily_logs(2) {
-            if !recent_logs.is_empty() {
-                if use_delimiters {
-                    context.push_str(&sanitize::wrap_memory_content(
-                        "memory/*.md",
-                        &recent_logs,
-                        sanitize::MemorySource::DailyLog,
-                    ));
-                } else {
-                    context.push_str("# Recent Daily Logs\n\n");
-                    context.push_str(&recent_logs);
-                }
-                context.push_str("\n\n");
-            }
-        }
-
-        // Load HEARTBEAT.md if it exists
-        if let Ok(heartbeat) = self.memory.read_heartbeat_file() {
-            if !heartbeat.is_empty() {
-                if use_delimiters {
-                    context.push_str(&sanitize::wrap_memory_content(
-                        "HEARTBEAT.md",
-                        &heartbeat,
-                        sanitize::MemorySource::Heartbeat,
-                    ));
-                } else {
-                    context.push_str("# Pending Tasks (HEARTBEAT.md)\n\n");
-                    context.push_str(&heartbeat);
-                }
-                context.push('\n');
-            }
-        }
-
-        Ok(context)
-    }
-
-    async fn should_compact(&self) -> bool {
-        let limit = self.config.context_window - self.config.reserve_tokens;
-        self.compaction_strategy.should_compact(&*self.session.read().await, limit)
-    }
-
-    /// Check if we should run pre-compaction memory flush (soft threshold)
-    async fn should_memory_flush(&self) -> bool {
-        let hard_limit = self.config.context_window - self.config.reserve_tokens;
-        let soft_limit = hard_limit.saturating_sub(MEMORY_FLUSH_SOFT_THRESHOLD);
-
-        let session = self.session.read().await;
-        session.token_count() > soft_limit && session.should_memory_flush()
+        self.tool_executor.execute_tool(call).await
     }
 
     pub async fn compact_session(&mut self) -> Result<(usize, usize)> {
-        let before = self.session.read().await.token_count();
-
-        // Trigger memory flush before compacting (if not already done)
-        if self.should_memory_flush().await {
-            self.memory_flush().await?;
-        }
-
-        // Compact the session
-        // Requires write lock
-        {
-            let mut session = self.session.write().await;
-            self.compaction_strategy.compact(&mut *session, &self.client).await?;
-        }
-
-        let after = self.session.read().await.token_count();
-        info!("Session compacted: {} -> {} tokens", before, after);
-
-        Ok((before, after))
+        self.session_manager.compact_session(self.chat_engine.client()).await
     }
 
-    /// Pre-compaction memory flush - prompts agent to save important info
-    /// Runs before compaction to preserve important context to disk
-    async fn memory_flush(&mut self) -> Result<()> {
-        // Mark as flushed for this compaction cycle (prevents running twice)
-        self.session.write().await.mark_memory_flushed();
-
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let flush_prompt = format!(
-            "Pre-compaction memory flush. Session nearing token limit.\n\
-             Store durable memories now (use memory/{}.md; create memory/ if needed).\n\
-             - MEMORY.md for persistent facts (user info, preferences, key decisions)\n\
-             - memory/{}.md for session notes\n\n\
-             If nothing to store, reply: {}",
-            today, today, SILENT_REPLY_TOKEN
-        );
-
-        // Add flush prompt as user message
-        self.session.write().await.add_message(Message {
-            role: Role::User,
-            content: flush_prompt,
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
-
-        // Get tool schemas so agent can write files
-        let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
-        let messages = self.session.read().await.messages_for_llm();
-
-        let response = self.client.chat(&messages, Some(&tool_schemas)).await?;
-
-        // Handle response (may include tool calls)
-        let final_response = self.handle_response(response).await?;
-
-        // Add response to session
-        self.session.write().await.add_message(Message {
-            role: Role::Assistant,
-            content: final_response.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
-
-        if !is_silent_reply(&final_response) {
-            debug!("Memory flush response: {}", final_response);
-        }
-
-        Ok(())
-    }
-
-    /// Save current session to memory file (called on /new command)
-    /// Creates memory/YYYY-MM-DD-slug.md with session transcript
     pub async fn save_session_to_memory(&self) -> Result<Option<PathBuf>> {
-        let messages = self.session.read().await.user_assistant_messages();
-
-        debug!(
-            "save_session_to_memory: {} user/assistant messages found",
-            messages.len()
-        );
-
-        // Skip if no conversation happened
-        if messages.is_empty() {
-            debug!("save_session_to_memory: no messages to save, returning None");
-            return Ok(None);
-        }
-
-        // Get config settings for session memory
-        let max_messages = self.app_config.memory.session_max_messages;
-        let max_chars = self.app_config.memory.session_max_chars;
-
-        // Limit messages by count (0 = unlimited), take from end like OpenClaw
-        let messages: Vec<_> = if max_messages > 0 && messages.len() > max_messages {
-            let skip_count = messages.len() - max_messages;
-            messages.into_iter().skip(skip_count).collect()
-        } else {
-            messages
-        };
-
-        // Generate slug from first user message
-        let slug = messages
-            .iter()
-            .find(|m| m.role == Role::User)
-            .map(|m| generate_slug(&m.content))
-            .unwrap_or_else(|| "session".to_string());
-
-        let now = chrono::Local::now();
-        let date_str = now.format("%Y-%m-%d").to_string();
-        let time_str = now.format("%H:%M:%S").to_string();
-
-        // Build memory file content
-        let mut content = format!(
-            "# Session: {} {}\n\n\
-             - **Session ID**: {}\n\n\
-             ## Conversation\n\n",
-            date_str,
-            time_str,
-            self.session.read().await.id()
-        );
-
-        for msg in &messages {
-            let role = match msg.role {
-                Role::User => "**User**",
-                Role::Assistant => "**Assistant**",
-                _ => continue,
-            };
-            // Only truncate if max_chars > 0 (0 = unlimited, preserves full content)
-            let (msg_content, truncated) =
-                if max_chars > 0 && msg.content.chars().count() > max_chars {
-                    (
-                        msg.content.chars().take(max_chars).collect::<String>(),
-                        "...",
-                    )
-                } else {
-                    (msg.content.clone(), "")
-                };
-            content.push_str(&format!("{}: {}{}\n\n", role, msg_content, truncated));
-        }
-
-        // Write to memory/YYYY-MM-DD-slug.md
-        let memory_dir = self.memory.workspace().join("memory");
-        std::fs::create_dir_all(&memory_dir)?;
-
-        let filename = format!("{}-{}.md", date_str, slug);
-        let path = memory_dir.join(&filename);
-
-        debug!(
-            "save_session_to_memory: writing {} bytes to {}",
-            content.len(),
-            path.display()
-        );
-        std::fs::write(&path, content)?;
-        info!("Saved session to memory: {}", path.display());
-
-        Ok(Some(path))
+        self.session_manager.save_session_to_memory(&self.memory).await
     }
 
     pub async fn clear_session(&mut self) {
-        let mut session = self.session.write().await;
-        *session = Session::new();
+        self.session_manager.clear_session().await
     }
 
     pub async fn search_memory(&self, query: &str) -> Result<Vec<MemoryChunk>> {
@@ -833,35 +394,27 @@ impl Agent {
 
     pub async fn reindex_memory(&self) -> Result<(usize, usize, usize)> {
         let stats = self.memory.reindex(true).await?;
-
-        // Generate embeddings for new chunks (if embedding provider is configured)
         let (_, embedded) = self.memory.generate_embeddings(50).await?;
-
         Ok((stats.files_processed, stats.chunks_indexed, embedded))
     }
 
     pub async fn save_session(&self) -> Result<PathBuf> {
-        self.session.read().await.save()
+        self.session_manager.save_session().await
     }
 
-    /// Save session for a specific agent ID (used by HTTP server)
     pub async fn save_session_for_agent(&self, agent_id: &str) -> Result<PathBuf> {
-        self.session.read().await.save_for_agent(agent_id)
+        self.session_manager.save_session_for_agent(agent_id).await
     }
 
     pub async fn session_status(&self) -> SessionStatus {
-        self.session.read().await.status_with_usage(
+        self.session_manager.session_status(
             self.cumulative_usage.input_tokens,
             self.cumulative_usage.output_tokens,
-        )
+        ).await
     }
 
-    /// Stream chat response - returns a stream of chunks
-    /// After consuming the stream, call `finish_chat_stream` with the full response
-    /// Note: Tool calls during streaming are not yet supported - the model will know
-    /// about tools but any tool_use blocks won't be executed automatically.
     pub async fn chat_stream(&mut self, message: &str) -> Result<StreamResult> {
-        self.chat_stream_with_images(message, Vec::new()).await
+        self.chat_engine.chat_stream(message).await
     }
 
     pub async fn chat_stream_with_images(
@@ -869,132 +422,35 @@ impl Agent {
         message: &str,
         images: Vec<ImageAttachment>,
     ) -> Result<StreamResult> {
-        // Add user message with images
-        self.session.write().await.add_message(Message {
-            role: Role::User,
-            content: message.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-            images,
-        });
-
-        // Check if we should run pre-compaction memory flush (soft threshold)
-        if self.should_memory_flush().await {
-            info!("Running pre-compaction memory flush (soft threshold)");
-            self.memory_flush().await?;
-        }
-
-        // Check if we need to compact (hard limit)
-        if self.should_compact().await {
-            self.compact_session().await?;
-        }
-
-        // Build messages for LLM
-        let messages = self.session.read().await.messages_for_llm();
-
-        // Get tool schemas so the model knows the correct tool call format
-        let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
-
-        // Get stream from provider with tools
-        self.client
-            .chat_stream(&messages, Some(&tool_schemas))
-            .await
+        self.chat_engine.chat_stream_with_images(message, images).await
     }
 
-    /// Complete a streaming chat by adding the assistant response to the session
     pub async fn finish_chat_stream(&mut self, response: &str) {
-        self.session.write().await.add_message(Message {
-            role: Role::Assistant,
-            content: response.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
+        self.chat_engine.finish_chat_stream(response).await
     }
 
-    /// Execute tool calls that were accumulated during streaming
-    /// Returns the final response after tool execution
     pub async fn execute_streaming_tool_calls(
         &mut self,
-        text_response: &str,
-        tool_calls: Vec<ToolCall>,
+        _text_response: &str,
+        _tool_calls: Vec<ToolCall>,
     ) -> Result<String> {
-        // Add assistant message with tool calls
-        self.session.write().await.add_message(Message {
-            role: Role::Assistant,
-            content: text_response.to_string(),
-            tool_calls: Some(tool_calls.clone()),
-            tool_call_id: None,
-            images: Vec::new(),
-        });
-
-        // Execute each tool and collect results
-        let mut results = Vec::new();
-        for call in &tool_calls {
-            debug!(
-                "Executing tool: {} with args: {}",
-                call.name, call.arguments
-            );
-
-            let result = self.execute_tool(call).await;
-            results.push(ToolResult {
-                call_id: call.id.clone(),
-                output: result.unwrap_or_else(|e| format!("Error: {}", e)),
-            });
-        }
-
-        // Add tool results to session
-        for result in &results {
-            self.session.write().await.add_message(Message {
-                role: Role::Tool,
-                content: result.output.clone(),
-                tool_calls: None,
-                tool_call_id: Some(result.call_id.clone()),
-                images: Vec::new(),
-            });
-        }
-
-        // Get follow-up response from LLM
-        let messages = self.session.read().await.messages_for_llm();
-        let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
-        let response = self
-            .client
-            .chat(&messages, Some(tool_schemas.as_slice()))
-            .await?;
-
-        // Handle the response (may have more tool calls)
-        let final_response = self.handle_response(response).await?;
-
-        // Add final response to session
-        self.session.write().await.add_message(Message {
-            role: Role::Assistant,
-            content: final_response.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
-
-        Ok(final_response)
+        anyhow::bail!("execute_streaming_tool_calls is deprecated")
     }
 
-    /// Get a reference to the LLM provider for streaming
-    pub fn provider(&self) -> &dyn LLMProvider {
-        &self.client
+    pub fn provider(&self) -> SmartClient {
+        self.chat_engine.client().clone()
     }
 
-    /// Get messages for the LLM (for streaming)
     pub async fn session_messages(&self) -> Vec<Message> {
-        self.session.read().await.messages_for_llm()
+        self.session_manager.session().read().await.messages_for_llm()
     }
 
-    /// Get raw session messages with metadata
     pub async fn raw_session_messages(&self) -> Vec<SessionMessage> {
-        self.session.read().await.raw_messages().to_vec()
+        self.session_manager.session().read().await.raw_messages().to_vec()
     }
 
-    /// Add a user message to the session
     pub async fn add_user_message(&mut self, content: &str) {
-        self.session.write().await.add_message(Message {
+        self.session_manager.session().write().await.add_message(Message {
             role: Role::User,
             content: content.to_string(),
             tool_calls: None,
@@ -1003,9 +459,8 @@ impl Agent {
         });
     }
 
-    /// Add an assistant message to the session
     pub async fn add_assistant_message(&mut self, content: &str) {
-        self.session.write().await.add_message(Message {
+        self.session_manager.session().write().await.add_message(Message {
             role: Role::Assistant,
             content: content.to_string(),
             tool_calls: None,
@@ -1014,210 +469,33 @@ impl Agent {
         });
     }
 
-    /// Stream chat with tool support
-    /// Yields StreamEvent for content chunks and tool executions
-    /// Automatically handles tool calls and continues the conversation
     pub async fn chat_stream_with_tools(
         &mut self,
         message: &str,
         images: Vec<ImageAttachment>,
     ) -> Result<impl futures::Stream<Item = Result<StreamEvent>> + '_> {
-        // 1. Check vision support and process images if needed
-        let mut final_content = message.to_string();
-        let mut final_images = images;
-        let config = self.client.resolve_config(self.model())?;
-
-        if config.supports_vision == Some(false) && !final_images.is_empty() {
-            info!("Model {} does not support vision. Generating descriptions...", self.model());
-            let vision_service = VisionService::new(&self.app_config);
-
-            for (i, img) in final_images.iter().enumerate() {
-                match vision_service.describe_image(img).await {
-                    Ok(desc) => {
-                        final_content.push_str(&format!("\n\n[Image {} Description: {}]", i + 1, desc));
-                    }
-                    Err(e) => {
-                        final_content.push_str(&format!("\n\n[Image {} processing failed: {}]", i + 1, e));
-                    }
-                }
-            }
-            final_images.clear();
-        }
-
-        // Add user message
-        self.session.write().await.add_message(Message {
-            role: Role::User,
-            content: final_content,
-            tool_calls: None,
-            tool_call_id: None,
-            images: final_images,
-        });
-
-        // Check if we should run pre-compaction memory flush (soft threshold)
-        if self.should_memory_flush().await {
-            info!("Running pre-compaction memory flush (soft threshold)");
-            self.memory_flush().await?;
-        }
-
-        // Check if we need to compact (hard limit)
-        if self.should_compact().await {
-            self.compact_session().await?;
-        }
-
-        Ok(self.stream_with_tool_loop())
+        self.chat_engine.chat_stream_with_tools(message, images).await
     }
 
-    fn stream_with_tool_loop(&mut self) -> impl futures::Stream<Item = Result<StreamEvent>> + '_ {
-        async_stream::stream! {
-            let max_tool_iterations = 10;
-            let mut iteration = 0;
-
-            loop {
-                iteration += 1;
-                if iteration > max_tool_iterations {
-                    yield Err(anyhow::anyhow!("Max tool iterations exceeded"));
-                    break;
-                }
-
-                // Get tool schemas
-                let tool_schemas: Vec<ToolSchema> = self.tools.iter().map(|t| t.schema()).collect();
-
-                // Build messages for LLM
-                let messages = self.session.read().await.messages_for_llm();
-
-                // Try streaming first (without tools since most providers don't support tool streaming)
-                // Then check for tool calls in the response
-                let response = self
-                    .client
-                    .chat(&messages, Some(tool_schemas.as_slice()))
-                    .await;
-
-                match response {
-                    Ok(resp) => {
-                        // Track usage
-                        self.add_usage(resp.response.usage);
-
-                        match resp.response.content {
-                            LLMResponseContent::Text(text) => {
-                                // No tool calls - yield the text and we're done
-                                yield Ok(StreamEvent::Content(text.clone()));
-                                yield Ok(StreamEvent::Done);
-
-                                // Add to session
-                                self.session.write().await.add_message(Message {
-                                    role: Role::Assistant,
-                                    content: text,
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                    images: Vec::new(),
-                                });
-                                break;
-                            }
-                            LLMResponseContent::ToolCalls(calls) => {
-                                // Add tool call message to session (assistant turn)
-                                self.session.write().await.add_message(Message {
-                                    role: Role::Assistant,
-                                    content: String::new(),
-                                    tool_calls: Some(calls.clone()),
-                                    tool_call_id: None,
-                                    images: Vec::new(),
-                                });
-
-                                // Notify about and execute tool calls
-                                for call in &calls {
-                                    if self.requires_approval(&call.name) {
-                                        yield Ok(StreamEvent::ApprovalRequired {
-                                            name: call.name.clone(),
-                                            id: call.id.clone(),
-                                            arguments: call.arguments.clone(),
-                                        });
-                                        // The caller must call provide_tool_result then resume_chat_stream_with_tools
-                                        return;
-                                    }
-
-                                    yield Ok(StreamEvent::ToolCallStart {
-                                        name: call.name.clone(),
-                                        id: call.id.clone(),
-                                        arguments: call.arguments.clone(),
-                                    });
-
-                                    // Execute tool
-                                    let result = self.execute_tool(call).await;
-                                    let output = result.unwrap_or_else(|e| format!("Error: {}", e));
-
-                                    yield Ok(StreamEvent::ToolCallEnd {
-                                        name: call.name.clone(),
-                                        id: call.id.clone(),
-                                        output: output.clone(),
-                                    });
-
-                                    // Add tool result to session
-                                    self.session.write().await.add_message(Message {
-                                        role: Role::Tool,
-                                        content: output,
-                                        tool_calls: None,
-                                        tool_call_id: Some(call.id.clone()),
-                                        images: Vec::new(),
-                                    });
-                                }
-
-                                // Continue loop to get next response
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        yield Err(e);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Get tool schemas for external use
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
-        self.tools.iter().map(|t| t.schema()).collect()
+        self.tool_executor.tool_schemas()
     }
 
-    /// Provide a result for a tool call that required approval
     pub async fn provide_tool_result(&mut self, call_id: String, output: String) {
-        self.session.write().await.add_message(Message {
-            role: Role::Tool,
-            content: output,
-            tool_calls: None,
-            tool_call_id: Some(call_id),
-            images: Vec::new(),
-        });
+        self.chat_engine.provide_tool_result(call_id, output).await
     }
 
-    /// Resume a streaming chat after tool results have been provided
+    pub fn approve_tool_call(&self, call_id: &str) {
+        self.tool_executor.approve_tool_call(call_id);
+    }
+
     pub async fn resume_chat_stream_with_tools(
         &mut self,
     ) -> Result<impl futures::Stream<Item = Result<StreamEvent>> + '_> {
-        Ok(self.stream_with_tool_loop())
+         self.chat_engine.resume_chat_stream_with_tools().await
     }
 
-    /// Auto-save session to disk (call after each message)
     pub async fn auto_save_session(&self) -> Result<()> {
-        self.session.read().await.auto_save()
+        self.session_manager.auto_save_session().await
     }
 }
-
-/// Welcome message shown on first run (brand new workspace)
-const FIRST_RUN_WELCOME: &str = r#"# Welcome to Zier Alpha
-
-This is your first session. I've set up a fresh workspace for you.
-
-## Quick Start
-
-1. **Just chat** - I'm ready to help with coding, writing, research, or anything else
-2. **Your memory files** are in the workspace:
-   - `MEMORY.md` - I'll remember important things here
-   - `SOUL.md` - Customize my personality and behavior
-   - `HEARTBEAT.md` - Tasks for autonomous mode
-
-## Tell Me About Yourself
-
-What's your name? What kind of projects do you work on? Any preferences for how I should communicate?
-
-I'll save what I learn to MEMORY.md so I remember it next time."#;

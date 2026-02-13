@@ -547,6 +547,155 @@ impl LLMProvider for OpenAIProvider {
             _ => anyhow::bail!("Unexpected response type"),
         }
     }
+
+    async fn chat_stream(
+        &self,
+        messages: &[Message],
+        tools: Option<&[ToolSchema]>,
+    ) -> Result<StreamResult> {
+        let mut body = json!({
+            "model": self.model,
+            "messages": self.format_messages(messages),
+            "stream": true,
+            "stream_options": { "include_usage": true }
+        });
+
+        if let Some(tools) = tools {
+            if !tools.is_empty() {
+                body["tools"] = json!(self.format_tools(tools));
+            }
+        }
+
+        debug!("OpenAI streaming request: {}", serde_json::to_string_pretty(&body)?);
+
+        let response = self
+            .client
+            .post(format!("{}/chat/completions", self.base_url))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let error_body = response.text().await?;
+            if status == 429 {
+                anyhow::bail!(LlmError::RateLimit(error_body));
+            }
+            anyhow::bail!(LlmError::ProviderError { status, message: error_body });
+        }
+
+        let stream = async_stream::stream! {
+            let mut byte_stream = response.bytes_stream();
+            let mut buffer = String::new();
+
+            // Pending tool calls: index -> ToolCallBuilder
+            #[derive(Default)]
+            struct ToolCallBuilder {
+                id: Option<String>,
+                name: Option<String>,
+                arguments: String,
+            }
+            let mut pending_tools: std::collections::HashMap<u64, ToolCallBuilder> = std::collections::HashMap::new();
+
+            while let Some(chunk) = byte_stream.next().await {
+                match chunk {
+                    Ok(bytes) => {
+                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+                        while let Some(pos) = buffer.find("\n\n") {
+                            let event = buffer[..pos].to_string();
+                            buffer = buffer[pos + 2..].to_string();
+
+                            for line in event.lines() {
+                                if let Some(data) = line.strip_prefix("data: ") {
+                                    if data == "[DONE]" {
+                                        let tool_calls = if !pending_tools.is_empty() {
+                                            // Convert pending tools to vec sorted by index
+                                            let mut calls: Vec<(u64, ToolCall)> = pending_tools.drain()
+                                                .filter_map(|(idx, b)| {
+                                                    if let (Some(id), Some(name)) = (b.id, b.name) {
+                                                        Some((idx, ToolCall { id, name, arguments: b.arguments }))
+                                                    } else {
+                                                        None
+                                                    }
+                                                })
+                                                .collect();
+                                            calls.sort_by_key(|k| k.0);
+                                            Some(calls.into_iter().map(|(_, c)| c).collect())
+                                        } else {
+                                            None
+                                        };
+
+                                        yield Ok(StreamChunk {
+                                            delta: String::new(),
+                                            done: true,
+                                            tool_calls,
+                                        });
+                                        continue;
+                                    }
+
+                                    if let Ok(json) = serde_json::from_str::<Value>(data) {
+                                        // Handle usage if present (stream_options)
+                                        if let Some(_usage) = json.get("usage") {
+                                            // TODO: We could emit usage via a special StreamChunk or side channel,
+                                            // but StreamChunk definition currently doesn't support usage field.
+                                            // Ideally update StreamChunk to support usage.
+                                            continue;
+                                        }
+
+                                        if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
+                                            if let Some(choice) = choices.get(0) {
+                                                if let Some(delta) = choice.get("delta") {
+                                                    // Content delta
+                                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                                        yield Ok(StreamChunk {
+                                                            delta: content.to_string(),
+                                                            done: false,
+                                                            tool_calls: None,
+                                                        });
+                                                    }
+
+                                                    // Tool calls delta
+                                                    if let Some(tool_calls) = delta.get("tool_calls").and_then(|tc| tc.as_array()) {
+                                                        for tc in tool_calls {
+                                                            if let Some(index) = tc.get("index").and_then(|i| i.as_u64()) {
+                                                                let builder = pending_tools.entry(index).or_default();
+
+                                                                if let Some(id) = tc.get("id").and_then(|s| s.as_str()) {
+                                                                    builder.id = Some(id.to_string());
+                                                                }
+
+                                                                if let Some(function) = tc.get("function") {
+                                                                    if let Some(name) = function.get("name").and_then(|s| s.as_str()) {
+                                                                        builder.name = Some(name.to_string());
+                                                                    }
+                                                                    if let Some(args) = function.get("arguments").and_then(|s| s.as_str()) {
+                                                                        builder.arguments.push_str(args);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        yield Err(anyhow::anyhow!("Stream error: {}", e));
+                        break;
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
 }
 
 // Anthropic Provider

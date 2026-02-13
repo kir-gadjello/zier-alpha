@@ -15,6 +15,7 @@ pub struct ModelConfig {
     pub fallback_settings: Option<FallbackSettings>,
     pub aliases: Option<Vec<String>>,
     pub supports_vision: Option<bool>,
+    pub tokenizer_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -71,6 +72,7 @@ pub fn resolve_model_config(
         if let Some(v) = &child.fallback_settings { final_config.fallback_settings = Some(v.clone()); }
         if let Some(v) = &child.aliases { final_config.aliases = Some(v.clone()); }
         if let Some(v) = child.supports_vision { final_config.supports_vision = Some(v); }
+    if let Some(v) = &child.tokenizer_name { final_config.tokenizer_name = Some(v.clone()); }
     }
 
     Ok(final_config)
