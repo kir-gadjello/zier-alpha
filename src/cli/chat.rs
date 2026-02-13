@@ -152,7 +152,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
     let session_id = if let Some(id) = args.session {
         Some(id)
     } else if args.resume {
-        get_last_session_id_for_agent(agent_id)?
+        get_last_session_id_for_agent(agent_id).await?
     } else {
         None
     };
@@ -344,7 +344,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
 
                 if is_image {
                     // Read as binary and encode as base64
-                    match std::fs::read(&expanded) {
+                    match tokio::fs::read(&expanded).await {
                         Ok(bytes) => {
                             use base64::{engine::general_purpose::STANDARD, Engine as _};
                             let data = STANDARD.encode(&bytes);
@@ -371,7 +371,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     }
                 } else {
                     // Read as text
-                    match std::fs::read_to_string(&expanded) {
+                    match tokio::fs::read_to_string(&expanded).await {
                         Ok(content) => {
                             let size = content.len();
                             pending_attachments.push(Attachment::Text {
@@ -645,7 +645,7 @@ async fn handle_command(
             CommandResult::Continue
         }
 
-        "/sessions" => match list_sessions_for_agent(agent_id) {
+        "/sessions" => match list_sessions_for_agent(agent_id).await {
             Ok(sessions) => {
                 if sessions.is_empty() {
                     println!("\nNo saved sessions found.\n");
@@ -676,7 +676,7 @@ async fn handle_command(
             }
             let query = parts[1..].join(" ");
 
-            match search_sessions_for_agent(agent_id, &query) {
+            match search_sessions_for_agent(agent_id, &query).await {
                 Ok(results) => {
                     if results.is_empty() {
                         println!("\nNo sessions found matching '{}'.\n", query);
@@ -712,7 +712,7 @@ async fn handle_command(
             let session_id = parts[1];
 
             // Find session by prefix match
-            match list_sessions_for_agent(agent_id) {
+            match list_sessions_for_agent(agent_id).await {
                 Ok(sessions) => {
                     let matching: Vec<_> = sessions
                         .iter()
@@ -920,7 +920,7 @@ async fn handle_command(
             if parts.len() >= 2 {
                 let path = parts[1..].join(" ");
                 let expanded = shellexpand::tilde(&path).to_string();
-                match std::fs::write(&expanded, &markdown) {
+                match tokio::fs::write(&expanded, &markdown).await {
                     Ok(()) => {
                         println!("\nSession exported to: {}\n", expanded);
                         CommandResult::Continue

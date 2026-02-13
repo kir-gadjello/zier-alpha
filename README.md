@@ -20,6 +20,8 @@
 
 A local-first cognitive kernel engineered in Rust. This is the alpha foundation of Vizier, a silicon-based Staffer that enforces a strict separation between cognition and execution. Featuring persistent memory and autonomous agency, it reserves the root context for reasoning while strictly confining tool use to secure, discrete environments.
 
+For a detailed technical overview, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ## Core Philosophy
 
 * **Single binary** — No Node.js, Docker, or Python runtime dependencies for the core. Includes an embedded Deno engine for extensible JS/TS tooling.

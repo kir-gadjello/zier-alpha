@@ -6,7 +6,6 @@
 use anyhow::Result;
 use axum::{
     extract::{
-        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
     http::{header, StatusCode},
@@ -17,7 +16,6 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use futures::{SinkExt, StreamExt};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -164,7 +162,6 @@ impl Server {
             .route("/api/sessions/{session_id}/model", post(set_session_model))
             .route("/api/chat", post(chat))
             .route("/api/chat/stream", post(chat_stream))
-            .route("/api/ws", get(websocket_handler))
             .route("/api/memory/search", get(memory_search))
             .route("/api/memory/stats", get(memory_stats))
             .route("/api/memory/reindex", post(memory_reindex))
@@ -252,7 +249,7 @@ async fn cleanup_expired_sessions(state: &Arc<AppState>) {
 async fn load_persisted_sessions(state: &Arc<AppState>) -> Result<(), anyhow::Error> {
     use crate::agent::list_sessions_for_agent;
 
-    let sessions_list = list_sessions_for_agent(HTTP_AGENT_ID)?;
+    let sessions_list = list_sessions_for_agent(HTTP_AGENT_ID).await?;
     let mut loaded = 0;
 
     for session_info in sessions_list.into_iter().take(MAX_SESSIONS) {
@@ -1132,7 +1129,7 @@ struct SavedSessionsResponse {
 async fn list_saved_sessions(State(_state): State<Arc<AppState>>) -> Response {
     use crate::agent::list_sessions_for_agent;
 
-    match list_sessions_for_agent(HTTP_AGENT_ID) {
+    match list_sessions_for_agent(HTTP_AGENT_ID).await {
         Ok(sessions) => {
             let session_list: Vec<SavedSessionInfo> = sessions
                 .into_iter()
@@ -1345,240 +1342,3 @@ async fn get_daemon_logs(Query(query): Query<LogsQuery>) -> Response {
     .into_response()
 }
 
-// WebSocket handler
-async fn websocket_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_websocket(socket, state))
-}
-
-/// WebSocket message types
-#[derive(Deserialize)]
-#[serde(tag = "type")]
-enum WsIncoming {
-    /// Start or resume a session
-    #[serde(rename = "session")]
-    Session { session_id: Option<String> },
-    /// Chat message (uses tool loop, returns complete response)
-    /// For streaming, use the SSE endpoint at /api/chat/stream
-    #[serde(rename = "chat")]
-    Chat { message: String },
-    /// Ping for keepalive
-    #[serde(rename = "ping")]
-    Ping,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type")]
-#[allow(dead_code)] // ToolStart/ToolEnd reserved for streaming with tools
-enum WsOutgoing {
-    /// Connection established
-    #[serde(rename = "connected")]
-    Connected { session_id: String },
-    /// Text content chunk
-    #[serde(rename = "content")]
-    Content { delta: String },
-    /// Tool call started
-    #[serde(rename = "tool_start")]
-    ToolStart { name: String, id: String },
-    /// Tool call completed
-    #[serde(rename = "tool_end")]
-    ToolEnd {
-        name: String,
-        id: String,
-        output: String,
-    },
-    /// Message complete
-    #[serde(rename = "done")]
-    Done,
-    /// Pong response
-    #[serde(rename = "pong")]
-    Pong,
-    /// Error
-    #[serde(rename = "error")]
-    Error { message: String },
-}
-
-async fn handle_websocket(socket: WebSocket, state: Arc<AppState>) {
-    let (mut sender, mut receiver) = socket.split();
-
-    debug!("WebSocket client connected");
-
-    // Track current session for this connection
-    let mut current_session_id: Option<String> = None;
-
-    // Process incoming messages
-    while let Some(msg) = receiver.next().await {
-        match msg {
-            Ok(WsMessage::Text(text)) => {
-                // Parse incoming message
-                match serde_json::from_str::<WsIncoming>(&text) {
-                    Ok(WsIncoming::Session { session_id }) => {
-                        // Create or resume session
-                        match get_or_create_session(&state, session_id).await {
-                            Ok(id) => {
-                                current_session_id = Some(id.clone());
-                                let connected = WsOutgoing::Connected { session_id: id };
-                                if let Ok(json) = serde_json::to_string(&connected) {
-                                    let _ = sender.send(WsMessage::Text(json.into())).await;
-                                }
-                            }
-                            Err(e) => {
-                                let error = WsOutgoing::Error {
-                                    message: format!("Failed to create session: {}", e.1),
-                                };
-                                if let Ok(json) = serde_json::to_string(&error) {
-                                    let _ = sender.send(WsMessage::Text(json.into())).await;
-                                }
-                            }
-                        }
-                    }
-                    Ok(WsIncoming::Chat { message }) => {
-                        // Ensure we have a session
-                        let session_id = match &current_session_id {
-                            Some(id) => id.clone(),
-                            None => {
-                                // Auto-create session if none exists
-                                match get_or_create_session(&state, None).await {
-                                    Ok(id) => {
-                                        current_session_id = Some(id.clone());
-                                        // Notify client of new session
-                                        let connected = WsOutgoing::Connected {
-                                            session_id: id.clone(),
-                                        };
-                                        if let Ok(json) = serde_json::to_string(&connected) {
-                                            let _ = sender.send(WsMessage::Text(json.into())).await;
-                                        }
-                                        id
-                                    }
-                                    Err(e) => {
-                                        let error = WsOutgoing::Error {
-                                            message: format!("Failed to create session: {}", e.1),
-                                        };
-                                        if let Ok(json) = serde_json::to_string(&error) {
-                                            let _ = sender.send(WsMessage::Text(json.into())).await;
-                                        }
-                                        continue;
-                                    }
-                                }
-                            }
-                        };
-
-                        debug!("WebSocket chat [{}]: {}", session_id, message);
-
-                        // Acquire in-process turn gate
-                        let _gate_permit = state.turn_gate.acquire().await;
-
-                        // Acquire cross-process workspace lock
-                        let ws_lock = state.workspace_lock.clone();
-                        let _ws_guard =
-                            match tokio::task::spawn_blocking(move || ws_lock.acquire()).await {
-                                Ok(Ok(guard)) => guard,
-                                Ok(Err(e)) => {
-                                    let error = WsOutgoing::Error {
-                                        message: format!("Workspace lock error: {}", e),
-                                    };
-                                    if let Ok(json) = serde_json::to_string(&error) {
-                                        let _ = sender.send(WsMessage::Text(json.into())).await;
-                                    }
-                                    continue;
-                                }
-                                Err(e) => {
-                                    let error = WsOutgoing::Error {
-                                        message: format!("Lock task error: {}", e),
-                                    };
-                                    if let Ok(json) = serde_json::to_string(&error) {
-                                        let _ = sender.send(WsMessage::Text(json.into())).await;
-                                    }
-                                    continue;
-                                }
-                            };
-
-                        // Process chat
-                        let agent = {
-                            let mut sessions = state.sessions.lock().await;
-                            let entry = match sessions.get_mut(&session_id) {
-                                Some(e) => e,
-                                None => {
-                                    let error = WsOutgoing::Error {
-                                        message: "Session not found".to_string(),
-                                    };
-                                    if let Ok(json) = serde_json::to_string(&error) {
-                                        let _ = sender.send(WsMessage::Text(json.into())).await;
-                                    }
-                                    current_session_id = None;
-                                    continue;
-                                }
-                            };
-
-                            entry.last_accessed = Instant::now();
-                            entry.agent.clone()
-                        };
-
-                        let mut agent_lock = agent.lock().await;
-
-                        match agent_lock.chat(&message).await {
-                            Ok(response) => {
-                                // Update dirty flag
-                                {
-                                    let mut sessions = state.sessions.lock().await;
-                                    if let Some(entry) = sessions.get_mut(&session_id) {
-                                        entry.dirty = true;
-                                    }
-                                }
-                                // Send response as content
-                                let content = WsOutgoing::Content { delta: response };
-                                if let Ok(json) = serde_json::to_string(&content) {
-                                    let _ = sender.send(WsMessage::Text(json.into())).await;
-                                }
-
-                                // Send done
-                                let done = WsOutgoing::Done;
-                                if let Ok(json) = serde_json::to_string(&done) {
-                                    let _ = sender.send(WsMessage::Text(json.into())).await;
-                                }
-                            }
-                            Err(e) => {
-                                let error = WsOutgoing::Error {
-                                    message: e.to_string(),
-                                };
-                                if let Ok(json) = serde_json::to_string(&error) {
-                                    let _ = sender.send(WsMessage::Text(json.into())).await;
-                                }
-                            }
-                        }
-                    }
-                    Ok(WsIncoming::Ping) => {
-                        let pong = WsOutgoing::Pong;
-                        if let Ok(json) = serde_json::to_string(&pong) {
-                            let _ = sender.send(WsMessage::Text(json.into())).await;
-                        }
-                    }
-                    Err(e) => {
-                        let error = WsOutgoing::Error {
-                            message: format!("Invalid message format: {}", e),
-                        };
-                        if let Ok(json) = serde_json::to_string(&error) {
-                            let _ = sender.send(WsMessage::Text(json.into())).await;
-                        }
-                    }
-                }
-            }
-            Ok(WsMessage::Ping(data)) => {
-                let _ = sender.send(WsMessage::Pong(data)).await;
-            }
-            Ok(WsMessage::Close(_)) => {
-                debug!("WebSocket client disconnected");
-                break;
-            }
-            Err(e) => {
-                debug!("WebSocket error: {}", e);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    debug!("WebSocket connection closed");
-}

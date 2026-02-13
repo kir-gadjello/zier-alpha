@@ -139,7 +139,7 @@ async fn show_stats(memory: &MemoryManager) -> Result<()> {
 }
 
 async fn show_recent(memory: &MemoryManager, count: usize) -> Result<()> {
-    let entries = memory.recent_entries(count)?;
+    let entries = memory.recent_entries(count).await?;
 
     if entries.is_empty() {
         println!("No recent memory entries found");

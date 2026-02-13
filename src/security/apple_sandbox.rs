@@ -65,6 +65,7 @@ mod tests {
             allow_read: vec!["/tmp".to_string()],
             allow_write: vec![],
             allow_env: false,
+            enable_os_sandbox: true,
         };
         let profile = compile_profile(&policy, "/usr/bin/python3", "/tmp/script.py");
 
@@ -83,6 +84,7 @@ mod tests {
             allow_read: vec![],
             allow_write: vec![],
             allow_env: false,
+            enable_os_sandbox: true,
         };
         let profile = compile_profile(&policy, "/bin/bash", "/tmp/script.sh");
 

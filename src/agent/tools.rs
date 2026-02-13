@@ -10,6 +10,7 @@ pub mod external;
 pub mod runner;
 pub mod script;
 pub mod registry;
+pub mod mcp;
 
 use super::providers::ToolSchema;
 use crate::config::{Config, WorkdirStrategy};

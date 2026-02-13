@@ -18,6 +18,7 @@ fn test_sandbox_network_denied() {
         allow_read: vec![],
         allow_write: vec![],
         allow_env: false,
+        enable_os_sandbox: true,
     };
 
     // Simple python script that tries to open a socket to google.com
@@ -71,6 +72,7 @@ fn test_sandbox_write_denied() {
         allow_read: vec![],
         allow_write: vec![], // No write allowed
         allow_env: false,
+        enable_os_sandbox: true,
     };
 
     let script = r#"
