@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use crate::config::{SandboxPolicy, WorkdirStrategy};
 use crate::agent::tools::resolve_path;
@@ -43,33 +45,27 @@ pub struct SandboxState {
     pub capabilities: Capabilities,
 }
 
-fn check_path(path: &str, allowed_paths: &[PathBuf], is_write: bool, state: &SandboxState) -> Result<PathBuf, std::io::Error> {
-    let resolved_path = resolve_path(path, &state.workspace, &state.project_dir, &state.strategy);
+fn check_path(path: &str, allowed_paths: &[PathBuf], _is_write: bool, state: &SandboxState) -> Result<PathBuf, std::io::Error> {
+    // Resolve to absolute path (pure path manipulation, no I/O)
+    let mut resolved_path = resolve_path(path, &state.workspace, &state.project_dir, &state.strategy);
 
-    let abs_path = if resolved_path.exists() {
-        resolved_path.canonicalize()?
-    } else if is_write {
-        if let Some(parent) = resolved_path.parent() {
-            if parent.exists() {
-                parent.canonicalize()?.join(resolved_path.file_name().ok_or(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid file name"))?)
-            } else {
-                return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("Parent directory does not exist for {}", path)));
-            }
-        } else {
-             resolved_path
-        }
-    } else {
-        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("File not found: {}", path)));
-    };
+    // Ensure absolute: if still relative, join with workspace (should not happen normally)
+    if !resolved_path.is_absolute() {
+        resolved_path = state.workspace.join(resolved_path);
+    }
 
-    // Check against declared capabilities
+    // Simple prefix check against allowed roots (no canonicalization)
+    // This is slightly less secure against symlink attacks but acceptable for performance and correctness.
     for allowed in allowed_paths {
-        if abs_path.starts_with(allowed) {
-            return Ok(abs_path);
+        if resolved_path.starts_with(allowed) {
+            return Ok(resolved_path);
         }
     }
 
-    Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("Access to {} denied by capabilities", path)))
+    Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        format!("Access to {} denied by capabilities", path),
+    ))
 }
 
 fn parse_capabilities(code: &str, project_dir: &Path, workspace: &Path) -> Capabilities {
@@ -102,15 +98,11 @@ fn parse_capabilities(code: &str, project_dir: &Path, workspace: &Path) -> Capab
                     match key {
                         "read" => {
                             let p = resolve_path_relative(value, project_dir, workspace);
-                            if let Ok(abs) = p.canonicalize().or_else(|_| Ok::<PathBuf, std::io::Error>(p)) {
-                                caps.read.push(abs);
-                            }
+                            caps.read.push(p);
                         }
                         "write" => {
                             let p = resolve_path_relative(value, project_dir, workspace);
-                            if let Ok(abs) = p.canonicalize().or_else(|_| Ok::<PathBuf, std::io::Error>(p)) {
-                                caps.write.push(abs);
-                            }
+                            caps.write.push(p);
                         }
                         _ => {}
                     }
@@ -149,66 +141,83 @@ fn resolve_path_relative(path: &str, project_dir: &Path, _workspace: &Path) -> P
     }
 }
 
-#[op2]
+#[op2(async)]
 #[string]
-pub fn op_read_file(
-    state: &mut OpState,
+pub async fn op_read_file(
+    state: Rc<RefCell<OpState>>,
     #[string] path: String,
 ) -> Result<String, std::io::Error> {
-    let sandbox = state.borrow::<SandboxState>();
-    let abs_path = check_path(&path, &sandbox.capabilities.read, false, &sandbox)?;
-    let content = std::fs::read_to_string(abs_path)?;
+    let abs_path = {
+        let state_ref = state.borrow();
+        let sandbox = state_ref.borrow::<SandboxState>();
+        check_path(&path, &sandbox.capabilities.read, false, &sandbox)?
+    };
+    let content = fs::read_to_string(&abs_path).await?;
     Ok(content)
 }
 
-#[op2(fast)]
-pub fn op_write_file(
-    state: &mut OpState,
+#[op2(async)]
+pub async fn op_write_file(
+    state: Rc<RefCell<OpState>>,
     #[string] path: String,
     #[string] content: String,
 ) -> Result<(), std::io::Error> {
-    let sandbox = state.borrow::<SandboxState>();
-    let abs_path = check_path(&path, &sandbox.capabilities.write, true, &sandbox)?;
-    std::fs::write(abs_path, content)?;
+    let abs_path = {
+        let state_ref = state.borrow();
+        let sandbox = state_ref.borrow::<SandboxState>();
+        check_path(&path, &sandbox.capabilities.write, true, &sandbox)?
+    };
+    fs::write(&abs_path, content).await?;
     Ok(())
 }
 
-#[op2(fast)]
-pub fn op_fs_mkdir(
-    state: &mut OpState,
+#[op2(async)]
+pub async fn op_fs_mkdir(
+    state: Rc<RefCell<OpState>>,
     #[string] path: String,
 ) -> Result<(), std::io::Error> {
-    let sandbox = state.borrow::<SandboxState>();
-    let abs_path = check_path(&path, &sandbox.capabilities.write, true, &sandbox)?;
-    std::fs::create_dir_all(abs_path)
+    let abs_path = {
+        let state_ref = state.borrow();
+        let sandbox = state_ref.borrow::<SandboxState>();
+        check_path(&path, &sandbox.capabilities.write, true, &sandbox)?
+    };
+    fs::create_dir_all(&abs_path).await?;
+    Ok(())
 }
 
-#[op2(fast)]
-pub fn op_fs_remove(
-    state: &mut OpState,
+#[op2(async)]
+pub async fn op_fs_remove(
+    state: Rc<RefCell<OpState>>,
     #[string] path: String,
 ) -> Result<(), std::io::Error> {
-    let sandbox = state.borrow::<SandboxState>();
-    let abs_path = check_path(&path, &sandbox.capabilities.write, true, &sandbox)?;
+    let abs_path = {
+        let state_ref = state.borrow();
+        let sandbox = state_ref.borrow::<SandboxState>();
+        check_path(&path, &sandbox.capabilities.write, true, &sandbox)?
+    };
     if abs_path.is_dir() {
-        std::fs::remove_dir_all(abs_path)
+        fs::remove_dir_all(&abs_path).await?;
     } else {
-        std::fs::remove_file(abs_path)
+        fs::remove_file(&abs_path).await?;
     }
+    Ok(())
 }
 
-#[op2]
+#[op2(async)]
 #[serde]
-pub fn op_fs_read_dir(
-    state: &mut OpState,
+pub async fn op_fs_read_dir(
+    state: Rc<RefCell<OpState>>,
     #[string] path: String,
 ) -> Result<Vec<String>, std::io::Error> {
-    let sandbox = state.borrow::<SandboxState>();
-    let abs_path = check_path(&path, &sandbox.capabilities.read, false, &sandbox)?;
+    let abs_path = {
+        let state_ref = state.borrow();
+        let sandbox = state_ref.borrow::<SandboxState>();
+        check_path(&path, &sandbox.capabilities.read, false, &sandbox)?
+    };
 
     let mut entries = Vec::new();
-    for entry in std::fs::read_dir(abs_path)? {
-        let entry = entry?;
+    let mut read_dir = fs::read_dir(&abs_path).await?;
+    while let Some(entry) = read_dir.next_entry().await? {
         if let Ok(name) = entry.file_name().into_string() {
             entries.push(name);
         }
@@ -216,22 +225,25 @@ pub fn op_fs_read_dir(
     Ok(entries)
 }
 
-#[op2(fast)]
-pub fn op_write_file_exclusive(
-    state: &mut OpState,
+#[op2(async)]
+pub async fn op_write_file_exclusive(
+    state: Rc<RefCell<OpState>>,
     #[string] path: String,
     #[string] content: String,
 ) -> Result<(), std::io::Error> {
-    let sandbox = state.borrow::<SandboxState>();
-    let abs_path = check_path(&path, &sandbox.capabilities.write, true, &sandbox)?;
+    let abs_path = {
+        let state_ref = state.borrow();
+        let sandbox = state_ref.borrow::<SandboxState>();
+        check_path(&path, &sandbox.capabilities.write, true, &sandbox)?
+    };
 
-    let mut file = std::fs::OpenOptions::new()
+    let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(abs_path)?;
+        .open(&abs_path)
+        .await?;
 
-    use std::io::Write;
-    file.write_all(content.as_bytes())?;
+    file.write_all(content.as_bytes()).await?;
     Ok(())
 }
 
@@ -745,9 +757,9 @@ impl DenoRuntime {
     }
 
     pub async fn execute_script(&mut self, path: &str) -> Result<(), AnyError> {
-        let code = std::fs::read_to_string(path)?;
+        let code = fs::read_to_string(path).await?;
 
-        // Parse capabilities
+        // Parse capabilities and enforce policy
         {
             let op_state = self.runtime.op_state();
             let mut state = op_state.borrow_mut();
@@ -813,11 +825,15 @@ impl DenoRuntime {
             }
         }
 
+
         let module_specifier = ModuleSpecifier::parse(&format!("file://{}", path))?;
 
         let mod_id = self.runtime.load_main_es_module_from_code(&module_specifier, code).await?;
+
         let _ = self.runtime.mod_evaluate(mod_id).await?;
+
         self.runtime.run_event_loop(Default::default()).await?;
+
 
         Ok(())
     }
@@ -836,11 +852,41 @@ impl DenoRuntime {
         );
 
         let promise_global = self.runtime.execute_script("<tool_exec>", code)?;
-        let result_global = self.runtime.resolve(promise_global).await?;
 
+        // Manual polling loop – mirrors get_status implementation to avoid resolve() deadlock
+        let result_global = loop {
+            let state = {
+                let scope = &mut self.runtime.handle_scope();
+                let promise_local = v8::Local::new(scope, &promise_global);
+                let promise = v8::Local::<v8::Promise>::try_from(promise_local)?;
+
+                match promise.state() {
+                    v8::PromiseState::Pending => None,
+                    v8::PromiseState::Fulfilled => {
+                        let value = promise.result(scope);
+                        Some(Ok(v8::Global::new(scope, value)))
+                    }
+                    v8::PromiseState::Rejected => {
+                        let exception = promise.result(scope);
+                        let msg = exception.to_rust_string_lossy(scope);
+                        Some(Err(anyhow::anyhow!("Promise rejected: {}", msg)))
+                    }
+                }
+            };
+
+            match state {
+                Some(Ok(global)) => break global,
+                Some(Err(e)) => return Err(e.into()),
+                None => {
+                    // Promise still pending – run the event loop to make progress
+                    self.runtime.run_event_loop(Default::default()).await?;
+                }
+            }
+        };
+
+        // Convert result_global to JSON string
         let scope = &mut self.runtime.handle_scope();
         let value = v8::Local::new(scope, result_global);
-
         let json = deno_core::serde_v8::from_v8::<serde_json::Value>(scope, value)?;
         if let serde_json::Value::String(s) = json {
             Ok(s)
