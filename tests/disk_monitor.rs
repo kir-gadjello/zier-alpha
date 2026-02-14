@@ -8,7 +8,7 @@ async fn test_disk_monitor() {
     let _temp = TempDir::new().unwrap();
     let config = DiskConfig {
         monitor_interval: "1s".to_string(),
-        min_free_percent: 99, // Force degraded mode (unless disk is empty)
+        min_free_percent: 99.0, // Force degraded mode (unless disk is empty)
         session_retention_days: 0,
         max_log_size_mb: 0,
     };

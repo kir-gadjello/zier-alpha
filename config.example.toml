@@ -166,8 +166,11 @@ max_log_size_mb = 100
 # -----------------------------------------------------------------------------
 # [disk]
 # -----------------------------------------------------------------------------
+# Disk space monitoring and cleanup.
 [disk]
 monitor_interval = "10m"
+# Minimum free space percentage (0.0–100.0). Supports fractional values (e.g., 0.1).
+# Set to 0 to disable degraded mode threshold.
 min_free_percent = 5
 session_retention_days = 30
 max_log_size_mb = 100

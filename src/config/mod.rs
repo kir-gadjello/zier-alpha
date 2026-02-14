@@ -88,8 +88,9 @@ pub struct DiskConfig {
     #[serde(default = "default_monitor_interval")]
     pub monitor_interval: String,
 
+    /// Minimum free disk space percentage (0.0–100.0). Supports fractional values (e.g., 0.1).
     #[serde(default = "default_min_free_percent")]
-    pub min_free_percent: u8,
+    pub min_free_percent: f64,
 
     #[serde(default = "default_session_retention_days")]
     pub session_retention_days: u32,
@@ -112,8 +113,8 @@ impl Default for DiskConfig {
 fn default_monitor_interval() -> String {
     "10m".to_string()
 }
-fn default_min_free_percent() -> u8 {
-    5
+fn default_min_free_percent() -> f64 {
+    5.0
 }
 fn default_session_retention_days() -> u32 {
     0
@@ -763,6 +764,14 @@ impl Config {
             if anthropic.api_key.is_empty() {
                 anyhow::bail!("Anthropic API key is missing");
             }
+        }
+
+        // Validate Disk Configuration
+        if self.disk.min_free_percent < 0.0 || self.disk.min_free_percent > 100.0 {
+            anyhow::bail!(
+                "disk.min_free_percent must be between 0.0 and 100.0 (got {})",
+                self.disk.min_free_percent
+            );
         }
 
         // Validate Model Inheritance Cycles (Simple check)

@@ -169,4 +169,43 @@ mod tests {
 
         env::remove_var("CUSTOM_KEY");
     }
+
+    #[test]
+    fn test_disk_min_free_percent_validation() {
+        // Valid: integer within range
+        let mut cfg = Config::default();
+        cfg.disk.min_free_percent = 5.0;
+        assert!(cfg.validate().is_ok());
+
+        // Valid: 0 (disabled threshold)
+        cfg.disk.min_free_percent = 0.0;
+        assert!(cfg.validate().is_ok());
+
+        // Valid: fractional
+        cfg.disk.min_free_percent = 0.1;
+        assert!(cfg.validate().is_ok());
+
+        // Valid: 100.0
+        cfg.disk.min_free_percent = 100.0;
+        assert!(cfg.validate().is_ok());
+
+        // Invalid: negative
+        cfg.disk.min_free_percent = -1.0;
+        assert!(cfg.validate().is_err());
+
+        // Invalid: >100
+        cfg.disk.min_free_percent = 150.0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_disk_min_free_percent_parsing() {
+        // Verify that TOML with fractional number parses correctly
+        let toml = r#"
+[disk]
+min_free_percent = 0.1
+"#;
+        let config: Config = toml::from_str(toml).expect("should parse fractional min_free_percent");
+        assert_eq!(config.disk.min_free_percent, 0.1);
+    }
 }

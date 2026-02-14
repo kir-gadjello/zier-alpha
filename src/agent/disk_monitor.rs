@@ -217,7 +217,7 @@ impl DiskMonitor {
             Ok(available_bytes) => match fs2::total_space(&path) {
                 Ok(total_bytes) => {
                     let available_percent = (available_bytes as f64 / total_bytes as f64) * 100.0;
-                    let threshold = self.config.min_free_percent as f64;
+                    let threshold = self.config.min_free_percent;
 
                     let currently_degraded = self.is_degraded();
 
