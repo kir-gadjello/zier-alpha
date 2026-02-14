@@ -9,6 +9,9 @@ use zier_alpha::scripting::ScriptService;
 
 #[tokio::test]
 async fn test_workdir_overlay_strategy() {
+    // Disable disk monitoring to avoid interference in CI environments with low disk space
+    std::env::set_var("ZIER_ALPHA_DISABLE_DISK_MONITOR", "1");
+
     let workspace_tmp = TempDir::new().unwrap();
     let project_tmp = TempDir::new().unwrap();
 
@@ -66,6 +69,9 @@ async fn test_workdir_overlay_strategy() {
 
 #[tokio::test]
 async fn test_workdir_mount_strategy() {
+    // Disable disk monitoring to avoid interference in CI environments with low disk space
+    std::env::set_var("ZIER_ALPHA_DISABLE_DISK_MONITOR", "1");
+
     let workspace_tmp = TempDir::new().unwrap();
     let project_tmp = TempDir::new().unwrap();
 

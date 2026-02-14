@@ -100,6 +100,7 @@ You can also use environment variables:
 - `ZIER_ALPHA_WORKSPACE` – override workspace directory.
 - `ZIER_ALPHA_PROFILE` – select a profile (e.g., `work` → `~/.zier-alpha/workspace-work`).
 - `ZIER_ALPHA_AGENT` – set the agent ID (default `main`).
+- `ZIER_ALPHA_DISABLE_DISK_MONITOR` – set to `1` to disable automatic disk space checks (useful for CI or tests).
 
 See [`config.example.toml`](./config.example.toml) for a complete reference with comments.
 
@@ -411,7 +412,7 @@ See [`config.example.toml`](../config.example.toml) for a complete reference.
 Key sections:
 
 - `[agent]` – default model, context window, token reserve.
-- `[providers]` – API keys and endpoints for OpenAI, Anthropic, Ollama, Claude CLI.
+- `[providers]` – API keys and endpoints for OpenAI, Anthropic, Ollama, Claude CLI, and any custom OpenAI‑compatible provider (e.g., openrouter, together). Additional provider sections are accepted.
 - `[models]` – custom model definitions with inheritance and fallback chains.
 - `[heartbeat]` – enable/disable, interval, active hours.
 - `[memory]` – workspace path, embedding provider, chunking parameters.

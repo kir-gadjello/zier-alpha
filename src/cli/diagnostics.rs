@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use zier_alpha::config::Config;
 use tracing::info;
+use zier_alpha::config::Config;
 
 /// Log bootup diagnostic info (to stdio and any tracing transports like Telegram).
 pub async fn log_bootup(agent_id: &str, config: &Config, model: &str) {

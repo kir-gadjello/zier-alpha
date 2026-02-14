@@ -1,7 +1,7 @@
 use crate::agent::{
     is_silent_reply, AgentConfig, ImageAttachment, LLMResponseContent, Message, Role,
-    SessionManager, SmartClient, SmartResponse, StreamEvent, StreamResult, ToolExecutor,
-    Usage, SILENT_REPLY_TOKEN,
+    SessionManager, SmartClient, SmartResponse, StreamEvent, StreamResult, ToolExecutor, Usage,
+    SILENT_REPLY_TOKEN,
 };
 use crate::capabilities::vision::VisionService;
 use crate::config::Config;

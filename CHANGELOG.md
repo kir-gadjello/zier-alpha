@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Custom provider support**: Users can now define arbitrary OpenAI-compatible providers (e.g., `openrouter`, `together`) in config under `[providers.<name>]`. These providers are automatically recognized when referenced in a model's `provider` field. The provider config accepts `api_key` (optional if model provides `api_key_env`), `base_url`, and an optional `type` for documentation. This enables seamless integration with any OpenAI-compatible endpoint.
+
 ### Fixed
 
 #### OpenAI-compatible provider: tool calls silently dropped during streaming

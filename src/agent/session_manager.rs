@@ -140,11 +140,7 @@ impl SessionManager {
             let mut session = self.session.write().await;
 
             // Try primary strategy first
-            match self
-                .compaction_strategy
-                .compact(&mut session, client)
-                .await
-            {
+            match self.compaction_strategy.compact(&mut session, client).await {
                 Ok(_) => {}
                 Err(e) => {
                     info!("Compaction failed with primary model: {}", e);

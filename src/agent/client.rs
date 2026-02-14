@@ -103,7 +103,7 @@ impl SmartClient {
         settings.default == "allow"
     }
 
-    fn create_provider_from_config(&self, config: &ModelConfig) -> Result<Box<dyn LLMProvider>> {
+    pub fn create_provider_from_config(&self, config: &ModelConfig) -> Result<Box<dyn LLMProvider>> {
         let (provider_name, model_id) = if let Some(ref p) = config.provider {
             (p.to_lowercase(), config.model.clone())
         } else {
@@ -174,8 +174,23 @@ impl SmartClient {
                 Ok(Box::new(ClaudeCliProvider::new(cmd, &model_id, workspace)?))
             }
             _ => {
-                // Fallback to legacy creation if simple string
-                create_provider(&config.model, &self.config)
+                // Check if it's a custom provider defined in providers.extra (case-insensitive)
+                let extra_cfg = self.config.providers.extra.get(&provider_name).or_else(|| {
+                    self.config.providers.extra.iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case(&provider_name))
+                        .map(|(_, v)| v)
+                });
+                if let Some(extra_cfg) = extra_cfg {
+                    // Build OpenAI-compatible provider from extra config
+                    let api_key = get_key(&config.api_key_env, extra_cfg.api_key.as_ref())?;
+                    let base_url = get_url(&config.api_base, &extra_cfg.base_url);
+                    Ok(Box::new(OpenAIProvider::new(
+                        &api_key, &base_url, &model_id,
+                    )?))
+                } else {
+                    // Fallback to legacy creation if simple string
+                    create_provider(&config.model, &self.config)
+                }
             }
         }
     }

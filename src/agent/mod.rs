@@ -80,7 +80,8 @@ pub struct Agent {
     memory_context: Arc<MemoryContextBuilder>,
 
     chat_engine: Arc<ChatEngine>,
-    #[allow(dead_code)] // Kept for backward compatibility; may be used by external tools or future features. Not read in current code paths but part of Agent's composition.
+    #[allow(dead_code)]
+    // Kept for backward compatibility; may be used by external tools or future features. Not read in current code paths but part of Agent's composition.
     mcp_manager: Arc<McpManager>,
     disk_monitor: Arc<DiskMonitor>,
 

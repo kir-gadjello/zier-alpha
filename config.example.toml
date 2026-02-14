@@ -61,10 +61,12 @@ model = "llama3"
 command = "claude"
 model = "opus"
 
-# Example for a custom provider (e.g., LiteLLM, Groq, etc.)
-# [providers.custom]
-# api_key = "${CUSTOM_API_KEY}"
-# base_url = "https://custom.example.com/v1"
+# Custom OpenAI-compatible providers (any name, e.g., openrouter, together, groq)
+# The 'type' field is accepted but ignored; it's for documentation only.
+# [providers.openrouter]
+# type = "openai"
+# api_key = "${OPENROUTER_API_KEY}"
+# base_url = "https://openrouter.ai/api/v1"
 
 # -----------------------------------------------------------------------------
 # [models]

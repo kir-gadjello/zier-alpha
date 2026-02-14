@@ -150,7 +150,7 @@ pub enum StreamEvent {
 pub type StreamResult = Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>;
 
 #[async_trait]
-pub trait LLMProvider: Send + Sync {
+pub trait LLMProvider: Send + Sync + std::any::Any {
     async fn chat(&self, messages: &[Message], tools: Option<&[ToolSchema]>)
         -> Result<LLMResponse>;
 
@@ -703,6 +703,23 @@ impl LLMProvider for OpenAIProvider {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+impl OpenAIProvider {
+    /// Get the API key (for diagnostics/testing)
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    /// Get the base URL
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Get the model identifier
+    pub fn model(&self) -> &str {
+        &self.model
     }
 }
 

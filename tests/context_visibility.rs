@@ -73,8 +73,6 @@ agents_dir = "agents"
 
 [memory]
 workspace = "{}"
-
-[providers.mock]
 "#,
         workspace_dir.display()
     );

@@ -62,7 +62,8 @@ pub struct ServerConfig {
 
 #[derive(Serialize)]
 struct JsonRpcRequest {
-    #[allow(dead_code)] // JSON-RPC spec field; present for wire format compatibility, not read in code
+    #[allow(dead_code)]
+    // JSON-RPC spec field; present for wire format compatibility, not read in code
     jsonrpc: String,
     method: String,
     params: serde_json::Value,
@@ -71,7 +72,8 @@ struct JsonRpcRequest {
 
 #[derive(Deserialize, Debug)]
 struct JsonRpcResponse {
-    #[allow(dead_code)] // JSON-RPC spec field; present for wire format compatibility, not read in code
+    #[allow(dead_code)]
+    // JSON-RPC spec field; present for wire format compatibility, not read in code
     jsonrpc: String,
     result: Option<serde_json::Value>,
     error: Option<JsonRpcError>,

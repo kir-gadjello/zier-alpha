@@ -5,8 +5,8 @@ pub mod config;
 pub mod daemon;
 #[cfg(feature = "desktop")]
 pub mod desktop;
-pub mod memory;
 pub mod diagnostics;
+pub mod memory;
 
 use clap::{Parser, Subcommand};
 

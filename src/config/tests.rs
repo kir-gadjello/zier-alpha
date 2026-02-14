@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::config::models::{resolve_model_config, ModelConfig};
-    use crate::config::{ActiveHours, Config, OpenAIConfig};
+    use crate::config::{ActiveHours, Config, ExtraProviderConfig, OpenAIConfig};
     use std::collections::HashMap;
 
     #[test]
@@ -144,5 +144,29 @@ mod tests {
             base_url: "https://api.openai.com/v1".to_string(),
         });
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_expand_env_vars_extra_providers() {
+        use std::env;
+
+        let mut config = Config::default();
+        config.providers.extra.insert(
+            "custom".to_string(),
+            ExtraProviderConfig {
+                api_key: Some("${CUSTOM_KEY}".to_string()),
+                base_url: "https://custom.com".to_string(),
+                r#type: Some("openai".to_string()),
+                _other: HashMap::new(),
+            },
+        );
+
+        env::set_var("CUSTOM_KEY", "expanded-key");
+        config.expand_env_vars();
+
+        let expanded = config.providers.extra.get("custom").unwrap();
+        assert_eq!(expanded.api_key, Some("expanded-key".to_string()));
+
+        env::remove_var("CUSTOM_KEY");
     }
 }

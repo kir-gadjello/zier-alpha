@@ -12,6 +12,7 @@ mod tests;
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -239,6 +240,12 @@ pub struct ProvidersConfig {
 
     #[serde(default)]
     pub claude_cli: Option<ClaudeCliConfig>,
+
+    /// Additional custom providers (e.g., openrouter, together, etc.)
+    /// These are OpenAI-compatible and use the same schema as OpenAI.
+    #[serde(default)]
+    #[serde(flatten)]
+    pub extra: HashMap<String, ExtraProviderConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,6 +280,26 @@ pub struct ClaudeCliConfig {
 
     #[serde(default = "default_claude_cli_model")]
     pub model: String,
+}
+
+/// Configuration for custom OpenAI-compatible providers (e.g., openrouter, together, etc.)
+/// The `type` field is accepted but ignored; it's used in config for documentation purposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtraProviderConfig {
+    /// API key for the provider. Can be omitted if the model config provides `api_key_env`.
+    #[serde(default)]
+    pub api_key: Option<String>,
+
+    #[serde(default = "default_openai_base_url")]
+    pub base_url: String,
+
+    /// Optional provider type identifier (e.g., "openai", "custom"). Ignored at runtime.
+    #[serde(default)]
+    pub r#type: Option<String>,
+
+    /// Catch-all for any other fields (e.g., `organization`, `project`, custom headers)
+    #[serde(flatten)]
+    pub _other: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -817,6 +844,12 @@ impl Config {
         if let Some(ref mut anthropic) = self.providers.anthropic {
             anthropic.api_key = expand_env(&anthropic.api_key);
         }
+        // Expand env vars in custom providers (if api_key is Some)
+        for extra_cfg in self.providers.extra.values_mut() {
+            if let Some(ref mut key) = extra_cfg.api_key {
+                *key = expand_env(key);
+            }
+        }
     }
 
     pub fn get_value(&self, key: &str) -> Result<String> {
@@ -930,6 +963,12 @@ reserve_tokens = 8000
 # OpenAI API (for openai/* models)
 # [providers.openai]
 # api_key = "${OPENAI_API_KEY}"
+
+# Custom OpenAI-compatible providers (e.g., openrouter, together)
+# [providers.openrouter]
+# type = "openai"  # optional, for documentation only
+# api_key = "${OPENROUTER_API_KEY}"
+# base_url = "https://openrouter.ai/api/v1"
 
 # Claude CLI (for claude-cli/* models, requires claude CLI installed)
 [providers.claude_cli]

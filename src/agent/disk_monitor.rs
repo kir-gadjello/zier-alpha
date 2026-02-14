@@ -1,5 +1,6 @@
 use crate::config::DiskConfig;
 use fs2;
+use std::env;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -14,6 +15,15 @@ pub struct DiskMonitor {
 
 impl DiskMonitor {
     pub fn new(config: DiskConfig) -> Arc<Self> {
+        // If disabled via environment (e.g., in tests or CI with disk pressure),
+        // create a monitor that never degrades and does not spawn background task.
+        if env::var("ZIER_ALPHA_DISABLE_DISK_MONITOR").is_ok() {
+            return Arc::new(Self {
+                config,
+                degraded_mode: Arc::new(AtomicBool::new(false)),
+            });
+        }
+
         let monitor = Arc::new(Self {
             config,
             degraded_mode: Arc::new(AtomicBool::new(false)),
