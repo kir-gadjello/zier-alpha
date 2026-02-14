@@ -32,8 +32,8 @@ export async function runAgent(agentName, task, contextMode, attachments) {
             hydrationPath = `${tempDir}/zier-hive-${parentSessionId}-${agentName}-${uuid}.jsonl`;
 
             // Read session file and write to temp hydration file
-            const sessionContent = pi.readFile(sessionPath);
-            pi.fileSystem.writeFileExclusive(hydrationPath, sessionContent);
+            const sessionContent = await pi.readFile(sessionPath);
+            await pi.fileSystem.writeFileExclusive(hydrationPath, sessionContent);
 
             hydrationArgs = ["--hydrate-from", hydrationPath];
         } catch (e) {
@@ -90,17 +90,17 @@ export async function runAgent(agentName, task, contextMode, attachments) {
         }
 
         // Read IPC result
-        const ipcData = readIpcResult(ipcPath);
+        const ipcData = await readIpcResult(ipcPath);
 
         // Cleanup IPC file
         try {
-            pi.fileSystem.remove(ipcPath);
+            await pi.fileSystem.remove(ipcPath);
         } catch (e) {}
 
         // Cleanup hydration file (if it still exists)
         if (hydrationPath) {
              try {
-                 pi.fileSystem.remove(hydrationPath);
+                 await pi.fileSystem.remove(hydrationPath);
              } catch (e) {}
         }
 
@@ -113,12 +113,12 @@ export async function runAgent(agentName, task, contextMode, attachments) {
     } catch (e) {
         // Cleanup on error
         try {
-            pi.fileSystem.remove(ipcPath);
+            await pi.fileSystem.remove(ipcPath);
         } catch (cleanupErr) {}
 
         if (hydrationPath) {
              try {
-                 pi.fileSystem.remove(hydrationPath);
+                 await pi.fileSystem.remove(hydrationPath);
              } catch (cleanupErr) {}
         }
 

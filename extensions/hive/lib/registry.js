@@ -12,12 +12,12 @@ export async function init() {
 
     for (const dir of dirs) {
         try {
-            const files = pi.fileSystem.readDir(dir);
+            const files = await pi.fileSystem.readDir(dir);
             for (const file of files) {
                 if (file.endsWith(".md")) {
                     const path = `${dir}/${file}`;
                     try {
-                        const content = pi.readFile(path);
+                        const content = await pi.readFile(path);
                         const agent = parseAgentFile(file, content);
                         if (agent) {
                             agents.set(agent.name, agent);
