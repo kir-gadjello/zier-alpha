@@ -18,6 +18,10 @@ pub struct SandboxPolicy {
     /// Allow reading environment variables
     #[serde(default)]
     pub allow_env: bool,
+
+    /// Enforce OS-level sandboxing for external commands (unshare/sandbox-exec)
+    #[serde(default)]
+    pub enable_os_sandbox: bool,
 }
 
 impl Default for SandboxPolicy {
@@ -32,6 +36,7 @@ impl Default for SandboxPolicy {
             // but for now we keep it strict.
             allow_write: vec![],
             allow_env: false,
+            enable_os_sandbox: false,
         }
     }
 }

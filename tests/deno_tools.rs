@@ -11,6 +11,7 @@ async fn test_deno_tool_registration_and_execution() {
         allow_read: vec!["/tmp".to_string()],
         allow_write: vec!["/tmp".to_string()],
         allow_env: false,
+        enable_os_sandbox: false,
     };
 
     // 2. Initialize Service
@@ -72,6 +73,7 @@ async fn test_deno_sandbox_fs_allowed() {
         allow_read: vec![temp_path.clone()], // Allow reading specific file
         allow_write: vec![],
         allow_env: false,
+        enable_os_sandbox: false,
     };
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -125,6 +127,7 @@ async fn test_deno_sandbox_fs_denied() {
         allow_read: vec![], // No read allowed
         allow_write: vec![],
         allow_env: false,
+        enable_os_sandbox: false,
     };
 
     let temp_dir = tempfile::tempdir().unwrap();

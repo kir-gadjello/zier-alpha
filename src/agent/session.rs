@@ -8,12 +8,13 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use uuid::Uuid;
+use tokio::fs::{self, File};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::providers::{LLMProvider, Message, Role, ToolCall, Usage};
+use tiktoken_rs::cl100k_base;
 
 /// Current session format version (matches Pi)
 pub const CURRENT_SESSION_VERSION: u32 = 1;
@@ -29,6 +30,7 @@ pub struct Session {
     token_count: usize,
     compaction_count: u32,
     memory_flush_compaction_count: u32,
+    pub dirty: bool,
 }
 
 /// Message with metadata for persistence
@@ -147,6 +149,7 @@ impl Session {
             token_count: 0,
             compaction_count: 0,
             memory_flush_compaction_count: 0,
+            dirty: true, // New session is dirty until saved
         }
     }
 
@@ -160,6 +163,7 @@ impl Session {
             token_count: 0,
             compaction_count: 0,
             memory_flush_compaction_count: 0,
+            dirty: true,
         }
     }
 
@@ -181,6 +185,7 @@ impl Session {
 
     pub fn mark_memory_flushed(&mut self) {
         self.memory_flush_compaction_count = self.compaction_count + 1;
+        self.dirty = true;
     }
 
     pub fn add_metadata_to_last_message(
@@ -195,12 +200,14 @@ impl Session {
             if latency_ms.is_some() {
                 msg.latency_ms = latency_ms;
             }
+            self.dirty = true;
         }
     }
 
     pub fn set_system_context(&mut self, context: String) {
         self.system_context = Some(context);
         self.recalculate_tokens();
+        self.dirty = true;
     }
 
     pub fn system_context(&self) -> Option<&str> {
@@ -209,9 +216,10 @@ impl Session {
 
     /// Add a message without metadata
     pub fn add_message(&mut self, message: Message) {
-        let tokens = estimate_tokens(&message.content);
+        let tokens = count_tokens_default(&message.content);
         self.token_count += tokens;
         self.messages.push(SessionMessage::new(message));
+        self.dirty = true;
     }
 
     /// Add a message with provider/model metadata
@@ -223,7 +231,17 @@ impl Session {
         usage: Option<&Usage>,
         stop_reason: Option<&str>,
     ) {
-        let tokens = estimate_tokens(&message.content);
+        // If usage is provided, use it for accuracy, otherwise count defaults
+        let tokens = if let Some(u) = &usage {
+            if message.role == Role::Assistant {
+                u.output_tokens as usize
+            } else {
+                count_tokens_default(&message.content)
+            }
+        } else {
+            count_tokens_default(&message.content)
+        };
+
         self.token_count += tokens;
         self.messages.push(SessionMessage::with_metadata(
             message,
@@ -232,6 +250,7 @@ impl Session {
             usage,
             stop_reason,
         ));
+        self.dirty = true;
     }
 
     pub fn messages_for_llm(&self) -> Vec<Message> {
@@ -297,6 +316,7 @@ impl Session {
         self.messages = new_messages;
         self.compaction_count += 1;
         self.recalculate_tokens();
+        self.dirty = true;
 
         Ok(())
     }
@@ -305,35 +325,44 @@ impl Session {
         self.token_count = 0;
 
         if let Some(ref context) = self.system_context {
-            self.token_count += estimate_tokens(context);
+            self.token_count += count_tokens_default(context);
         }
 
         for sm in &self.messages {
-            self.token_count += estimate_tokens(&sm.message.content);
+            // Use stored usage if available and applicable (assistant output)
+            if let Some(usage) = &sm.usage {
+                if sm.message.role == Role::Assistant {
+                    self.token_count += usage.output as usize;
+                    continue;
+                }
+            }
+            self.token_count += count_tokens_default(&sm.message.content);
         }
     }
 
     /// Save session in Pi-compatible JSONL format
-    pub fn save(&self) -> Result<PathBuf> {
+    pub async fn save(&mut self) -> Result<PathBuf> {
         let dir = get_sessions_dir()?;
-        fs::create_dir_all(&dir)?;
+        fs::create_dir_all(&dir).await?;
 
         let path = dir.join(format!("{}.jsonl", self.id));
-        self.save_to_path(&path)?;
+        self.save_to_path(&path).await?;
+        self.dirty = false;
         Ok(path)
     }
 
-    pub fn save_for_agent(&self, agent_id: &str) -> Result<PathBuf> {
+    pub async fn save_for_agent(&mut self, agent_id: &str) -> Result<PathBuf> {
         let dir = get_sessions_dir_for_agent(agent_id)?;
-        fs::create_dir_all(&dir)?;
+        fs::create_dir_all(&dir).await?;
 
         let path = dir.join(format!("{}.jsonl", self.id));
-        self.save_to_path(&path)?;
+        self.save_to_path(&path).await?;
+        self.dirty = false;
         Ok(path)
     }
 
-    fn save_to_path(&self, path: &PathBuf) -> Result<()> {
-        let mut file = File::create(path)?;
+    async fn save_to_path(&self, path: &PathBuf) -> Result<()> {
+        let mut file = File::create(path).await?;
 
         // Write Pi-compatible header
         let header = json!({
@@ -346,7 +375,8 @@ impl Session {
             "compactionCount": self.compaction_count,
             "memoryFlushCompactionCount": self.memory_flush_compaction_count
         });
-        writeln!(file, "{}", serde_json::to_string(&header)?)?;
+        file.write_all(serde_json::to_string(&header)?.as_bytes()).await?;
+        file.write_all(b"\n").await?;
 
         // Write system context as a system message
         if let Some(ref context) = self.system_context {
@@ -357,14 +387,18 @@ impl Session {
                 tool_call_id: None,
                 images: Vec::new(),
             }));
-            writeln!(file, "{}", serde_json::to_string(&system_msg)?)?;
+            file.write_all(serde_json::to_string(&system_msg)?.as_bytes()).await?;
+            file.write_all(b"\n").await?;
         }
 
         // Write messages in Pi format
         for sm in &self.messages {
             let entry = self.format_message_entry(sm);
-            writeln!(file, "{}", serde_json::to_string(&entry)?)?;
+            file.write_all(serde_json::to_string(&entry)?.as_bytes()).await?;
+            file.write_all(b"\n").await?;
         }
+
+        file.flush().await?;
 
         Ok(())
     }
@@ -456,7 +490,7 @@ impl Session {
     }
 
     /// Load session (supports both old and Pi formats)
-    pub fn load(session_id: &str) -> Result<Self> {
+    pub async fn load(session_id: &str) -> Result<Self> {
         let dir = get_sessions_dir()?;
         let path = dir.join(format!("{}.jsonl", session_id));
 
@@ -464,16 +498,17 @@ impl Session {
             anyhow::bail!("Session not found: {}", session_id);
         }
 
-        Self::load_from_path(&path, session_id)
+        Self::load_from_path(&path, session_id).await
     }
 
-    pub fn load_file(path: &PathBuf, session_id: &str) -> Result<Self> {
-        Self::load_from_path(path, session_id)
+    pub async fn load_file(path: &PathBuf, session_id: &str) -> Result<Self> {
+        Self::load_from_path(path, session_id).await
     }
 
-    fn load_from_path(path: &PathBuf, session_id: &str) -> Result<Self> {
-        let file = File::open(path)?;
+    async fn load_from_path(path: &PathBuf, session_id: &str) -> Result<Self> {
+        let file = File::open(path).await?;
         let reader = BufReader::new(file);
+        let mut lines = reader.lines();
 
         let mut session = Session {
             id: session_id.to_string(),
@@ -484,10 +519,10 @@ impl Session {
             token_count: 0,
             compaction_count: 0,
             memory_flush_compaction_count: 0,
+            dirty: false,
         };
 
-        for line in reader.lines() {
-            let line = line?;
+        while let Ok(Some(line)) = lines.next_line().await {
             if line.trim().is_empty() {
                 continue;
             }
@@ -623,11 +658,11 @@ impl Session {
         }
     }
 
-    pub fn auto_save(&self) -> Result<()> {
-        if self.messages.is_empty() {
+    pub async fn auto_save(&mut self) -> Result<()> {
+        if !self.dirty || self.messages.is_empty() {
             return Ok(());
         }
-        self.save()?;
+        self.save().await?;
         Ok(())
     }
 
@@ -654,6 +689,7 @@ impl Session {
 
         self.compaction_count += 1;
         self.recalculate_tokens();
+        self.dirty = true;
         Ok(())
     }
 }
@@ -690,8 +726,10 @@ pub fn get_state_dir() -> Result<PathBuf> {
     Ok(base.home_dir().join(".zier-alpha"))
 }
 
-fn estimate_tokens(text: &str) -> usize {
-    text.len() / 4
+fn count_tokens_default(text: &str) -> usize {
+    cl100k_base()
+        .map(|bpe| bpe.encode_with_special_tokens(text).len())
+        .unwrap_or_else(|_| text.len() / 4) // Fallback if BPE fails
 }
 
 #[derive(Debug, Clone)]
@@ -702,11 +740,11 @@ pub struct SessionInfo {
     pub file_size: u64,
 }
 
-pub fn list_sessions() -> Result<Vec<SessionInfo>> {
-    list_sessions_for_agent(DEFAULT_AGENT_ID)
+pub async fn list_sessions() -> Result<Vec<SessionInfo>> {
+    list_sessions_for_agent(DEFAULT_AGENT_ID).await
 }
 
-pub fn list_sessions_for_agent(agent_id: &str) -> Result<Vec<SessionInfo>> {
+pub async fn list_sessions_for_agent(agent_id: &str) -> Result<Vec<SessionInfo>> {
     let sessions_dir = get_sessions_dir_for_agent(agent_id)?;
 
     if !sessions_dir.exists() {
@@ -714,9 +752,9 @@ pub fn list_sessions_for_agent(agent_id: &str) -> Result<Vec<SessionInfo>> {
     }
 
     let mut sessions = Vec::new();
+    let mut read_dir = fs::read_dir(&sessions_dir).await?;
 
-    for entry in fs::read_dir(&sessions_dir)? {
-        let entry = entry?;
+    while let Some(entry) = read_dir.next_entry().await? {
         let path = entry.path();
 
         if path.extension().map(|e| e != "jsonl").unwrap_or(true) {
@@ -729,14 +767,15 @@ pub fn list_sessions_for_agent(agent_id: &str) -> Result<Vec<SessionInfo>> {
             continue;
         }
 
-        let metadata = fs::metadata(&path)?;
+        let metadata = fs::metadata(&path).await?;
         let file_size = metadata.len();
 
-        if let Ok(file) = File::open(&path) {
+        if let Ok(file) = File::open(&path).await {
             let reader = BufReader::new(file);
-            if let Some(Ok(first_line)) = reader.lines().next() {
+            let mut lines = reader.lines();
+
+            if let Ok(Some(first_line)) = lines.next_line().await {
                 if let Ok(header) = serde_json::from_str::<serde_json::Value>(&first_line) {
-                    // Pi format header
                     if header["type"].as_str() == Some("session") {
                         let created_at = header["timestamp"]
                             .as_str()
@@ -744,14 +783,26 @@ pub fn list_sessions_for_agent(agent_id: &str) -> Result<Vec<SessionInfo>> {
                             .map(|dt| dt.with_timezone(&Utc))
                             .unwrap_or_else(Utc::now);
 
-                        let message_count = fs::read_to_string(&path)
-                            .map(|s| s.lines().count().saturating_sub(1))
-                            .unwrap_or(0);
+                        // Async line counting - inefficient but matches logic
+                        // We could improve this by just using metadata or header hint
+                        // But for now, just read all? No, that's heavy.
+                        // The original code read entire string.
+                        // I'll stick to inefficient but correct port.
+                        // Wait, reading the whole file to count messages is slow for many sessions.
+                        // I'll skip it or optimize.
+                        // `SessionInfo` needs `message_count`.
+                        // I'll do a quick count.
+
+                        // We already consumed first line.
+                        let mut count = 0;
+                        while let Ok(Some(_)) = lines.next_line().await {
+                            count += 1;
+                        }
 
                         sessions.push(SessionInfo {
                             id: filename.to_string(),
                             created_at,
-                            message_count,
+                            message_count: count,
                             file_size,
                         });
                     }
@@ -764,12 +815,12 @@ pub fn list_sessions_for_agent(agent_id: &str) -> Result<Vec<SessionInfo>> {
     Ok(sessions)
 }
 
-pub fn get_last_session_id() -> Result<Option<String>> {
-    get_last_session_id_for_agent(DEFAULT_AGENT_ID)
+pub async fn get_last_session_id() -> Result<Option<String>> {
+    get_last_session_id_for_agent(DEFAULT_AGENT_ID).await
 }
 
-pub fn get_last_session_id_for_agent(agent_id: &str) -> Result<Option<String>> {
-    let sessions = list_sessions_for_agent(agent_id)?;
+pub async fn get_last_session_id_for_agent(agent_id: &str) -> Result<Option<String>> {
+    let sessions = list_sessions_for_agent(agent_id).await?;
     Ok(sessions.first().map(|s| s.id.clone()))
 }
 
@@ -781,11 +832,11 @@ pub struct SessionSearchResult {
     pub match_count: usize,
 }
 
-pub fn search_sessions(query: &str) -> Result<Vec<SessionSearchResult>> {
-    search_sessions_for_agent(DEFAULT_AGENT_ID, query)
+pub async fn search_sessions(query: &str) -> Result<Vec<SessionSearchResult>> {
+    search_sessions_for_agent(DEFAULT_AGENT_ID, query).await
 }
 
-pub fn search_sessions_for_agent(agent_id: &str, query: &str) -> Result<Vec<SessionSearchResult>> {
+pub async fn search_sessions_for_agent(agent_id: &str, query: &str) -> Result<Vec<SessionSearchResult>> {
     let sessions_dir = get_sessions_dir_for_agent(agent_id)?;
 
     if !sessions_dir.exists() {
@@ -794,21 +845,21 @@ pub fn search_sessions_for_agent(agent_id: &str, query: &str) -> Result<Vec<Sess
 
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
+    let mut read_dir = fs::read_dir(&sessions_dir).await?;
 
-    for entry in fs::read_dir(&sessions_dir)? {
-        let entry = entry?;
+    while let Some(entry) = read_dir.next_entry().await? {
         let path = entry.path();
 
         if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
             if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(content) = fs::read_to_string(&path).await {
                     let content_lower = content.to_lowercase();
                     let match_count = content_lower.matches(&query_lower).count();
 
                     if match_count > 0 {
                         let preview = extract_match_preview(&content, &query_lower, 100);
 
-                        let created_at = fs::metadata(&path)
+                        let created_at = fs::metadata(&path).await
                             .and_then(|m| m.created())
                             .map(DateTime::<Utc>::from)
                             .unwrap_or_else(|_| Utc::now());

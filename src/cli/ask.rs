@@ -141,7 +141,7 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
         let path = PathBuf::from(hydrate_path);
         agent.hydrate_from_file(&path).await?;
         // Security cleanup: delete hydration file after reading
-        std::fs::remove_file(&path).ok();
+        tokio::fs::remove_file(&path).await.ok();
     }
 
     let workspace_lock = WorkspaceLock::new()?;
@@ -172,10 +172,10 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
         // Write to temp file first for atomicity
         let tmp_path = path.with_extension("tmp");
         {
-            let file = std::fs::File::create(&tmp_path)?;
-            serde_json::to_writer_pretty(file, &result)?;
+            let content = serde_json::to_string_pretty(&result)?;
+            tokio::fs::write(&tmp_path, content).await?;
         }
-        std::fs::rename(tmp_path, path)?;
+        tokio::fs::rename(tmp_path, path).await?;
     }
 
     match args.format.as_str() {

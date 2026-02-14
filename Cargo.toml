@@ -94,6 +94,8 @@ eframe = { version = "0.30", optional = true, default-features = false, features
     "glow",
     "persistence",
 ] }
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.25.0"
 
 # Unix daemonization (optional, only for daemon mode)
 [target.'cfg(unix)'.dependencies]
