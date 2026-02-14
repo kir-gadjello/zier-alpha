@@ -721,6 +721,20 @@ impl Config {
                     anyhow::bail!("Model '{}' cannot extend itself", name);
                 }
             }
+
+            // Validate Fallback Glob Patterns
+            if let Some(fallback) = &model.fallback_settings {
+                for pattern in &fallback.allow {
+                    if let Err(e) = glob::Pattern::new(pattern) {
+                        anyhow::bail!("Invalid glob pattern in fallback allow list for model '{}': {}", name, e);
+                    }
+                }
+                for pattern in &fallback.deny {
+                    if let Err(e) = glob::Pattern::new(pattern) {
+                        anyhow::bail!("Invalid glob pattern in fallback deny list for model '{}': {}", name, e);
+                    }
+                }
+            }
         }
 
         Ok(())

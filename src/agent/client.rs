@@ -333,9 +333,9 @@ impl LLMProvider for SmartClient {
 }
 
 fn glob_match(pattern: &str, text: &str) -> bool {
-    let pattern = pattern.replace("*", ".*");
-    let regex = regex::Regex::new(&format!("^{}$", pattern)).unwrap_or_else(|_| regex::Regex::new(".*").unwrap());
-    regex.is_match(text)
+    glob::Pattern::new(pattern)
+        .map(|p| p.matches(text))
+        .unwrap_or(false)
 }
 
 fn parse_provider_model(s: &str) -> (String, String) {

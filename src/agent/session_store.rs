@@ -4,9 +4,10 @@
 //! ~/.zier-alpha/agents/<agentId>/sessions/sessions.json
 
 use anyhow::Result;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -206,22 +207,41 @@ impl SessionStore {
 
     /// Re-read the store from disk, apply a mutation, and save atomically.
     ///
-    /// This prevents clobbering when multiple processes or tasks update
-    /// the same sessions.json concurrently (e.g., heartbeat dedup).
-    pub fn load_and_update<F>(&mut self, session_key: &str, session_id: &str, f: F) -> Result<()>
+    /// This uses an advisory file lock (sessions.json.lock) to prevent
+    /// concurrent processes from clobbering each other's updates.
+    /// This method is async and performs blocking I/O in a spawn_blocking task.
+    pub async fn load_and_update<F>(mut self, session_key: &str, session_id: &str, f: F) -> Result<()>
     where
-        F: FnOnce(&mut SessionEntry),
+        F: FnOnce(&mut SessionEntry) + Send + 'static,
     {
-        // Re-read from disk to pick up changes from other processes
-        if self.path.exists() {
-            let content = fs::read_to_string(&self.path)?;
-            self.entries = serde_json::from_str(&content).unwrap_or_default();
-        }
+        let session_key = session_key.to_string();
+        let session_id = session_id.to_string();
 
-        let entry = self.get_or_create(session_key, session_id);
-        f(entry);
-        entry.updated_at = chrono::Utc::now().timestamp_millis() as u64;
-        self.save()
+        tokio::task::spawn_blocking(move || {
+            // Create/Open lock file
+            let lock_path = self.path.with_extension("json.lock");
+            let lock_file = File::create(&lock_path)?;
+
+            // Acquire exclusive lock (blocking)
+            lock_file.lock_exclusive()?;
+
+            // Re-read from disk to pick up changes from other processes
+            if self.path.exists() {
+                let content = fs::read_to_string(&self.path)?;
+                self.entries = serde_json::from_str(&content).unwrap_or_default();
+            }
+
+            let entry = self.get_or_create(&session_key, &session_id);
+            f(entry);
+            entry.updated_at = chrono::Utc::now().timestamp_millis() as u64;
+
+            let result = self.save();
+
+            // Release lock
+            lock_file.unlock()?;
+
+            result
+        }).await?
     }
 
     /// Get CLI session ID for a session and provider
@@ -232,16 +252,19 @@ impl SessionStore {
     }
 
     /// Set CLI session ID for a session and provider
-    pub fn set_cli_session_id(
-        &mut self,
+    pub async fn set_cli_session_id(
+        mut self,
         session_key: &str,
         session_id: &str,
         provider: &str,
         cli_session_id: &str,
     ) -> Result<()> {
-        self.update(session_key, session_id, |entry| {
-            entry.set_cli_session_id(provider, cli_session_id);
-        })
+        let provider = provider.to_string();
+        let cli_session_id = cli_session_id.to_string();
+
+        self.load_and_update(session_key, session_id, move |entry| {
+            entry.set_cli_session_id(&provider, &cli_session_id);
+        }).await
     }
 }
 

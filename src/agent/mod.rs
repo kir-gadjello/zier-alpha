@@ -116,15 +116,22 @@ impl Agent {
         let client = SmartClient::new(app_config.clone(), config.model.clone());
 
         let memory = Arc::new(memory);
+        let disk_monitor = DiskMonitor::new(app_config.disk.clone());
+
         let mut tools = tools::create_default_tools_with_project(
             app_config, 
             Some(Arc::clone(&memory)), 
+            disk_monitor.clone(),
             project_dir.clone()
         )?;
 
         // Initialize MCP Manager
-        let idle_timeout = app_config.extensions.mcp.as_ref().map(|c| c.idle_timeout_secs).unwrap_or(600);
-        let mcp_manager = McpManager::new(idle_timeout);
+        let (idle_timeout, health_check_interval) = if let Some(c) = &app_config.extensions.mcp {
+            (c.idle_timeout_secs, c.health_check_interval_secs)
+        } else {
+            (600, 0)
+        };
+        let mcp_manager = McpManager::new_with_config(idle_timeout, health_check_interval);
 
         if let Some(mcp_config) = &app_config.extensions.mcp {
             if !mcp_config.servers.is_empty() {
@@ -200,7 +207,7 @@ impl Agent {
         let session_manager = SessionManager::new(app_config.clone());
         let tool_executor = ToolExecutor::new(tools, app_config.clone());
         let memory_context = Arc::new(MemoryContextBuilder::new(memory.clone(), app_config.clone()));
-        let disk_monitor = Arc::new(DiskMonitor::new(app_config.disk.clone()));
+        // disk_monitor moved up
 
         let chat_engine = ChatEngine::new(
             client,
@@ -520,6 +527,10 @@ impl Agent {
     }
 
     pub async fn auto_save_session(&self) -> Result<()> {
+        if self.disk_monitor.is_degraded() {
+            tracing::warn!("Skipping auto-save due to low disk space (degraded mode)");
+            return Ok(());
+        }
         self.session_manager.auto_save_session().await
     }
 

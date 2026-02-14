@@ -431,7 +431,8 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     // Skill invocation - send message to agent
                     print!("\nZier Alpha: ");
                     stdout.flush().ok();
-                    let _lock_guard = workspace_lock.acquire()?;
+                    let lock_clone = workspace_lock.clone();
+                    let _lock_guard = tokio::task::spawn_blocking(move || lock_clone.acquire()).await??;
                     match agent.chat(&msg).await {
                         Ok(response) => {
                             println!("{}\n", response);
@@ -484,7 +485,8 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         print!("\nZier Alpha: ");
         stdout.flush()?;
 
-        let _lock_guard = workspace_lock.acquire()?;
+        let lock_clone = workspace_lock.clone();
+        let _lock_guard = tokio::task::spawn_blocking(move || lock_clone.acquire()).await??;
         let mut current_stream: futures::stream::BoxStream<'_, Result<zier_alpha::agent::StreamEvent>> = 
             Box::pin(agent.chat_stream_with_tools(&message, images).await?);
 

@@ -17,6 +17,9 @@ pub struct McpConfig {
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_secs: u64,
 
+    #[serde(default)]
+    pub health_check_interval_secs: u64,
+
     #[serde(default = "default_strategy")]
     pub default_strategy: String,
 
@@ -89,14 +92,22 @@ pub struct McpManager {
     servers: Arc<RwLock<HashMap<String, ServerHandle>>>,
     configs: Arc<RwLock<HashMap<String, ServerConfig>>>,
     idle_timeout: Duration,
+    #[allow(dead_code)]
+    health_check_interval: Duration,
 }
 
 impl McpManager {
     pub fn new(idle_timeout_secs: u64) -> Arc<Self> {
+        // Default health check disabled (0)
+        Self::new_with_config(idle_timeout_secs, 0)
+    }
+
+    pub fn new_with_config(idle_timeout_secs: u64, health_check_interval_secs: u64) -> Arc<Self> {
         let manager = Arc::new(Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             configs: Arc::new(RwLock::new(HashMap::new())),
             idle_timeout: Duration::from_secs(idle_timeout_secs),
+            health_check_interval: Duration::from_secs(health_check_interval_secs),
         });
 
         // Spawn background reaper
@@ -111,6 +122,22 @@ impl McpManager {
                 }
             }
         });
+
+        // Spawn health check task if enabled
+        if health_check_interval_secs > 0 {
+            let m = Arc::downgrade(&manager);
+            let interval = Duration::from_secs(health_check_interval_secs);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(interval).await;
+                    if let Some(manager) = m.upgrade() {
+                        manager.perform_health_checks().await;
+                    } else {
+                        break;
+                    }
+                }
+            });
+        }
 
         manager
     }
@@ -486,6 +513,55 @@ impl McpManager {
                  let mut process = handle.process.write().await;
                  let _ = process.kill().await;
                  let _ = process.wait().await;
+            }
+        }
+    }
+
+    async fn perform_health_checks(&self) {
+        let server_names: Vec<String> = {
+            let servers = self.servers.read().await;
+            servers.keys().cloned().collect()
+        };
+
+        for name in server_names {
+            // Send ping
+            // We use a custom "ping" method. If server responds with error (method not found) or result, it's alive.
+            // If it times out, it's dead/hung.
+            match self.call(&name, "ping", serde_json::json!({})).await {
+                Ok(_) => {
+                    // Alive (even if method not found, call() returns Err if channel closed/timeout)
+                    // Actually call() returns Ok(Value) or Err.
+                    // If method not found, it returns Ok(Err(JsonRpcError)). Wait.
+                    // My implementation of call():
+                    // returns Result<Value>.
+                    // If error response from server, it returns Err(anyhow!("MCP Error ...")).
+                    // So if we get Err("MCP Error ..."), it's ALIVE.
+                    // If we get Err("Request timed out") or "Channel closed", it's DEAD.
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("MCP Error") {
+                        // Alive, just didn't like ping
+                        debug!("Server {} responded to ping with error (alive): {}", name, msg);
+                    } else {
+                        // Dead or hung
+                        error!("Server {} failed health check: {}", name, msg);
+                        // Restart
+                        // We remove it, ensure_server will restart on next use?
+                        // Or restart immediately?
+                        // Let's remove it so next ensure_server restarts it.
+                        let mut servers = self.servers.write().await;
+                        if let Some(handle) = servers.remove(&name) {
+                             let mut tx_lock = handle.shutdown_tx.write().await;
+                             if let Some(tx) = tx_lock.take() {
+                                let _ = tx.send(());
+                             }
+                             let mut process = handle.process.write().await;
+                             let _ = process.kill().await;
+                             let _ = process.wait().await;
+                        }
+                    }
+                }
             }
         }
     }

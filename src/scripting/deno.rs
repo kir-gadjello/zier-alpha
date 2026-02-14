@@ -95,6 +95,8 @@ fn parse_capabilities(code: &str, project_dir: &Path, workspace: &Path) -> Capab
             for part in decl.split(',') {
                 let part = part.trim();
                 if let Some((key, value)) = part.split_once('=') {
+                    let key = key.trim();
+                    let value = value.trim();
                     match key {
                         "read" => {
                             let p = resolve_path_relative(value, project_dir, workspace);

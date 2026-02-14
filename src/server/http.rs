@@ -28,7 +28,7 @@ use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info};
 
-use crate::agent::{extract_tool_detail, Agent, AgentConfig, StreamEvent};
+use crate::agent::{extract_tool_detail, Agent, AgentConfig, StreamEvent, LlmError};
 use crate::concurrency::{TurnGate, WorkspaceLock};
 use crate::config::Config;
 use crate::heartbeat::{get_last_heartbeat_event, HeartbeatStatus};
@@ -161,6 +161,7 @@ impl Server {
             .route("/api/sessions/{session_id}/clear", post(clear_session))
             .route("/api/sessions/{session_id}/model", post(set_session_model))
             .route("/api/chat", post(chat))
+            .route("/api/chat/approve", post(approve_tool))
             .route("/api/chat/stream", post(chat_stream))
             .route("/api/memory/search", get(memory_search))
             .route("/api/memory/stats", get(memory_stats))
@@ -684,9 +685,18 @@ struct ChatRequest {
 
 #[derive(Serialize)]
 struct ChatResponse {
-    response: String,
+    response: Option<String>,
     session_id: String,
     model: String,
+    requires_approval: bool,
+    approval_details: Option<ApprovalDetails>,
+}
+
+#[derive(Serialize)]
+struct ApprovalDetails {
+    tool_name: String,
+    tool_call_id: String,
+    arguments: String,
 }
 
 async fn chat(State(state): State<Arc<AppState>>, Json(request): Json<ChatRequest>) -> Response {
@@ -744,10 +754,72 @@ async fn chat(State(state): State<Arc<AppState>>, Json(request): Json<ChatReques
     }
 
     let result = agent_lock.chat(&request.message).await;
+    let model = agent_lock.model().to_string();
 
     // Release workspace lock explicitly before returning
     drop(ws_guard);
 
+    handle_chat_result(result, session_id, model, &state).await
+}
+
+#[derive(Deserialize)]
+struct ApproveRequest {
+    session_id: String,
+    tool_call_id: String,
+    approved: bool,
+}
+
+async fn approve_tool(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ApproveRequest>,
+) -> Response {
+    if !request.approved {
+        // If rejected, maybe we should tell the agent?
+        // For now, we just return error or do nothing?
+        // TODO: Implement rejection flow (tell agent user denied)
+        return AppError(StatusCode::BAD_REQUEST, "Rejection not implemented".to_string()).into_response();
+    }
+
+    // Acquire locks similar to chat
+    let _gate_permit = state.turn_gate.acquire().await;
+
+    let ws_lock_path = state.workspace_lock.clone();
+    let ws_guard = match tokio::task::spawn_blocking(move || ws_lock_path.acquire()).await {
+        Ok(Ok(guard)) => guard,
+        Ok(Err(e)) => return AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("Lock error: {}", e)).into_response(),
+        Err(e) => return AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("Task error: {}", e)).into_response(),
+    };
+
+    let agent = {
+        let mut sessions = state.sessions.lock().await;
+        let entry = match sessions.get_mut(&request.session_id) {
+            Some(e) => e,
+            None => return AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response(),
+        };
+        entry.last_accessed = Instant::now();
+        entry.agent.clone()
+    };
+
+    let mut agent_lock = agent.lock().await;
+
+    // Approve the call
+    agent_lock.approve_tool_call(&request.tool_call_id);
+
+    // Continue chat
+    let result = agent_lock.continue_chat().await;
+    let model = agent_lock.model().to_string();
+
+    drop(ws_guard);
+
+    handle_chat_result(result, request.session_id, model, &state).await
+}
+
+async fn handle_chat_result(
+    result: anyhow::Result<String>,
+    session_id: String,
+    model: String,
+    state: &Arc<AppState>,
+) -> Response {
     match result {
         Ok(response) => {
             // Update dirty flag
@@ -758,13 +830,45 @@ async fn chat(State(state): State<Arc<AppState>>, Json(request): Json<ChatReques
                 }
             }
             Json(ChatResponse {
-                response,
+                response: Some(response),
                 session_id,
-                model: agent_lock.model().to_string(),
+                model,
+                requires_approval: false,
+                approval_details: None,
             })
             .into_response()
         }
-        Err(e) => AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            // Check for ApprovalRequiredError
+            if let Some(approval_err) = e.downcast_ref::<LlmError>() {
+                if let LlmError::ApprovalRequired(name, call) = approval_err {
+                    // Update dirty flag (we might have added messages before tool call)
+                    {
+                        let mut sessions = state.sessions.lock().await;
+                        if let Some(entry) = sessions.get_mut(&session_id) {
+                            entry.dirty = true;
+                        }
+                    }
+
+                    return (
+                        StatusCode::PAYMENT_REQUIRED, // 402 implies "payment/action required"
+                        Json(ChatResponse {
+                            response: None,
+                            session_id,
+                            model,
+                            requires_approval: true,
+                            approval_details: Some(ApprovalDetails {
+                                tool_name: name.clone(),
+                                tool_call_id: call.id.clone(),
+                                arguments: call.arguments.clone(),
+                            }),
+                        }),
+                    ).into_response();
+                }
+            }
+            // Other errors
+            AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
     }
 }
 

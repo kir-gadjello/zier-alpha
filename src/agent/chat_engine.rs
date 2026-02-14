@@ -137,8 +137,6 @@ impl ChatEngine {
                     images: Vec::new(),
                 });
 
-                let mut results = Vec::new();
-
                 for call in &calls {
                     debug!(
                         "Executing tool: {} with args: {}",
@@ -153,18 +151,14 @@ impl ChatEngine {
                         }
                     }
 
-                    results.push(ToolResult {
-                        call_id: call.id.clone(),
-                        output: result.unwrap_or_else(|e| format!("Error: {}", e)),
-                    });
-                }
+                    let output = result.unwrap_or_else(|e| format!("Error: {}", e));
 
-                for result in &results {
+                    // Add result incrementally so partial success is preserved
                     self.session_manager.session().write().await.add_message(Message {
                         role: Role::Tool,
-                        content: result.output.clone(),
+                        content: output,
                         tool_calls: None,
-                        tool_call_id: Some(result.call_id.clone()),
+                        tool_call_id: Some(call.id.clone()),
                         images: Vec::new(),
                     });
                 }
@@ -453,12 +447,25 @@ impl ChatEngine {
 
     pub async fn continue_chat(&self) -> Result<(String, Option<Usage>)> {
         let messages = self.session_manager.session().read().await.messages_for_llm();
-        let last_msg = messages.last().ok_or_else(|| anyhow::anyhow!("No messages"))?;
 
-        if last_msg.role == Role::Assistant {
-            if let Some(calls) = &last_msg.tool_calls {
-                let mut results = Vec::new();
+        // Find last assistant message with tool calls
+        let assistant_msg_idx = messages.iter().rposition(|m| m.role == Role::Assistant && m.tool_calls.is_some());
+
+        if let Some(idx) = assistant_msg_idx {
+            let assistant_msg = &messages[idx];
+            if let Some(calls) = &assistant_msg.tool_calls {
+                // Find which calls are already done
+                let executed_ids: std::collections::HashSet<_> = messages.iter()
+                    .skip(idx + 1)
+                    .filter(|m| m.role == Role::Tool)
+                    .filter_map(|m| m.tool_call_id.clone())
+                    .collect();
+
                 for call in calls {
+                    if executed_ids.contains(&call.id) {
+                        continue;
+                    }
+
                     let result = self.tool_executor.execute_tool(call).await;
 
                     if let Err(ref e) = result {
@@ -467,22 +474,19 @@ impl ChatEngine {
                         }
                     }
 
-                    results.push(ToolResult {
-                        call_id: call.id.clone(),
-                        output: result.unwrap_or_else(|e| format!("Error: {}", e)),
-                    });
-                }
+                    let output = result.unwrap_or_else(|e| format!("Error: {}", e));
 
-                for result in &results {
                     self.session_manager.session().write().await.add_message(Message {
                         role: Role::Tool,
-                        content: result.output.clone(),
+                        content: output,
                         tool_calls: None,
-                        tool_call_id: Some(result.call_id.clone()),
+                        tool_call_id: Some(call.id.clone()),
                         images: Vec::new(),
                     });
                 }
 
+                // If we executed something or everything was already done, proceed to LLM
+                // (Only proceed if all calls are done. If approval loop interrupted again, we returned Err above)
                 let messages = self.session_manager.session().read().await.messages_for_llm();
                 let tool_schemas = self.tool_executor.tool_schemas();
                 let response = self.client.chat(&messages, Some(&tool_schemas)).await?;

@@ -56,6 +56,8 @@ fn run_supervised() -> Result<()> {
     let child_args = &args[1..];
 
     println!("Starting supervisor for: {} {:?}", bin, child_args);
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
 
     let mut crash_count = 0;
     let mut last_start = std::time::Instant::now();
@@ -85,6 +87,7 @@ fn run_supervised() -> Result<()> {
 
             let delay = std::cmp::min(crash_count * 2, 60);
             println!("Restarting in {} seconds...", delay);
+            let _ = std::io::stdout().flush();
             sleep(Duration::from_secs(delay as u64));
         }
     }

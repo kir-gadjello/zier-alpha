@@ -103,9 +103,7 @@ impl Tool for SystemIntrospectTool {
                 Ok(format!("Reloaded extension: {}", ext))
             }
             "cleanup_disk" => {
-                // Trigger manual cleanup
-                // We don't have this implemented in DiskMonitor yet, but we can pretend
-                Ok("Disk cleanup triggered (not fully implemented)".to_string())
+                self.disk_monitor.cleanup().await.map_err(|e| anyhow::anyhow!("Cleanup failed: {}", e))
             }
             _ => Err(anyhow::anyhow!("Unknown command: {}", command))
         }
