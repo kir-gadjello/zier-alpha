@@ -1,14 +1,8 @@
-
-
-
-
-
-
-use zier_alpha::config::SandboxPolicy;
-use zier_alpha::security::compile_profile;
-use tempfile::NamedTempFile;
 use std::io::Write;
 use std::process::Command;
+use tempfile::NamedTempFile;
+use zier_alpha::config::SandboxPolicy;
+use zier_alpha::security::compile_profile;
 
 #[test]
 #[cfg(target_os = "macos")]
@@ -35,7 +29,9 @@ except Exception as e:
 "#;
 
     let mut script_file = NamedTempFile::new().expect("Failed to create temp script");
-    script_file.write_all(script.as_bytes()).expect("Failed to write script");
+    script_file
+        .write_all(script.as_bytes())
+        .expect("Failed to write script");
     let script_path = script_file.path().to_str().unwrap();
 
     // Use system python3
@@ -43,7 +39,9 @@ except Exception as e:
     let profile = compile_profile(&policy, executable, script_path);
 
     let mut profile_file = NamedTempFile::new().expect("Failed to create temp profile");
-    profile_file.write_all(profile.as_bytes()).expect("Failed to write profile");
+    profile_file
+        .write_all(profile.as_bytes())
+        .expect("Failed to write profile");
     let profile_path = profile_file.path().to_str().unwrap();
 
     // Execute with sandbox-exec
@@ -58,7 +56,11 @@ except Exception as e:
     // We expect failure (either non-zero exit code or "FAILED" in output)
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("FAILED"), "Network should be denied, but got: {}", stdout);
+        assert!(
+            stdout.contains("FAILED"),
+            "Network should be denied, but got: {}",
+            stdout
+        );
     } else {
         // Non-zero exit code is also acceptable (e.g. killed by sandbox)
     }
@@ -85,14 +87,18 @@ except Exception as e:
 "#;
 
     let mut script_file = NamedTempFile::new().expect("Failed to create temp script");
-    script_file.write_all(script.as_bytes()).expect("Failed to write script");
+    script_file
+        .write_all(script.as_bytes())
+        .expect("Failed to write script");
     let script_path = script_file.path().to_str().unwrap();
 
     let executable = "/usr/bin/python3";
     let profile = compile_profile(&policy, executable, script_path);
 
     let mut profile_file = NamedTempFile::new().expect("Failed to create temp profile");
-    profile_file.write_all(profile.as_bytes()).expect("Failed to write profile");
+    profile_file
+        .write_all(profile.as_bytes())
+        .expect("Failed to write profile");
     let profile_path = profile_file.path().to_str().unwrap();
 
     let output = Command::new("sandbox-exec")
@@ -105,6 +111,10 @@ except Exception as e:
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     if output.status.success() {
-         assert!(stdout.contains("FAILED"), "Write should be denied, but got: {}", stdout);
+        assert!(
+            stdout.contains("FAILED"),
+            "Write should be denied, but got: {}",
+            stdout
+        );
     }
 }

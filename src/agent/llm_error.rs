@@ -11,10 +11,7 @@ pub enum LlmError {
     ApiRequestFailed(#[from] reqwest::Error),
 
     #[error("Provider error {status}: {message}")]
-    ProviderError {
-        status: u16,
-        message: String,
-    },
+    ProviderError { status: u16, message: String },
 
     #[error("Rate limited (429): {0}")]
     RateLimit(String),

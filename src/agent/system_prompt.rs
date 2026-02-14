@@ -3,8 +3,8 @@
 //! Builds the system prompt with identity, safety guardrails, workspace info,
 //! and special token handling (NO_REPLY, HEARTBEAT_OK).
 
-use std::path::Path;
 use crate::config::{WorkdirConfig, WorkdirStrategy};
+use std::path::Path;
 
 /// Special tokens for silent replies
 pub const SILENT_REPLY_TOKEN: &str = "NO_REPLY";
@@ -82,21 +82,37 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
 
     // Workspace section
     lines.push("## Workspace".to_string());
-    
+
     match params.workdir_config.strategy {
         WorkdirStrategy::Overlay => {
             if let Some(custom) = &params.workdir_config.custom_prompt {
                 lines.push(custom.clone());
             } else {
-                lines.push(format!("Your cognitive home (memory) is at: {}", params.workspace_dir));
+                lines.push(format!(
+                    "Your cognitive home (memory) is at: {}",
+                    params.workspace_dir
+                ));
                 if let Some(project) = params.project_dir {
-                    lines.push(format!("The project you are assisting with is at: {}", project));
-                    lines.push("File tools (read_file, write_file, edit_file) use cognitive routing:".to_string());
+                    lines.push(format!(
+                        "The project you are assisting with is at: {}",
+                        project
+                    ));
+                    lines.push(
+                        "File tools (read_file, write_file, edit_file) use cognitive routing:"
+                            .to_string(),
+                    );
                     lines.push("- Cognitive files (MEMORY.md, SOUL.md, etc.) are routed to your cognitive home.".to_string());
-                    lines.push("- All other relative paths are routed to the project directory.".to_string());
-                    lines.push("The bash tool always executes in the project directory.".to_string());
+                    lines.push(
+                        "- All other relative paths are routed to the project directory."
+                            .to_string(),
+                    );
+                    lines.push(
+                        "The bash tool always executes in the project directory.".to_string(),
+                    );
                 } else {
-                    lines.push("Treat this directory as your workspace for file operations.".to_string());
+                    lines.push(
+                        "Treat this directory as your workspace for file operations.".to_string(),
+                    );
                 }
             }
         }
@@ -107,9 +123,13 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
                 lines.push(format!("Your workspace root is: {}", params.workspace_dir));
                 if let Some(project) = params.project_dir {
                     lines.push(format!("The project you are assisting with is mounted at: {}/project (aliased to {})", params.workspace_dir, project));
-                    lines.push("To access project files, use paths starting with 'project/'.".to_string());
+                    lines.push(
+                        "To access project files, use paths starting with 'project/'.".to_string(),
+                    );
                 }
-                lines.push("Memory files (MEMORY.md, etc.) are in the root of your workspace.".to_string());
+                lines.push(
+                    "Memory files (MEMORY.md, etc.) are in the root of your workspace.".to_string(),
+                );
             }
         }
     }
@@ -199,7 +219,9 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
 
     // Heartbeat section (for autonomous task runner)
     lines.push("## Heartbeats".to_string());
-    lines.push("Zier Alpha may send periodic heartbeat polls to check on pending tasks.".to_string());
+    lines.push(
+        "Zier Alpha may send periodic heartbeat polls to check on pending tasks.".to_string(),
+    );
     lines.push(
         "If you receive a heartbeat poll and there is nothing that needs attention, reply exactly:"
             .to_string(),

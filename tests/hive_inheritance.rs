@@ -1,5 +1,4 @@
 /// Integration tests for Hive agent config inheritance feature.
-
 use anyhow::Result;
 use regex::Regex;
 use std::fs;
@@ -41,7 +40,11 @@ fn run_zier_ask(root: &tempfile::TempDir, task: &str) -> Result<(String, String)
         .env("ZIER_ALPHA_WORKSPACE", &workspace_dir)
         .env(
             "PATH",
-            format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default()),
+            format!(
+                "{}:{}",
+                bin_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
         )
         .env("RUST_LOG", "info")
         .current_dir(root.path())
@@ -70,13 +73,17 @@ fn test_hive_inheritance_behavior() -> Result<()> {
     if source_ext.exists() {
         copy_dir_recursive(&source_ext, &ext_dir)?;
     } else {
-        eprintln!("Hive extension source not found at {}", source_ext.display());
+        eprintln!(
+            "Hive extension source not found at {}",
+            source_ext.display()
+        );
         return Ok(());
     }
 
     // Config
     let config_path = root.join("config.toml");
-    let config_content = format!(r#"
+    let config_content = format!(
+        r#"
 [agent]
 default_model = "mock/gpt-4o"
 
@@ -88,7 +95,9 @@ agents_dir = "agents"
 workspace = "{}"
 
 [providers.mock]
-"#, workspace_dir.display());
+"#,
+        workspace_dir.display()
+    );
     fs::write(&config_path, config_content)?;
 
     // Parent agent
@@ -135,7 +144,7 @@ You are Child2. You inherit everything.
     let bin_dir = root.join("bin");
     fs::create_dir(&bin_dir)?;
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&bin_path, bin_dir.join("zier"))?;
+    std::os::unix::fs::symlink(bin_path, bin_dir.join("zier"))?;
     #[cfg(windows)]
     std::os::windows::fs::symlink_file(&bin_path, bin_dir.join("zier.exe"))?;
     let home_dir = root.to_path_buf();
@@ -144,7 +153,8 @@ You are Child2. You inherit everything.
     fs::rename(&config_path, dot_zier.join("config.toml"))?;
 
     // Test 1: .no_delegate filters out hive_delegate, model inherited
-    let task1 = r#"test_tool_json:hive_delegate|{"agent_name": "child", "task": "list files using bash"}"#;
+    let task1 =
+        r#"test_tool_json:hive_delegate|{"agent_name": "child", "task": "list files using bash"}"#;
     let (stdout1, stderr1) = run_zier_ask(&temp_dir, task1)?;
     // Combine both output streams for log search
     let combined1 = format!("{}\n{}", stdout1, stderr1);

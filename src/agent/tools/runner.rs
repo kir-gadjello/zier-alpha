@@ -1,10 +1,15 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
-use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
-pub async fn run_sandboxed_command(command: &str, args: &[String], cwd: &PathBuf, env: Option<std::collections::HashMap<String, String>>) -> Result<std::process::Output> {
+pub async fn run_sandboxed_command(
+    command: &str,
+    args: &[String],
+    cwd: &PathBuf,
+    env: Option<std::collections::HashMap<String, String>>,
+) -> Result<std::process::Output> {
     let profile = r#"
 (version 1)
 (allow default)
@@ -26,11 +31,18 @@ pub async fn run_sandboxed_command(command: &str, args: &[String], cwd: &PathBuf
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    cmd.output().await.context("Failed to run sandboxed command on macOS")
+    cmd.output()
+        .await
+        .context("Failed to run sandboxed command on macOS")
 }
 
 #[cfg(target_os = "linux")]
-pub async fn run_sandboxed_command(command: &str, args: &[String], cwd: &PathBuf, env: Option<std::collections::HashMap<String, String>>) -> Result<std::process::Output> {
+pub async fn run_sandboxed_command(
+    command: &str,
+    args: &[String],
+    cwd: &PathBuf,
+    env: Option<std::collections::HashMap<String, String>>,
+) -> Result<std::process::Output> {
     // Linux unshare
     let mut cmd = Command::new("unshare");
     cmd.args(&["-n", "-i", "-u", "-p", "-f", "--mount-proc"]);
@@ -46,11 +58,18 @@ pub async fn run_sandboxed_command(command: &str, args: &[String], cwd: &PathBuf
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    cmd.output().await.context("Failed to run sandboxed command on Linux")
+    cmd.output()
+        .await
+        .context("Failed to run sandboxed command on Linux")
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub async fn run_sandboxed_command(command: &str, args: &[String], cwd: &PathBuf, env: Option<std::collections::HashMap<String, String>>) -> Result<std::process::Output> {
+pub async fn run_sandboxed_command(
+    command: &str,
+    args: &[String],
+    cwd: &PathBuf,
+    env: Option<std::collections::HashMap<String, String>>,
+) -> Result<std::process::Output> {
     warn!("Sandboxing not supported on this platform, running command directly");
     let mut cmd = Command::new(command);
     cmd.args(args);

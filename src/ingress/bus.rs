@@ -1,8 +1,8 @@
 use super::types::IngressMessage;
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 
 /// Global event bus for the Kernel.
@@ -34,7 +34,10 @@ impl IngressBus {
 
     /// Send a message to the bus.
     pub async fn push(&self, msg: IngressMessage) -> Result<()> {
-        self.sender.send(msg).await.map_err(|e| anyhow::anyhow!("Failed to push to IngressBus: {}", e))
+        self.sender
+            .send(msg)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to push to IngressBus: {}", e))
     }
 }
 

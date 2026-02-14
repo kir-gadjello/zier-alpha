@@ -1,7 +1,7 @@
+use std::io::Write;
+use tempfile::NamedTempFile;
 use zier_alpha::config::{SandboxPolicy, WorkdirStrategy};
 use zier_alpha::scripting::ScriptService;
-use tempfile::NamedTempFile;
-use std::io::Write;
 
 #[tokio::test]
 async fn test_deno_tool_registration_and_execution() {
@@ -17,13 +17,14 @@ async fn test_deno_tool_registration_and_execution() {
     // 2. Initialize Service
     let temp_dir = tempfile::tempdir().unwrap();
     let service = ScriptService::new(
-        policy, 
+        policy,
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
         None,
-        None
-    ).expect("Failed to create script service");
+        None,
+    )
+    .expect("Failed to create script service");
 
     // 3. Create a JS script that registers a tool
     let script_content = r#"
@@ -48,7 +49,10 @@ async fn test_deno_tool_registration_and_execution() {
     let script_path = script_file.path().to_str().unwrap().to_string();
 
     // 4. Load script
-    service.load_script(&script_path).await.expect("Failed to load script");
+    service
+        .load_script(&script_path)
+        .await
+        .expect("Failed to load script");
 
     // 5. Verify registration
     let tools = service.get_tools().await.expect("Failed to get tools");
@@ -56,7 +60,10 @@ async fn test_deno_tool_registration_and_execution() {
     assert_eq!(tools[0].name, "test_echo");
 
     // 6. Execute tool
-    let result = service.execute_tool("test_echo", r#"{"input": "hello"}"#).await.expect("Failed to execute tool");
+    let result = service
+        .execute_tool("test_echo", r#"{"input": "hello"}"#)
+        .await
+        .expect("Failed to execute tool");
 
     // Result should be JSON string
     let json: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -78,15 +85,17 @@ async fn test_deno_sandbox_fs_allowed() {
 
     let temp_dir = tempfile::tempdir().unwrap();
     let service = ScriptService::new(
-        policy, 
+        policy,
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
         None,
-        None
-    ).unwrap();
+        None,
+    )
+    .unwrap();
 
-    let script_content = format!(r#"
+    let script_content = format!(
+        r#"
         pi.registerTool({{
             name: "test_read",
             description: "Read file",
@@ -100,12 +109,17 @@ async fn test_deno_sandbox_fs_allowed() {
                 }}
             }}
         }});
-    "#, temp_path);
+    "#,
+        temp_path
+    );
 
     let mut script_file = NamedTempFile::new().unwrap();
     script_file.write_all(script_content.as_bytes()).unwrap();
 
-    service.load_script(script_file.path().to_str().unwrap()).await.unwrap();
+    service
+        .load_script(script_file.path().to_str().unwrap())
+        .await
+        .unwrap();
 
     // Write content to read
     std::fs::write(&temp_path, "secret content").unwrap();
@@ -132,13 +146,14 @@ async fn test_deno_sandbox_fs_denied() {
 
     let temp_dir = tempfile::tempdir().unwrap();
     let service = ScriptService::new(
-        policy, 
+        policy,
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
         None,
-        None
-    ).unwrap();
+        None,
+    )
+    .unwrap();
 
     let script_content = r#"
         pi.registerTool({
@@ -159,8 +174,14 @@ async fn test_deno_sandbox_fs_denied() {
     let mut script_file = NamedTempFile::new().unwrap();
     script_file.write_all(script_content.as_bytes()).unwrap();
 
-    service.load_script(script_file.path().to_str().unwrap()).await.unwrap();
+    service
+        .load_script(script_file.path().to_str().unwrap())
+        .await
+        .unwrap();
 
-    let result = service.execute_tool("test_read_denied", "{}").await.unwrap();
+    let result = service
+        .execute_tool("test_read_denied", "{}")
+        .await
+        .unwrap();
     assert_eq!(result, "ERROR");
 }

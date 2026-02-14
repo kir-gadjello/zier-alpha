@@ -38,13 +38,11 @@ fn main() -> Result<()> {
 }
 
 fn run_supervised() -> Result<()> {
-    use std::process::{Command, exit};
-    use std::time::Duration;
+    use std::process::{exit, Command};
     use std::thread::sleep;
+    use std::time::Duration;
 
-    let args: Vec<String> = std::env::args()
-        .filter(|a| a != "--supervised")
-        .collect();
+    let args: Vec<String> = std::env::args().filter(|a| a != "--supervised").collect();
 
     if args.len() < 2 {
         // If run with just `zier-alpha --supervised`, default to daemon start foreground?

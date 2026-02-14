@@ -1,14 +1,13 @@
 use std::process::{Command, Stdio};
-use std::time::Duration;
 use std::thread;
-use std::io::Write;
+use std::time::Duration;
 use tempfile::TempDir;
 
 #[test]
 fn test_supervisor_restarts_on_crash() {
     // Build the binary (no default features to avoid winit issues)
     let status = Command::new("cargo")
-        .args(&["build", "--bin", "zier-alpha", "--no-default-features"])
+        .args(["build", "--bin", "zier-alpha", "--no-default-features"])
         .status()
         .expect("Failed to build zier-alpha");
     assert!(status.success());
@@ -54,9 +53,24 @@ fn test_supervisor_restarts_on_crash() {
     println!("Supervisor stderr:\n{}", stderr);
 
     // Supervisor should have started and detected at least one crash/restart cycle
-    assert!(stdout.contains("Starting supervisor for"), "Supervisor didn't start. Stderr: {}", stderr);
-    assert!(stdout.contains("Child exited with error"), "Supervisor didn't detect any crash. stdout: {}", stdout);
-    assert!(stdout.contains("Restarting in"), "Supervisor didn't attempt restart");
+    assert!(
+        stdout.contains("Starting supervisor for"),
+        "Supervisor didn't start. Stderr: {}",
+        stderr
+    );
+    assert!(
+        stdout.contains("Child exited with error"),
+        "Supervisor didn't detect any crash. stdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Restarting in"),
+        "Supervisor didn't attempt restart"
+    );
     let crash_count = stdout.matches("Child exited with error").count();
-    assert!(crash_count >= 1, "Supervisor should have restarted at least once (count: {})", crash_count);
+    assert!(
+        crash_count >= 1,
+        "Supervisor should have restarted at least once (count: {})",
+        crash_count
+    );
 }

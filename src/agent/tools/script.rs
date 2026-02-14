@@ -1,9 +1,9 @@
-use async_trait::async_trait;
-use anyhow::Result;
-use crate::agent::tools::Tool;
 use crate::agent::providers::ToolSchema;
-use crate::scripting::ScriptService;
+use crate::agent::tools::Tool;
 use crate::scripting::deno::DenoToolDefinition;
+use crate::scripting::ScriptService;
+use anyhow::Result;
+use async_trait::async_trait;
 
 #[derive(Clone)]
 pub struct ScriptTool {
@@ -13,7 +13,10 @@ pub struct ScriptTool {
 
 impl ScriptTool {
     pub fn new(definition: DenoToolDefinition, service: ScriptService) -> Self {
-        Self { definition, service }
+        Self {
+            definition,
+            service,
+        }
     }
 }
 
@@ -32,6 +35,8 @@ impl Tool for ScriptTool {
     }
 
     async fn execute(&self, arguments: &str) -> Result<String> {
-        self.service.execute_tool(&self.definition.name, arguments).await
+        self.service
+            .execute_tool(&self.definition.name, arguments)
+            .await
     }
 }

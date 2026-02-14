@@ -1,10 +1,10 @@
+use crate::agent::mcp_manager::McpManager;
+use crate::agent::providers::ToolSchema;
+use crate::agent::tools::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use crate::agent::tools::Tool;
-use crate::agent::providers::ToolSchema;
-use crate::agent::mcp_manager::McpManager;
 
 #[derive(Clone)]
 pub struct McpTool {
@@ -16,8 +16,20 @@ pub struct McpTool {
 }
 
 impl McpTool {
-    pub fn new(manager: Arc<McpManager>, server_name: String, name: String, description: String, schema: Value) -> Self {
-        Self { manager, server_name, name, description, schema }
+    pub fn new(
+        manager: Arc<McpManager>,
+        server_name: String,
+        name: String,
+        description: String,
+        schema: Value,
+    ) -> Self {
+        Self {
+            manager,
+            server_name,
+            name,
+            description,
+            schema,
+        }
     }
 }
 
@@ -44,7 +56,10 @@ impl Tool for McpTool {
         });
 
         // Call tool on MCP server
-        let result = self.manager.call(&self.server_name, "tools/call", params).await?;
+        let result = self
+            .manager
+            .call(&self.server_name, "tools/call", params)
+            .await?;
 
         // Parse result to string
         // MCP result usually contains `content` array

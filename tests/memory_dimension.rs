@@ -1,6 +1,6 @@
-use zier_alpha::memory::MemoryIndex;
-use tempfile::TempDir;
 use rusqlite::Connection;
+use tempfile::TempDir;
+use zier_alpha::memory::MemoryIndex;
 
 #[tokio::test]
 async fn test_vec_table_dimension() {
@@ -16,11 +16,13 @@ async fn test_vec_table_dimension() {
     // sqlite-vec loads as extension, need to load it again if we want to query vec0 table details?
     // Or just check sql schema.
 
-    let sql: String = conn.query_row(
-        "SELECT sql FROM sqlite_master WHERE name='chunks_vec'",
-        [],
-        |row| row.get(0)
-    ).unwrap_or("".to_string());
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='chunks_vec'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or("".to_string());
 
     if sql.is_empty() {
         println!("Skipping test as sqlite-vec not loaded or table not created");
@@ -34,11 +36,13 @@ async fn test_vec_table_dimension() {
     let _index2 = MemoryIndex::new_with_db_path(temp.path(), &db_path, Some(512));
 
     // Table should still be 1024
-    let sql2: String = conn.query_row(
-        "SELECT sql FROM sqlite_master WHERE name='chunks_vec'",
-        [],
-        |row| row.get(0)
-    ).unwrap();
+    let sql2: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='chunks_vec'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
 
     assert!(sql2.contains("float[1024]"), "SQL changed to: {}", sql2);
 }

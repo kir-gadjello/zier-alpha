@@ -3,8 +3,8 @@ use crate::agent::session::Session;
 use crate::scripting::ScriptService;
 use anyhow::Result;
 use async_trait::async_trait;
-use tiktoken_rs::cl100k_base;
 use serde_json::json;
+use tiktoken_rs::cl100k_base;
 use tracing::warn;
 
 #[async_trait]
@@ -47,7 +47,10 @@ pub struct ScriptCompactor {
 
 impl ScriptCompactor {
     pub fn new(service: ScriptService, script_path: String) -> Self {
-        Self { service, script_path }
+        Self {
+            service,
+            script_path,
+        }
     }
 }
 
@@ -62,7 +65,10 @@ impl CompactionStrategy for ScriptCompactor {
             "system_context": session.system_context()
         });
 
-        let result_json = self.service.execute_tool("compact", &args.to_string()).await?;
+        let result_json = self
+            .service
+            .execute_tool("compact", &args.to_string())
+            .await?;
 
         // Update session with results
         if let Err(e) = session.replace_messages_from_json(&result_json) {

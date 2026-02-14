@@ -1,11 +1,11 @@
+use crate::agent::disk_monitor::DiskMonitor;
+use crate::agent::{McpManager, Tool, ToolSchema};
+use crate::config::Config;
+use crate::scripting::ScriptService;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
-use crate::agent::{Tool, ToolSchema, McpManager};
-use crate::config::Config;
-use crate::agent::disk_monitor::DiskMonitor;
-use crate::scripting::ScriptService;
 
 pub struct SystemIntrospectTool {
     config: Config,
@@ -64,7 +64,9 @@ impl Tool for SystemIntrospectTool {
 
     async fn execute(&self, arguments: &str) -> Result<String> {
         let args: serde_json::Value = serde_json::from_str(arguments)?;
-        let command = args["command"].as_str().ok_or_else(|| anyhow::anyhow!("Missing command"))?;
+        let command = args["command"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing command"))?;
 
         match command {
             "status" => {
@@ -78,7 +80,11 @@ impl Tool for SystemIntrospectTool {
             }
             "mcp" => {
                 // We don't expose full MCP status yet, but we can list configured servers
-                let servers: Vec<String> = self.config.extensions.mcp.as_ref()
+                let servers: Vec<String> = self
+                    .config
+                    .extensions
+                    .mcp
+                    .as_ref()
                     .map(|c| c.servers.keys().cloned().collect())
                     .unwrap_or_default();
                 Ok(serde_json::to_string_pretty(&servers)?)
@@ -102,10 +108,12 @@ impl Tool for SystemIntrospectTool {
                 self.script_service.reload_extension(ext).await?;
                 Ok(format!("Reloaded extension: {}", ext))
             }
-            "cleanup_disk" => {
-                self.disk_monitor.cleanup().await.map_err(|e| anyhow::anyhow!("Cleanup failed: {}", e))
-            }
-            _ => Err(anyhow::anyhow!("Unknown command: {}", command))
+            "cleanup_disk" => self
+                .disk_monitor
+                .cleanup()
+                .await
+                .map_err(|e| anyhow::anyhow!("Cleanup failed: {}", e)),
+            _ => Err(anyhow::anyhow!("Unknown command: {}", command)),
         }
     }
 }

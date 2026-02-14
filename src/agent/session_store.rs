@@ -210,7 +210,12 @@ impl SessionStore {
     /// This uses an advisory file lock (sessions.json.lock) to prevent
     /// concurrent processes from clobbering each other's updates.
     /// This method is async and performs blocking I/O in a spawn_blocking task.
-    pub async fn load_and_update<F>(mut self, session_key: &str, session_id: &str, f: F) -> Result<()>
+    pub async fn load_and_update<F>(
+        mut self,
+        session_key: &str,
+        session_id: &str,
+        f: F,
+    ) -> Result<()>
     where
         F: FnOnce(&mut SessionEntry) + Send + 'static,
     {
@@ -241,7 +246,8 @@ impl SessionStore {
             lock_file.unlock()?;
 
             result
-        }).await?
+        })
+        .await?
     }
 
     /// Get CLI session ID for a session and provider
@@ -264,7 +270,8 @@ impl SessionStore {
 
         self.load_and_update(session_key, session_id, move |entry| {
             entry.set_cli_session_id(&provider, &cli_session_id);
-        }).await
+        })
+        .await
     }
 }
 

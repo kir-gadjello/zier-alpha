@@ -1,4 +1,4 @@
-use crate::agent::{SmartClient, ImageAttachment, Message, Role, LLMResponseContent};
+use crate::agent::{ImageAttachment, LLMResponseContent, Message, Role, SmartClient};
 use crate::config::Config;
 use anyhow::Result;
 

@@ -1,10 +1,10 @@
+use crate::agent::sanitize;
+use crate::agent::{Tool, ToolCall, ToolSchema};
+use crate::config::Config;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tracing::warn;
-use crate::agent::{Tool, ToolCall, ToolSchema};
-use crate::config::Config;
-use crate::agent::sanitize;
 
 #[derive(Debug, thiserror::Error)]
 #[error("Tool '{0}' requires approval")]
@@ -37,6 +37,12 @@ impl ApprovalManager {
     pub fn consume(&self, call_id: &str) -> bool {
         let mut set = self.approved_calls.lock().unwrap();
         set.remove(call_id)
+    }
+}
+
+impl Default for ApprovalManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -88,7 +94,10 @@ impl ToolExecutor {
                 // ChatEngine::stream_with_tool_loop handles this BEFORE calling execute_tool.
                 // So if we are here, it means we are in non-streaming mode OR the engine failed to check.
                 // If non-streaming, we fail hard.
-                return Err(anyhow::Error::new(ApprovalRequiredError(call.name.clone(), call.clone())));
+                return Err(anyhow::Error::new(ApprovalRequiredError(
+                    call.name.clone(),
+                    call.clone(),
+                )));
             }
         }
 
@@ -109,8 +118,7 @@ impl ToolExecutor {
                     if self.config.tools.log_injection_warnings && !result.warnings.is_empty() {
                         warn!(
                             "Suspicious patterns detected in {} output: {:?}",
-                            call.name,
-                            result.warnings
+                            call.name, result.warnings
                         );
                     }
 

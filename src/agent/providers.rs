@@ -165,15 +165,13 @@ pub trait LLMProvider: Send + Sync {
         // Default implementation: single chunk with full response
         let resp = self.chat(messages, tools).await?;
         match resp.content {
-            LLMResponseContent::Text(text) => {
-                Ok(Box::pin(futures::stream::once(async move {
-                    Ok(StreamChunk {
-                        delta: text,
-                        done: true,
-                        tool_calls: None,
-                    })
-                })))
-            }
+            LLMResponseContent::Text(text) => Ok(Box::pin(futures::stream::once(async move {
+                Ok(StreamChunk {
+                    delta: text,
+                    done: true,
+                    tool_calls: None,
+                })
+            }))),
             LLMResponseContent::ToolCalls(calls) => {
                 Ok(Box::pin(futures::stream::once(async move {
                     Ok(StreamChunk {
@@ -303,9 +301,7 @@ pub fn create_provider(model: &str, config: &Config) -> Result<Box<dyn LLMProvid
             )?))
         }
 
-        "mock" => {
-            Ok(Box::new(MockProvider::new(&model_id)))
-        }
+        "mock" => Ok(Box::new(MockProvider::new(&model_id))),
 
         _ => {
             // Fallback: try Claude CLI if configured
@@ -472,18 +468,24 @@ impl LLMProvider for OpenAIProvider {
 
         // Check for errors
         if let Some(error) = response_body.get("error") {
-            let message = error["message"].as_str().unwrap_or("Unknown error").to_string();
+            let message = error["message"]
+                .as_str()
+                .unwrap_or("Unknown error")
+                .to_string();
             let code = error["code"].as_str(); // might be string or null
 
             if let Some(c) = code {
                 if c == "rate_limit_exceeded" {
-                     anyhow::bail!(LlmError::RateLimit(message));
+                    anyhow::bail!(LlmError::RateLimit(message));
                 }
                 if c == "context_length_exceeded" {
-                     anyhow::bail!(LlmError::ContextWindowExceeded(message));
+                    anyhow::bail!(LlmError::ContextWindowExceeded(message));
                 }
             }
-            anyhow::bail!(LlmError::ProviderError { status: 400, message });
+            anyhow::bail!(LlmError::ProviderError {
+                status: 400,
+                message
+            });
         }
 
         let choice = response_body["choices"]
@@ -566,7 +568,10 @@ impl LLMProvider for OpenAIProvider {
             }
         }
 
-        debug!("OpenAI streaming request: {}", serde_json::to_string_pretty(&body)?);
+        debug!(
+            "OpenAI streaming request: {}",
+            serde_json::to_string_pretty(&body)?
+        );
 
         let response = self
             .client
@@ -583,7 +588,10 @@ impl LLMProvider for OpenAIProvider {
             if status == 429 {
                 anyhow::bail!(LlmError::RateLimit(error_body));
             }
-            anyhow::bail!(LlmError::ProviderError { status, message: error_body });
+            anyhow::bail!(LlmError::ProviderError {
+                status,
+                message: error_body
+            });
         }
 
         let stream = async_stream::stream! {
@@ -646,7 +654,7 @@ impl LLMProvider for OpenAIProvider {
                                         }
 
                                         if let Some(choices) = json.get("choices").and_then(|c| c.as_array()) {
-                                            if let Some(choice) = choices.get(0) {
+                                            if let Some(choice) = choices.first() {
                                                 if let Some(delta) = choice.get("delta") {
                                                     // Content delta
                                                     if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
@@ -860,13 +868,22 @@ impl LLMProvider for AnthropicProvider {
         // Check for errors
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let response_body: Value = response.json().await.unwrap_or(json!({"error": {"message": "Unknown error"}}));
-            let error_msg = response_body["error"]["message"].as_str().unwrap_or("Unknown error").to_string();
+            let response_body: Value = response
+                .json()
+                .await
+                .unwrap_or(json!({"error": {"message": "Unknown error"}}));
+            let error_msg = response_body["error"]["message"]
+                .as_str()
+                .unwrap_or("Unknown error")
+                .to_string();
 
             if status == 429 {
                 anyhow::bail!(LlmError::RateLimit(error_msg));
             }
-            anyhow::bail!(LlmError::ProviderError { status, message: error_msg });
+            anyhow::bail!(LlmError::ProviderError {
+                status,
+                message: error_msg
+            });
         }
 
         let response_body: Value = response.json().await?;
@@ -877,8 +894,14 @@ impl LLMProvider for AnthropicProvider {
 
         // Check for errors in body (though usually handled by status check)
         if let Some(error) = response_body.get("error") {
-            let message = error["message"].as_str().unwrap_or("Unknown error").to_string();
-            anyhow::bail!(LlmError::ProviderError { status: 400, message });
+            let message = error["message"]
+                .as_str()
+                .unwrap_or("Unknown error")
+                .to_string();
+            anyhow::bail!(LlmError::ProviderError {
+                status: 400,
+                message
+            });
         }
 
         let content = response_body["content"]
@@ -988,7 +1011,10 @@ impl LLMProvider for AnthropicProvider {
             if status == 429 {
                 anyhow::bail!(LlmError::RateLimit(error_body));
             }
-            anyhow::bail!(LlmError::ProviderError { status, message: error_body });
+            anyhow::bail!(LlmError::ProviderError {
+                status,
+                message: error_body
+            });
         }
 
         // Anthropic streams Server-Sent Events (SSE)
@@ -1513,8 +1539,10 @@ async fn save_cli_session_to_store(
 ) -> Result<()> {
     use super::session_store::SessionStore;
 
-    let store = tokio::task::spawn_blocking(move || SessionStore::load()).await??;
-    store.set_cli_session_id(session_key, session_id, provider, cli_session_id).await?;
+    let store = tokio::task::spawn_blocking(SessionStore::load).await??;
+    store
+        .set_cli_session_id(session_key, session_id, provider, cli_session_id)
+        .await?;
     Ok(())
 }
 
@@ -1589,7 +1617,10 @@ impl LLMProvider for ClaudeCliProvider {
         let stored_session = load_cli_session_from_store(&self.session_key, CLAUDE_CLI_PROVIDER);
 
         {
-            let mut guard = self.cli_session_id.lock().map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
+            let mut guard = self
+                .cli_session_id
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
             if let Some(stored) = stored_session {
                 *guard = Some(stored);
             }
@@ -1629,7 +1660,9 @@ impl LLMProvider for ClaudeCliProvider {
                 &self.zier_alpha_session_id,
                 CLAUDE_CLI_PROVIDER,
                 new_cli_sid,
-            ).await {
+            )
+            .await
+            {
                 debug!("Failed to persist CLI session: {}", e);
             }
 
@@ -1673,7 +1706,10 @@ impl LLMProvider for ClaudeCliProvider {
         let stored_session = load_cli_session_from_store(&self.session_key, CLAUDE_CLI_PROVIDER);
 
         {
-            let mut guard = self.cli_session_id.lock().map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
+            let mut guard = self
+                .cli_session_id
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
             if let Some(stored) = stored_session {
                 *guard = Some(stored);
             }
@@ -2017,7 +2053,6 @@ mod tests {
             "custom-model".to_string()
         );
     }
-
 }
 
 pub struct MockProvider {
@@ -2035,15 +2070,27 @@ impl MockProvider {
 
 #[async_trait]
 impl LLMProvider for MockProvider {
-    async fn chat(&self, messages: &[Message], _tools: Option<&[ToolSchema]>) -> Result<LLMResponse> {
-        let last_msg = messages.last().ok_or_else(|| anyhow::anyhow!("No messages"))?;
-        
+    async fn chat(
+        &self,
+        messages: &[Message],
+        _tools: Option<&[ToolSchema]>,
+    ) -> Result<LLMResponse> {
+        let last_msg = messages
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No messages"))?;
+
         // If last message is tool result with Error, return it.
         if last_msg.role == Role::Tool {
-             println!("DEBUG: MockProvider saw tool output: '{}'", last_msg.content);
-             if last_msg.content.starts_with("Error:") {
-                 return Ok(LLMResponse::text(format!("Tool failed: {}", last_msg.content)));
-             }
+            println!(
+                "DEBUG: MockProvider saw tool output: '{}'",
+                last_msg.content
+            );
+            if last_msg.content.starts_with("Error:") {
+                return Ok(LLMResponse::text(format!(
+                    "Tool failed: {}",
+                    last_msg.content
+                )));
+            }
         }
 
         // Mock logic for testing tool routing and strategies
@@ -2087,8 +2134,12 @@ impl LLMProvider for MockProvider {
             }
         }
 
-        let write_memory_msg = messages.iter().find(|m| m.role == Role::User && m.content.contains("write memory"));
-        let tool_result_success = messages.iter().any(|m| m.role == Role::Tool && m.content.contains("Successfully wrote"));
+        let write_memory_msg = messages
+            .iter()
+            .find(|m| m.role == Role::User && m.content.contains("write memory"));
+        let tool_result_success = messages
+            .iter()
+            .any(|m| m.role == Role::Tool && m.content.contains("Successfully wrote"));
 
         // Mock logic: if user asks to "write memory", simulate tool call followed by text
         if let Some(msg) = write_memory_msg {
@@ -2096,7 +2147,10 @@ impl LLMProvider for MockProvider {
 
             // If we already have a successful tool result, return the final answer
             if tool_result_success {
-                return Ok(LLMResponse::text(format!("I've saved your name as {} in MEMORY.md.", name)));
+                return Ok(LLMResponse::text(format!(
+                    "I've saved your name as {} in MEMORY.md.",
+                    name
+                )));
             }
 
             // Otherwise, trigger the tool call
@@ -2106,7 +2160,8 @@ impl LLMProvider for MockProvider {
                 arguments: json!({
                     "path": "MEMORY.md",
                     "content": format!("Name: {}", name)
-                }).to_string(),
+                })
+                .to_string(),
             }]));
         }
 
@@ -2114,7 +2169,11 @@ impl LLMProvider for MockProvider {
         // and any prior user message contains "secret code is 42", return the secret.
         if messages.len() >= 2 {
             // Find the last user message
-            let last_user_msg = messages.iter().filter(|m| m.role == Role::User).last().unwrap();
+            let last_user_msg = messages
+                .iter()
+                .filter(|m| m.role == Role::User)
+                .next_back()
+                .unwrap();
             if last_user_msg.content.contains("What is the secret code") {
                 // Search backwards for a prior user message with the secret
                 for msg in messages.iter().rev().skip(1) {

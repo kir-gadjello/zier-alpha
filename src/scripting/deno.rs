@@ -1,20 +1,20 @@
+use crate::agent::mcp_manager::{McpManager, ServerConfig};
+use crate::agent::tools::resolve_path;
+use crate::config::{SandboxPolicy, WorkdirStrategy};
+use crate::ingress::{IngressBus, IngressMessage, TrustLevel};
+use crate::scheduler::Scheduler;
+use crate::scripting::safety::{CommandSafety, SafetyPolicy};
 use deno_core::error::AnyError;
-use deno_core::{op2, OpState, JsRuntime, RuntimeOptions, ModuleSpecifier, v8};
+use deno_core::{op2, v8, JsRuntime, ModuleSpecifier, OpState, RuntimeOptions};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
-use crate::config::{SandboxPolicy, WorkdirStrategy};
-use crate::agent::tools::resolve_path;
-use crate::scripting::safety::{SafetyPolicy, CommandSafety};
-use crate::ingress::{IngressBus, IngressMessage, TrustLevel};
-use crate::scheduler::Scheduler;
-use crate::agent::mcp_manager::{McpManager, ServerConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DenoToolDefinition {
@@ -49,9 +49,15 @@ pub struct SandboxState {
     pub parent_system_prompt_append: Option<String>,
 }
 
-fn check_path(path: &str, allowed_paths: &[PathBuf], _is_write: bool, state: &SandboxState) -> Result<PathBuf, std::io::Error> {
+fn check_path(
+    path: &str,
+    allowed_paths: &[PathBuf],
+    _is_write: bool,
+    state: &SandboxState,
+) -> Result<PathBuf, std::io::Error> {
     // Resolve to absolute path (pure path manipulation, no I/O)
-    let mut resolved_path = resolve_path(path, &state.workspace, &state.project_dir, &state.strategy);
+    let mut resolved_path =
+        resolve_path(path, &state.workspace, &state.project_dir, &state.strategy);
 
     // Ensure absolute: if still relative, join with workspace (should not happen normally)
     if !resolved_path.is_absolute() {
@@ -266,10 +272,7 @@ pub fn op_random_uuid() -> String {
 
 #[op2]
 #[string]
-pub fn op_env_get(
-    state: &mut OpState,
-    #[string] key: String,
-) -> Option<String> {
+pub fn op_env_get(state: &mut OpState, #[string] key: String) -> Option<String> {
     let sandbox = state.borrow::<SandboxState>();
     if !sandbox.capabilities.env {
         return None;
@@ -286,8 +289,7 @@ pub fn op_temp_dir() -> String {
 #[op2]
 #[string]
 pub fn op_home_dir() -> Option<String> {
-    directories::BaseDirs::new()
-        .map(|b| b.home_dir().to_string_lossy().to_string())
+    directories::BaseDirs::new().map(|b| b.home_dir().to_string_lossy().to_string())
 }
 
 #[op2(async)]
@@ -300,7 +302,10 @@ pub async fn op_fetch(
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
         if !sandbox.capabilities.net {
-            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Network access not allowed"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Network access not allowed",
+            ));
         }
     }
 
@@ -315,17 +320,12 @@ pub async fn op_fetch(
 }
 
 #[op2(fast)]
-pub fn op_log(
-    #[string] msg: String,
-) {
+pub fn op_log(#[string] msg: String) {
     tracing::info!("[JS] {}", msg);
 }
 
 #[op2]
-pub fn op_register_tool(
-    state: &mut OpState,
-    #[serde] definition: DenoToolDefinition,
-) {
+pub fn op_register_tool(state: &mut OpState, #[serde] definition: DenoToolDefinition) {
     let sandbox = state.borrow_mut::<SandboxState>();
     sandbox.registered_tools.push(definition);
 }
@@ -354,23 +354,40 @@ pub async fn op_zier_exec(
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
         if !sandbox.capabilities.exec {
-             return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Execution not allowed by capabilities"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Execution not allowed by capabilities",
+            ));
         }
-        (sandbox.safety_policy.check_command(&cmd, opts.cwd.as_deref().map(Path::new)).map_err(|e: anyhow::Error| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?, sandbox.project_dir.clone())
+        (
+            sandbox
+                .safety_policy
+                .check_command(&cmd, opts.cwd.as_deref().map(Path::new))
+                .map_err(|e: anyhow::Error| {
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                })?,
+            sandbox.project_dir.clone(),
+        )
     };
 
     match policy {
-        CommandSafety::Allowed => {},
+        CommandSafety::Allowed => {}
         CommandSafety::SoftBlock(msg) => {
             tracing::warn!("Soft block triggered: {}", msg);
-        },
+        }
         CommandSafety::RequireApproval(msg) => {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Command requires approval: {}", msg)));
-        },
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Command requires approval: {}", msg),
+            ));
+        }
         CommandSafety::HardBlock(msg) => {
             tracing::warn!("Blocking command: {}", msg);
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Command blocked by safety policy: {}", msg)));
-        },
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Command blocked by safety policy: {}", msg),
+            ));
+        }
     }
 
     // Determine target CWD
@@ -384,7 +401,11 @@ pub async fn op_zier_exec(
         project_dir.clone()
     };
 
-    let args = if cmd.len() > 1 { cmd[1..].to_vec() } else { Vec::new() };
+    let args = if cmd.len() > 1 {
+        cmd[1..].to_vec()
+    } else {
+        Vec::new()
+    };
 
     // Merge parent environment with overrides (if any)
     // Child processes should inherit parent environment by default; `opts.env` provides overrides.
@@ -394,23 +415,32 @@ pub async fn op_zier_exec(
         // We allow inheriting these from parent, but scripts cannot explicitly set them as overrides.
         for key in overrides.keys() {
             let key_upper = key.to_uppercase();
-            if key_upper == "PATH" || key_upper == "HOME" || key_upper.starts_with("LD_") || key_upper == "SHELL" || key_upper == "PYTHONPATH" {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Setting environment variable {} is not allowed", key)));
+            if key_upper == "PATH"
+                || key_upper == "HOME"
+                || key_upper.starts_with("LD_")
+                || key_upper == "SHELL"
+                || key_upper == "PYTHONPATH"
+            {
+                return Err(std::io::Error::other(format!(
+                    "Setting environment variable {} is not allowed",
+                    key
+                )));
             }
         }
         merged_env.extend(overrides.clone());
     }
 
-    let output = if {
+    let enable_sandbox = {
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
         sandbox.policy.enable_os_sandbox
-    } {
+    };
+    let output = if enable_sandbox {
         use crate::agent::tools::runner::run_sandboxed_command;
         // Pass merged environment (clone for sandboxed path)
         run_sandboxed_command(&cmd[0], &args, &target_cwd, Some(merged_env.clone()))
             .await
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+            .map_err(|e| std::io::Error::other(e.to_string()))?
     } else {
         // Run directly (unsafe/legacy mode)
         let mut command = tokio::process::Command::new(&cmd[0]);
@@ -443,10 +473,15 @@ pub async fn op_zier_ingress_push(
 
     if let Some(bus) = bus {
         let msg = IngressMessage::new(source, payload, TrustLevel::TrustedEvent);
-        bus.push(msg).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        bus.push(msg)
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         Ok(())
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "Ingress bus not available"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Ingress bus not available",
+        ))
     }
 }
 
@@ -465,16 +500,27 @@ pub async fn op_zier_scheduler_register(
 
     // Use capabilities.read instead of policy
     match check_path(&script_path, &sandbox.capabilities.read, false, &sandbox) {
-        Ok(_) => {},
-        Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("Script path blocked: {}", e))),
+        Ok(_) => {}
+        Err(e) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!("Script path blocked: {}", e),
+            ))
+        }
     }
 
     if let Some(scheduler) = scheduler {
         let scheduler = scheduler.lock().await;
-        scheduler.register_dynamic_job(name, cron, script_path).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        scheduler
+            .register_dynamic_job(name, cron, script_path)
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         Ok(())
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "Scheduler not available"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Scheduler not available",
+        ))
     }
 }
 
@@ -494,7 +540,10 @@ pub async fn op_zier_mcp_initialize(
         manager.initialize(configs).await;
         Ok(())
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "MCP Manager not available",
+        ))
     }
 }
 
@@ -510,10 +559,16 @@ pub async fn op_zier_mcp_ensure_server(
     };
 
     if let Some(manager) = manager {
-        manager.ensure_server(&server_name).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        manager
+            .ensure_server(&server_name)
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         Ok(())
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "MCP Manager not available",
+        ))
     }
 }
 
@@ -530,10 +585,16 @@ pub async fn op_zier_mcp_list_tools(
     };
 
     if let Some(manager) = manager {
-        let tools = manager.list_tools(&server_name).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let tools = manager
+            .list_tools(&server_name)
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         Ok(tools)
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "MCP Manager not available",
+        ))
     }
 }
 
@@ -552,13 +613,23 @@ pub async fn op_zier_mcp_call(
     };
 
     if let Some(manager) = manager {
-        let res = manager.call(&server_name, "tools/call", serde_json::json!({
-            "name": tool_name,
-            "arguments": args
-        })).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let res = manager
+            .call(
+                &server_name,
+                "tools/call",
+                serde_json::json!({
+                    "name": tool_name,
+                    "arguments": args
+                }),
+            )
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         Ok(res)
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "MCP Manager not available",
+        ))
     }
 }
 
@@ -577,28 +648,30 @@ pub async fn op_zier_mcp_shutdown(
         manager.shutdown(server_name.as_deref()).await;
         Ok(())
     } else {
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "MCP Manager not available"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "MCP Manager not available",
+        ))
     }
 }
 
 #[op2]
 #[serde]
-pub fn op_zier_get_parent_context(
-    state: &mut OpState,
-) -> Option<serde_json::Value> {
+pub fn op_zier_get_parent_context(state: &mut OpState) -> Option<serde_json::Value> {
     let sandbox = state.borrow::<SandboxState>();
-    match (&sandbox.parent_model, &sandbox.parent_tools, &sandbox.parent_system_prompt_append) {
-        (model, tools, spa) => {
-            if model.is_none() && tools.is_none() && spa.is_none() {
-                None
-            } else {
-                Some(serde_json::json!({
-                    "model": model,
-                    "tools": tools,
-                    "systemPromptAppend": spa,
-                }))
-            }
-        }
+    let (model, tools, spa) = (
+        &sandbox.parent_model,
+        &sandbox.parent_tools,
+        &sandbox.parent_system_prompt_append,
+    );
+    if model.is_none() && tools.is_none() && spa.is_none() {
+        None
+    } else {
+        Some(serde_json::json!({
+            "model": model,
+            "tools": tools,
+            "systemPromptAppend": spa,
+        }))
     }
 }
 
@@ -669,7 +742,7 @@ impl DenoRuntime {
         strategy: WorkdirStrategy,
         ingress_bus: Option<Arc<IngressBus>>,
         scheduler: Option<Arc<Mutex<Scheduler>>>,
-        mcp_manager: Option<Arc<McpManager>>
+        mcp_manager: Option<Arc<McpManager>>,
     ) -> Result<Self, AnyError> {
         let loader = std::rc::Rc::new(deno_core::FsModuleLoader);
         let mut runtime = JsRuntime::new(RuntimeOptions {
@@ -691,10 +764,12 @@ impl DenoRuntime {
 
         let mut caps = Capabilities::default();
         for p in &policy.allow_read {
-            caps.read.push(PathBuf::from(shellexpand::tilde(p).to_string()));
+            caps.read
+                .push(PathBuf::from(shellexpand::tilde(p).to_string()));
         }
         for p in &policy.allow_write {
-            caps.write.push(PathBuf::from(shellexpand::tilde(p).to_string()));
+            caps.write
+                .push(PathBuf::from(shellexpand::tilde(p).to_string()));
         }
         caps.net = policy.allow_network;
         caps.env = policy.allow_env;
@@ -818,7 +893,8 @@ impl DenoRuntime {
                 for path in &declared_caps.read {
                     let mut allowed = false;
                     for allowed_path in &policy.allow_read {
-                        let allowed_path = PathBuf::from(shellexpand::tilde(allowed_path).to_string());
+                        let allowed_path =
+                            PathBuf::from(shellexpand::tilde(allowed_path).to_string());
                         if path.starts_with(&allowed_path) {
                             allowed = true;
                             break;
@@ -833,7 +909,8 @@ impl DenoRuntime {
                 for path in &declared_caps.write {
                     let mut allowed = false;
                     for allowed_path in &policy.allow_write {
-                        let allowed_path = PathBuf::from(shellexpand::tilde(allowed_path).to_string());
+                        let allowed_path =
+                            PathBuf::from(shellexpand::tilde(allowed_path).to_string());
                         if path.starts_with(&allowed_path) {
                             allowed = true;
                             break;
@@ -846,12 +923,16 @@ impl DenoRuntime {
 
                 // Verify net
                 if declared_caps.net && !policy.allow_network {
-                    return Err(anyhow::anyhow!("Script declared capability 'net' which is not allowed by sandbox policy"));
+                    return Err(anyhow::anyhow!(
+                        "Script declared capability 'net' which is not allowed by sandbox policy"
+                    ));
                 }
 
                 // Verify env
                 if declared_caps.env && !policy.allow_env {
-                    return Err(anyhow::anyhow!("Script declared capability 'env' which is not allowed by sandbox policy"));
+                    return Err(anyhow::anyhow!(
+                        "Script declared capability 'env' which is not allowed by sandbox policy"
+                    ));
                 }
 
                 sandbox.capabilities = declared_caps;
@@ -859,7 +940,10 @@ impl DenoRuntime {
         }
 
         let module_specifier = ModuleSpecifier::parse(&format!("file://{}", path))?;
-        let mod_id = self.runtime.load_main_es_module_from_code(&module_specifier, code).await?;
+        let mod_id = self
+            .runtime
+            .load_main_es_module_from_code(&module_specifier, code)
+            .await?;
         // Interleave mod_evaluate with run_event_loop to allow top-level await to progress.
         // mod_evaluate future depends on event loop progress; run_event_loop pumps events.
         let mut eval_fut = self.runtime.mod_evaluate(mod_id);
@@ -885,7 +969,12 @@ impl DenoRuntime {
         sandbox.registered_tools.clone()
     }
 
-    pub fn set_parent_context(&mut self, model: Option<String>, tools: Option<Vec<String>>, system_prompt_append: Option<String>) {
+    pub fn set_parent_context(
+        &mut self,
+        model: Option<String>,
+        tools: Option<Vec<String>>,
+        system_prompt_append: Option<String>,
+    ) {
         let op_state = self.runtime.op_state();
         let mut state = op_state.borrow_mut();
         let sandbox = state.borrow_mut::<SandboxState>();
@@ -895,10 +984,7 @@ impl DenoRuntime {
     }
 
     pub async fn execute_tool(&mut self, name: &str, args: &str) -> Result<String, AnyError> {
-        let code = format!(
-            "globalThis.pi.internal.executeTool('{}', {})",
-            name, args
-        );
+        let code = format!("globalThis.pi.internal.executeTool('{}', {})", name, args);
 
         let promise_global = self.runtime.execute_script("<tool_exec>", code)?;
 
@@ -948,10 +1034,12 @@ impl DenoRuntime {
         // Execute the hook
         let code = "globalThis.zier.hooks.on_status ? globalThis.zier.hooks.on_status() : []";
 
-        let promise_global = self.runtime.execute_script("<get_status>", code.to_string())?;
+        let promise_global = self
+            .runtime
+            .execute_script("<get_status>", code.to_string())?;
 
         let result_global = loop {
-             let state = {
+            let state = {
                 let scope = &mut self.runtime.handle_scope();
                 let promise_local = v8::Local::new(scope, &promise_global);
                 let promise = v8::Local::<v8::Promise>::try_from(promise_local)?;
@@ -983,11 +1071,14 @@ impl DenoRuntime {
         let json = deno_core::serde_v8::from_v8::<serde_json::Value>(scope, value)?;
 
         if let serde_json::Value::Array(arr) = json {
-             Ok(arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            Ok(arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect())
         } else if let serde_json::Value::String(s) = json {
-             Ok(vec![s])
+            Ok(vec![s])
         } else {
-             Ok(Vec::new())
+            Ok(Vec::new())
         }
     }
 }

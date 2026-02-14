@@ -1,14 +1,13 @@
-use anyhow::Result;
-use tracing::{info, debug};
-use futures::StreamExt;
 use crate::agent::{
-    SmartClient, ToolExecutor, SessionManager,
-    Role, Message, LLMResponseContent, ToolResult, StreamEvent, StreamResult,
-    ImageAttachment, is_silent_reply, SILENT_REPLY_TOKEN,
-    AgentConfig, SmartResponse, Usage
+    is_silent_reply, AgentConfig, ImageAttachment, LLMResponseContent, Message, Role,
+    SessionManager, SmartClient, SmartResponse, StreamEvent, StreamResult, ToolExecutor,
+    Usage, SILENT_REPLY_TOKEN,
 };
 use crate::capabilities::vision::VisionService;
 use crate::config::Config;
+use anyhow::Result;
+use futures::StreamExt;
+use tracing::{debug, info};
 
 pub struct ChatEngine {
     client: SmartClient,
@@ -52,46 +51,77 @@ impl ChatEngine {
         let config = self.client.resolve_config(&self.agent_config.model)?;
 
         if config.supports_vision == Some(false) && !images.is_empty() {
-            info!("Model {} does not support vision. Generating descriptions...", self.agent_config.model);
+            info!(
+                "Model {} does not support vision. Generating descriptions...",
+                self.agent_config.model
+            );
             let vision_service = VisionService::new(&self.config);
 
             for (i, img) in images.iter().enumerate() {
                 match vision_service.describe_image(img).await {
                     Ok(desc) => {
-                        final_content.push_str(&format!("\n\n[Image {} Description: {}]", i + 1, desc));
+                        final_content.push_str(&format!(
+                            "\n\n[Image {} Description: {}]",
+                            i + 1,
+                            desc
+                        ));
                     }
                     Err(e) => {
-                        final_content.push_str(&format!("\n\n[Image {} processing failed: {}]", i + 1, e));
+                        final_content.push_str(&format!(
+                            "\n\n[Image {} processing failed: {}]",
+                            i + 1,
+                            e
+                        ));
                     }
                 }
             }
             images.clear();
         }
 
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::User,
-            content: final_content,
-            tool_calls: None,
-            tool_call_id: None,
-            images,
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::User,
+                content: final_content,
+                tool_calls: None,
+                tool_call_id: None,
+                images,
+            });
 
-        if self.session_manager.should_memory_flush(self.agent_config.context_window, self.agent_config.reserve_tokens).await {
+        if self
+            .session_manager
+            .should_memory_flush(
+                self.agent_config.context_window,
+                self.agent_config.reserve_tokens,
+            )
+            .await
+        {
             info!("Running pre-compaction memory flush (soft threshold)");
             self.memory_flush().await?;
         }
 
-        if self.session_manager.should_compact(self.agent_config.context_window, self.agent_config.reserve_tokens).await {
+        if self
+            .session_manager
+            .should_compact(
+                self.agent_config.context_window,
+                self.agent_config.reserve_tokens,
+            )
+            .await
+        {
             self.session_manager.compact_session(&self.client).await?;
         }
 
-        let messages = self.session_manager.session().read().await.messages_for_llm();
+        let messages = self
+            .session_manager
+            .session()
+            .read()
+            .await
+            .messages_for_llm();
         let tool_schemas = self.tool_executor.tool_schemas();
 
-        let response = self
-            .client
-            .chat(&messages, Some(&tool_schemas))
-            .await?;
+        let response = self.client.chat(&messages, Some(&tool_schemas)).await?;
 
         let metadata = (response.used_model.clone(), response.latency_ms);
         let usage = response.response.usage.clone();
@@ -108,34 +138,52 @@ impl ChatEngine {
             (None, None) => None,
         };
 
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::Assistant,
-            content: final_response.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::Assistant,
+                content: final_response.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+                images: Vec::new(),
+            });
 
-        self.session_manager.session().write().await.add_metadata_to_last_message(Some(metadata.0), Some(metadata.1));
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_metadata_to_last_message(Some(metadata.0), Some(metadata.1));
 
         Ok((final_response, total_usage))
     }
 
-    pub async fn handle_response(&self, response: SmartResponse) -> Result<(String, Option<Usage>)> {
+    pub async fn handle_response(
+        &self,
+        response: SmartResponse,
+    ) -> Result<(String, Option<Usage>)> {
         self.handle_response_internal(response).await
     }
 
-    async fn handle_response_internal(&self, response: SmartResponse) -> Result<(String, Option<Usage>)> {
+    async fn handle_response_internal(
+        &self,
+        response: SmartResponse,
+    ) -> Result<(String, Option<Usage>)> {
         match response.response.content {
             LLMResponseContent::Text(text) => Ok((text, None)),
             LLMResponseContent::ToolCalls(calls) => {
-                self.session_manager.session().write().await.add_message(Message {
-                    role: Role::Assistant,
-                    content: String::new(),
-                    tool_calls: Some(calls.clone()),
-                    tool_call_id: None,
-                    images: Vec::new(),
-                });
+                self.session_manager
+                    .session()
+                    .write()
+                    .await
+                    .add_message(Message {
+                        role: Role::Assistant,
+                        content: String::new(),
+                        tool_calls: Some(calls.clone()),
+                        tool_call_id: None,
+                        images: Vec::new(),
+                    });
 
                 for call in &calls {
                     debug!(
@@ -146,34 +194,47 @@ impl ChatEngine {
                     let result = self.tool_executor.execute_tool(call).await;
 
                     if let Err(ref e) = result {
-                        if let Some(approval_err) = e.downcast_ref::<crate::agent::tool_executor::ApprovalRequiredError>() {
-                            return Err(crate::agent::llm_error::LlmError::ApprovalRequired(approval_err.0.clone(), approval_err.1.clone()).into());
+                        if let Some(approval_err) =
+                            e.downcast_ref::<crate::agent::tool_executor::ApprovalRequiredError>()
+                        {
+                            return Err(crate::agent::llm_error::LlmError::ApprovalRequired(
+                                approval_err.0.clone(),
+                                approval_err.1.clone(),
+                            )
+                            .into());
                         }
                     }
 
                     let output = result.unwrap_or_else(|e| format!("Error: {}", e));
 
                     // Add result incrementally so partial success is preserved
-                    self.session_manager.session().write().await.add_message(Message {
-                        role: Role::Tool,
-                        content: output,
-                        tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
-                        images: Vec::new(),
-                    });
+                    self.session_manager
+                        .session()
+                        .write()
+                        .await
+                        .add_message(Message {
+                            role: Role::Tool,
+                            content: output,
+                            tool_calls: None,
+                            tool_call_id: Some(call.id.clone()),
+                            images: Vec::new(),
+                        });
                 }
 
-                let messages = self.session_manager.session().read().await.messages_for_llm();
+                let messages = self
+                    .session_manager
+                    .session()
+                    .read()
+                    .await
+                    .messages_for_llm();
                 let tool_schemas = self.tool_executor.tool_schemas();
 
-                let next_response = self
-                    .client
-                    .chat(&messages, Some(&tool_schemas))
-                    .await?;
+                let next_response = self.client.chat(&messages, Some(&tool_schemas)).await?;
 
                 let usage = next_response.response.usage.clone();
 
-                let (text, next_usage) = Box::pin(self.handle_response_internal(next_response)).await?;
+                let (text, next_usage) =
+                    Box::pin(self.handle_response_internal(next_response)).await?;
 
                 let total_usage = match (usage, next_usage) {
                     (Some(a), Some(b)) => Some(Usage {
@@ -203,27 +264,40 @@ impl ChatEngine {
             today, today, SILENT_REPLY_TOKEN
         );
 
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::User,
-            content: flush_prompt,
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::User,
+                content: flush_prompt,
+                tool_calls: None,
+                tool_call_id: None,
+                images: Vec::new(),
+            });
 
-        let messages = self.session_manager.session().read().await.messages_for_llm();
+        let messages = self
+            .session_manager
+            .session()
+            .read()
+            .await
+            .messages_for_llm();
         let tool_schemas = self.tool_executor.tool_schemas();
 
         let response = self.client.chat(&messages, Some(&tool_schemas)).await?;
         let (final_response, _) = self.handle_response(response).await?;
 
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::Assistant,
-            content: final_response.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::Assistant,
+                content: final_response.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+                images: Vec::new(),
+            });
 
         if !is_silent_reply(&final_response) {
             debug!("Memory flush response: {}", final_response);
@@ -241,24 +315,47 @@ impl ChatEngine {
         message: &str,
         images: Vec<ImageAttachment>,
     ) -> Result<StreamResult> {
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::User,
-            content: message.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-            images,
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::User,
+                content: message.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                images,
+            });
 
-        if self.session_manager.should_memory_flush(self.agent_config.context_window, self.agent_config.reserve_tokens).await {
+        if self
+            .session_manager
+            .should_memory_flush(
+                self.agent_config.context_window,
+                self.agent_config.reserve_tokens,
+            )
+            .await
+        {
             info!("Running pre-compaction memory flush (soft threshold)");
             self.memory_flush().await?;
         }
 
-        if self.session_manager.should_compact(self.agent_config.context_window, self.agent_config.reserve_tokens).await {
+        if self
+            .session_manager
+            .should_compact(
+                self.agent_config.context_window,
+                self.agent_config.reserve_tokens,
+            )
+            .await
+        {
             self.session_manager.compact_session(&self.client).await?;
         }
 
-        let messages = self.session_manager.session().read().await.messages_for_llm();
+        let messages = self
+            .session_manager
+            .session()
+            .read()
+            .await
+            .messages_for_llm();
         let tool_schemas = self.tool_executor.tool_schemas();
 
         self.client
@@ -267,13 +364,17 @@ impl ChatEngine {
     }
 
     pub async fn finish_chat_stream(&self, response: &str) {
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::Assistant,
-            content: response.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::Assistant,
+                content: response.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                images: Vec::new(),
+            });
     }
 
     pub async fn chat_stream_with_tools(
@@ -286,36 +387,65 @@ impl ChatEngine {
         let config = self.client.resolve_config(&self.agent_config.model)?;
 
         if config.supports_vision == Some(false) && !final_images.is_empty() {
-            info!("Model {} does not support vision. Generating descriptions...", self.agent_config.model);
+            info!(
+                "Model {} does not support vision. Generating descriptions...",
+                self.agent_config.model
+            );
             let vision_service = VisionService::new(&self.config);
 
             for (i, img) in final_images.iter().enumerate() {
                 match vision_service.describe_image(img).await {
                     Ok(desc) => {
-                        final_content.push_str(&format!("\n\n[Image {} Description: {}]", i + 1, desc));
+                        final_content.push_str(&format!(
+                            "\n\n[Image {} Description: {}]",
+                            i + 1,
+                            desc
+                        ));
                     }
                     Err(e) => {
-                        final_content.push_str(&format!("\n\n[Image {} processing failed: {}]", i + 1, e));
+                        final_content.push_str(&format!(
+                            "\n\n[Image {} processing failed: {}]",
+                            i + 1,
+                            e
+                        ));
                     }
                 }
             }
             final_images.clear();
         }
 
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::User,
-            content: final_content,
-            tool_calls: None,
-            tool_call_id: None,
-            images: final_images,
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::User,
+                content: final_content,
+                tool_calls: None,
+                tool_call_id: None,
+                images: final_images,
+            });
 
-        if self.session_manager.should_memory_flush(self.agent_config.context_window, self.agent_config.reserve_tokens).await {
+        if self
+            .session_manager
+            .should_memory_flush(
+                self.agent_config.context_window,
+                self.agent_config.reserve_tokens,
+            )
+            .await
+        {
             info!("Running pre-compaction memory flush (soft threshold)");
             self.memory_flush().await?;
         }
 
-        if self.session_manager.should_compact(self.agent_config.context_window, self.agent_config.reserve_tokens).await {
+        if self
+            .session_manager
+            .should_compact(
+                self.agent_config.context_window,
+                self.agent_config.reserve_tokens,
+            )
+            .await
+        {
             self.session_manager.compact_session(&self.client).await?;
         }
 
@@ -436,26 +566,38 @@ impl ChatEngine {
     }
 
     pub async fn provide_tool_result(&self, call_id: String, output: String) {
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::Tool,
-            content: output,
-            tool_calls: None,
-            tool_call_id: Some(call_id),
-            images: Vec::new(),
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::Tool,
+                content: output,
+                tool_calls: None,
+                tool_call_id: Some(call_id),
+                images: Vec::new(),
+            });
     }
 
     pub async fn continue_chat(&self) -> Result<(String, Option<Usage>)> {
-        let messages = self.session_manager.session().read().await.messages_for_llm();
+        let messages = self
+            .session_manager
+            .session()
+            .read()
+            .await
+            .messages_for_llm();
 
         // Find last assistant message with tool calls
-        let assistant_msg_idx = messages.iter().rposition(|m| m.role == Role::Assistant && m.tool_calls.is_some());
+        let assistant_msg_idx = messages
+            .iter()
+            .rposition(|m| m.role == Role::Assistant && m.tool_calls.is_some());
 
         if let Some(idx) = assistant_msg_idx {
             let assistant_msg = &messages[idx];
             if let Some(calls) = &assistant_msg.tool_calls {
                 // Find which calls are already done
-                let executed_ids: std::collections::HashSet<_> = messages.iter()
+                let executed_ids: std::collections::HashSet<_> = messages
+                    .iter()
                     .skip(idx + 1)
                     .filter(|m| m.role == Role::Tool)
                     .filter_map(|m| m.tool_call_id.clone())
@@ -469,25 +611,40 @@ impl ChatEngine {
                     let result = self.tool_executor.execute_tool(call).await;
 
                     if let Err(ref e) = result {
-                        if let Some(approval_err) = e.downcast_ref::<crate::agent::tool_executor::ApprovalRequiredError>() {
-                            return Err(crate::agent::llm_error::LlmError::ApprovalRequired(approval_err.0.clone(), approval_err.1.clone()).into());
+                        if let Some(approval_err) =
+                            e.downcast_ref::<crate::agent::tool_executor::ApprovalRequiredError>()
+                        {
+                            return Err(crate::agent::llm_error::LlmError::ApprovalRequired(
+                                approval_err.0.clone(),
+                                approval_err.1.clone(),
+                            )
+                            .into());
                         }
                     }
 
                     let output = result.unwrap_or_else(|e| format!("Error: {}", e));
 
-                    self.session_manager.session().write().await.add_message(Message {
-                        role: Role::Tool,
-                        content: output,
-                        tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
-                        images: Vec::new(),
-                    });
+                    self.session_manager
+                        .session()
+                        .write()
+                        .await
+                        .add_message(Message {
+                            role: Role::Tool,
+                            content: output,
+                            tool_calls: None,
+                            tool_call_id: Some(call.id.clone()),
+                            images: Vec::new(),
+                        });
                 }
 
                 // If we executed something or everything was already done, proceed to LLM
                 // (Only proceed if all calls are done. If approval loop interrupted again, we returned Err above)
-                let messages = self.session_manager.session().read().await.messages_for_llm();
+                let messages = self
+                    .session_manager
+                    .session()
+                    .read()
+                    .await
+                    .messages_for_llm();
                 let tool_schemas = self.tool_executor.tool_schemas();
                 let response = self.client.chat(&messages, Some(&tool_schemas)).await?;
 

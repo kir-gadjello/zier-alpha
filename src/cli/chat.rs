@@ -6,18 +6,18 @@ use rustyline::DefaultEditor;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use crate::cli::common::make_extension_policy;
+use serde_json;
+use std::sync::Arc;
 use zier_alpha::agent::{
     extract_tool_detail, get_last_session_id_for_agent, get_skills_summary,
     list_sessions_for_agent, load_skills, parse_skill_command, search_sessions_for_agent, Agent,
-    AgentConfig, ContextStrategy, ImageAttachment, Skill, ScriptTool,
+    AgentConfig, ContextStrategy, ImageAttachment, ScriptTool, Skill,
 };
 use zier_alpha::concurrency::WorkspaceLock;
 use zier_alpha::config::Config;
 use zier_alpha::memory::MemoryManager;
 use zier_alpha::scripting::ScriptService;
-use std::sync::Arc;
-use crate::cli::common::make_extension_policy;
-use serde_json;
 
 /// Adjust a byte index to the nearest valid UTF-8 char boundary (searching forward).
 fn floor_char_boundary(s: &str, index: usize) -> usize {
@@ -130,7 +130,7 @@ pub struct ChatArgs {
 pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
     let verbose_chat = args.verbose;
     let config = Config::load()?;
-    
+
     let project_dir = if let Some(w) = args.workdir {
         PathBuf::from(shellexpand::tilde(&w).to_string()).canonicalize()?
     } else {
@@ -149,7 +149,14 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
     // Capture model for parent context before moving agent_config
     let parent_model_for_context = agent_config.model.clone();
 
-    let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Full, project_dir.clone()).await?;
+    let mut agent = Agent::new_with_project(
+        agent_config,
+        &config,
+        memory,
+        ContextStrategy::Full,
+        project_dir.clone(),
+    )
+    .await?;
 
     // Load enabled extensions (e.g., Hive) BEFORE session creation
     if let Some(ref hive_config) = config.extensions.hive {
@@ -175,7 +182,9 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                             hive_path = Some(p);
                         } else {
                             // Check extensions/hive/main.js relative to cwd (dev)
-                            let p = std::env::current_dir().unwrap_or_default().join("extensions/hive/main.js");
+                            let p = std::env::current_dir()
+                                .unwrap_or_default()
+                                .join("extensions/hive/main.js");
                             if p.exists() {
                                 hive_path = Some(p);
                             }
@@ -193,7 +202,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     project_dir.clone(),
                     config.workdir.strategy.clone(),
                     None,
-                    None
+                    None,
                 ) {
                     Ok(s) => s,
                     Err(e) => {
@@ -208,15 +217,20 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                         Ok(tools) => {
                             let mut current_tools = agent.tools().to_vec();
                             for tool_def in tools {
-                                current_tools.push(Arc::new(ScriptTool::new(tool_def, service.clone())));
+                                current_tools
+                                    .push(Arc::new(ScriptTool::new(tool_def, service.clone())));
                             }
                             agent.set_tools(current_tools);
                             tracing::info!("Hive extension loaded successfully");
 
                             // Propagate parent context to Hive for child agent inheritance
                             let parent_model = parent_model_for_context.clone();
-                            let parent_tools: Vec<String> = agent.tools().iter().map(|t| t.name().to_string()).collect();
-                            if let Err(e) = service.set_parent_context(Some(parent_model), Some(parent_tools), None).await {
+                            let parent_tools: Vec<String> =
+                                agent.tools().iter().map(|t| t.name().to_string()).collect();
+                            if let Err(e) = service
+                                .set_parent_context(Some(parent_model), Some(parent_tools), None)
+                                .await
+                            {
                                 tracing::warn!("Failed to set parent context on Hive: {}", e);
                             }
                         }
@@ -241,7 +255,10 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                 }
                 let filtered_count = filtered.len();
                 agent.set_tools(filtered);
-                tracing::info!("Child tool filtering applied: {} tools remaining", filtered_count);
+                tracing::info!(
+                    "Child tool filtering applied: {} tools remaining",
+                    filtered_count
+                );
             }
             Err(e) => {
                 tracing::warn!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);
@@ -464,7 +481,8 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     print!("\nZier Alpha: ");
                     stdout.flush().ok();
                     let lock_clone = workspace_lock.clone();
-                    let _lock_guard = tokio::task::spawn_blocking(move || lock_clone.acquire()).await??;
+                    let _lock_guard =
+                        tokio::task::spawn_blocking(move || lock_clone.acquire()).await??;
                     match agent.chat(&msg).await {
                         Ok(response) => {
                             println!("{}\n", response);
@@ -519,12 +537,14 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
 
         let lock_clone = workspace_lock.clone();
         let _lock_guard = tokio::task::spawn_blocking(move || lock_clone.acquire()).await??;
-        let mut current_stream: futures::stream::BoxStream<'_, Result<zier_alpha::agent::StreamEvent>> = 
-            Box::pin(agent.chat_stream_with_tools(&message, images).await?);
+        let mut current_stream: futures::stream::BoxStream<
+            '_,
+            Result<zier_alpha::agent::StreamEvent>,
+        > = Box::pin(agent.chat_stream_with_tools(&message, images).await?);
 
         loop {
             let mut approval_info = None;
-            
+
             {
                 let mut pinned_stream = std::pin::pin!(current_stream);
                 while let Some(event) = pinned_stream.next().await {
@@ -533,7 +553,11 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                             print!("{}", content);
                             stdout.flush()?;
                         }
-                        Ok(zier_alpha::agent::StreamEvent::ToolCallStart { name, arguments, .. }) => {
+                        Ok(zier_alpha::agent::StreamEvent::ToolCallStart {
+                            name,
+                            arguments,
+                            ..
+                        }) => {
                             let detail = extract_tool_detail(&name, &arguments);
                             if verbose_chat {
                                 println!("\n[Tool Call: {}]", name);
@@ -545,7 +569,11 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                             }
                             stdout.flush()?;
                         }
-                        Ok(zier_alpha::agent::StreamEvent::ApprovalRequired { name, id, arguments }) => {
+                        Ok(zier_alpha::agent::StreamEvent::ApprovalRequired {
+                            name,
+                            id,
+                            arguments,
+                        }) => {
                             let detail = extract_tool_detail(&name, &arguments);
                             if verbose_chat {
                                 println!("\n[Approval Required: {}]", name);
@@ -563,7 +591,8 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                             io::stdin().read_line(&mut input)?;
                             let input = input.trim().to_lowercase();
 
-                            approval_info = Some((id, name, arguments, input == "y" || input == "yes"));
+                            approval_info =
+                                Some((id, name, arguments, input == "y" || input == "yes"));
                             break; // Exit inner stream loop
                         }
                         Ok(zier_alpha::agent::StreamEvent::ToolCallEnd { output, .. }) => {
@@ -590,7 +619,10 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                         name: name.clone(),
                         arguments: arguments.clone(),
                     };
-                    agent.execute_tool(&call).await.unwrap_or_else(|e| format!("Error: {}", e))
+                    agent
+                        .execute_tool(&call)
+                        .await
+                        .unwrap_or_else(|e| format!("Error: {}", e))
                 } else {
                     println!("Skipped: {}", name);
                     "User denied execution".to_string()

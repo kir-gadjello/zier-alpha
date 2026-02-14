@@ -1,8 +1,8 @@
+use anyhow::Result;
+use glob::glob;
 use std::collections::HashMap;
 use std::path::Path;
-use anyhow::Result;
 use tracing::{info, warn};
-use glob::glob;
 
 pub struct PromptRegistry {
     prompts: HashMap<String, String>,
@@ -22,14 +22,19 @@ impl PromptRegistry {
         }
 
         let pattern = dir.join("**/*.md");
-        let pattern_str = pattern.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
+        let pattern_str = pattern
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
 
         for entry in glob(pattern_str)? {
             match entry {
                 Ok(path) => {
                     // Calculate ID relative to dir
                     if let Ok(relative_path) = path.strip_prefix(dir) {
-                        let id = relative_path.with_extension("").to_string_lossy().to_string();
+                        let id = relative_path
+                            .with_extension("")
+                            .to_string_lossy()
+                            .to_string();
                         // Normalize windows paths if any
                         let id = id.replace('\\', "/");
 
@@ -46,5 +51,11 @@ impl PromptRegistry {
 
     pub fn get(&self, id: &str) -> Option<&String> {
         self.prompts.get(id)
+    }
+}
+
+impl Default for PromptRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }

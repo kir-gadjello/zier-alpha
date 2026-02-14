@@ -1,20 +1,20 @@
+pub mod models;
 mod sandbox;
 mod schema;
-pub mod models;
 
+pub use models::*;
 pub use sandbox::*;
 pub use schema::*;
-pub use models::*;
 
 #[cfg(test)]
 mod tests;
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use regex::Regex;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -28,8 +28,8 @@ pub enum WorkdirStrategy {
 pub struct WorkdirConfig {
     #[serde(default)]
     pub strategy: WorkdirStrategy,
-    
-    /// Custom prompt addition for this strategy. 
+
+    /// Custom prompt addition for this strategy.
     /// If None, a default informative prompt is used.
     pub custom_prompt: Option<String>,
 }
@@ -108,10 +108,18 @@ impl Default for DiskConfig {
     }
 }
 
-fn default_monitor_interval() -> String { "10m".to_string() }
-fn default_min_free_percent() -> u8 { 5 }
-fn default_session_retention_days() -> u32 { 0 }
-fn default_max_log_size_mb() -> u32 { 0 }
+fn default_monitor_interval() -> String {
+    "10m".to_string()
+}
+fn default_min_free_percent() -> u8 {
+    5
+}
+fn default_session_retention_days() -> u32 {
+    0
+}
+fn default_max_log_size_mb() -> u32 {
+    0
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExtensionsConfig {
@@ -169,7 +177,9 @@ pub struct CompactionConfig {
     pub keep_last: usize,
 }
 
-fn default_keep_last() -> usize { 10 }
+fn default_keep_last() -> usize {
+    10
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
@@ -527,10 +537,18 @@ fn default_log_level() -> String {
 fn default_log_file() -> String {
     "~/.zier-alpha/logs/agent.log".to_string()
 }
-fn default_agents_dir() -> String { "agents".to_string() }
-fn default_max_depth() -> usize { 3 }
-fn default_ipc_mode() -> String { "artifact".to_string() }
-fn default_timeout() -> u64 { 300 }
+fn default_agents_dir() -> String {
+    "agents".to_string()
+}
+fn default_max_depth() -> usize {
+    3
+}
+fn default_ipc_mode() -> String {
+    "artifact".to_string()
+}
+fn default_timeout() -> u64 {
+    300
+}
 
 fn default_compaction_strategy() -> String {
     "native".to_string()
@@ -645,7 +663,9 @@ impl Config {
         config.expand_env_vars();
 
         // Validate configuration
-        config.validate().context("Configuration validation failed")?;
+        config
+            .validate()
+            .context("Configuration validation failed")?;
 
         Ok(config)
     }
@@ -663,10 +683,16 @@ impl Config {
         if let Some(ref hours) = self.heartbeat.active_hours {
             let re = Regex::new(r"^\d{2}:\d{2}$").unwrap();
             if !re.is_match(&hours.start) {
-                anyhow::bail!("Invalid active hours start format: {}. Expected HH:MM", hours.start);
+                anyhow::bail!(
+                    "Invalid active hours start format: {}. Expected HH:MM",
+                    hours.start
+                );
             }
             if !re.is_match(&hours.end) {
-                anyhow::bail!("Invalid active hours end format: {}. Expected HH:MM", hours.end);
+                anyhow::bail!(
+                    "Invalid active hours end format: {}. Expected HH:MM",
+                    hours.end
+                );
             }
         }
 
@@ -688,13 +714,13 @@ impl Config {
                     // Also check if it's a built-in tool that is NOT allowed.
                     // If it is external, it is allowed if configured.
                     if !is_external && !allowed_set.contains(tool) {
-                         // It might be a typo, or a tool that is disabled.
-                         // We'll treat it as valid but maybe log a warning if we had a logger here.
-                         // But for strict validation:
-                         // "Config::validate() ... that checks ... tools.require_approval tools actually exist"
-                         // This implies we should verify against a known list of ALL tools?
-                         // But we don't have the full list of builtin tools here (it's in tool registry).
-                         // So we can skip this check or make it loose.
+                        // It might be a typo, or a tool that is disabled.
+                        // We'll treat it as valid but maybe log a warning if we had a logger here.
+                        // But for strict validation:
+                        // "Config::validate() ... that checks ... tools.require_approval tools actually exist"
+                        // This implies we should verify against a known list of ALL tools?
+                        // But we don't have the full list of builtin tools here (it's in tool registry).
+                        // So we can skip this check or make it loose.
                     }
                 }
             }
@@ -703,7 +729,7 @@ impl Config {
         // Validate Providers
         if let Some(ref openai) = self.providers.openai {
             if openai.api_key.is_empty() {
-                 anyhow::bail!("OpenAI API key is missing");
+                anyhow::bail!("OpenAI API key is missing");
             }
         }
         if let Some(ref anthropic) = self.providers.anthropic {
@@ -726,12 +752,20 @@ impl Config {
             if let Some(fallback) = &model.fallback_settings {
                 for pattern in &fallback.allow {
                     if let Err(e) = glob::Pattern::new(pattern) {
-                        anyhow::bail!("Invalid glob pattern in fallback allow list for model '{}': {}", name, e);
+                        anyhow::bail!(
+                            "Invalid glob pattern in fallback allow list for model '{}': {}",
+                            name,
+                            e
+                        );
                     }
                 }
                 for pattern in &fallback.deny {
                     if let Err(e) = glob::Pattern::new(pattern) {
-                        anyhow::bail!("Invalid glob pattern in fallback deny list for model '{}': {}", name, e);
+                        anyhow::bail!(
+                            "Invalid glob pattern in fallback deny list for model '{}': {}",
+                            name,
+                            e
+                        );
                     }
                 }
             }
@@ -797,7 +831,9 @@ impl Config {
             ["server", "enabled"] => Ok(self.server.enabled.to_string()),
             ["server", "port"] => Ok(self.server.port.to_string()),
             ["server", "bind"] => Ok(self.server.bind.clone()),
-            ["server", "openai_proxy", "enabled"] => Ok(self.server.openai_proxy.enabled.to_string()),
+            ["server", "openai_proxy", "enabled"] => {
+                Ok(self.server.openai_proxy.enabled.to_string())
+            }
             ["server", "openai_proxy", "port"] => Ok(self.server.openai_proxy.port.to_string()),
             ["server", "openai_proxy", "bind"] => Ok(self.server.openai_proxy.bind.clone()),
             ["memory", "workspace"] => Ok(self.memory.workspace.clone()),
@@ -818,7 +854,9 @@ impl Config {
             ["server", "enabled"] => self.server.enabled = value.parse()?,
             ["server", "port"] => self.server.port = value.parse()?,
             ["server", "bind"] => self.server.bind = value.to_string(),
-            ["server", "openai_proxy", "enabled"] => self.server.openai_proxy.enabled = value.parse()?,
+            ["server", "openai_proxy", "enabled"] => {
+                self.server.openai_proxy.enabled = value.parse()?
+            }
             ["server", "openai_proxy", "port"] => self.server.openai_proxy.port = value.parse()?,
             ["server", "openai_proxy", "bind"] => self.server.openai_proxy.bind = value.to_string(),
             ["memory", "workspace"] => self.memory.workspace = value.to_string(),

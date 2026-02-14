@@ -1,9 +1,9 @@
+use crate::agent::sanitize;
+use crate::config::Config;
+use crate::memory::MemoryManager;
 use anyhow::Result;
 use std::sync::Arc;
 use tracing::info;
-use crate::memory::MemoryManager;
-use crate::config::Config;
-use crate::agent::sanitize;
 
 pub struct MemoryContextBuilder {
     memory: Arc<MemoryManager>,

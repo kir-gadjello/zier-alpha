@@ -84,14 +84,14 @@ impl MemoryWatcher {
         let chunk_overlap = config.chunk_overlap;
 
         tokio::spawn(async move {
-            let index = match MemoryIndex::new_with_db_path(&workspace_for_task, &db_path_for_task, None)
-            {
-                Ok(idx) => idx.with_chunk_config(chunk_size, chunk_overlap),
-                Err(e) => {
-                    warn!("Failed to create memory index for watcher: {}", e);
-                    return;
-                }
-            };
+            let index =
+                match MemoryIndex::new_with_db_path(&workspace_for_task, &db_path_for_task, None) {
+                    Ok(idx) => idx.with_chunk_config(chunk_size, chunk_overlap),
+                    Err(e) => {
+                        warn!("Failed to create memory index for watcher: {}", e);
+                        return;
+                    }
+                };
 
             // Debounce logic is harder with async loop, but let's simplify.
             // Just process events. Maybe add a small delay/buffer if needed.

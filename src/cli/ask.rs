@@ -7,9 +7,9 @@ use zier_alpha::config::Config;
 use zier_alpha::memory::MemoryManager;
 use zier_alpha::scripting::ScriptService;
 
+use serde_json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use serde_json;
 
 #[derive(Args)]
 pub struct AskArgs {
@@ -43,7 +43,7 @@ pub struct AskArgs {
 
 pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
     let config = Config::load()?;
-    
+
     let project_dir = if let Some(w) = args.workdir {
         PathBuf::from(shellexpand::tilde(&w).to_string()).canonicalize()?
     } else {
@@ -61,7 +61,14 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
     // Capture model for parent context before moving agent_config
     let parent_model_for_context = agent_config.model.clone();
 
-    let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Stateless, project_dir.clone()).await?;
+    let mut agent = Agent::new_with_project(
+        agent_config,
+        &config,
+        memory,
+        ContextStrategy::Stateless,
+        project_dir.clone(),
+    )
+    .await?;
 
     // Load extensions if enabled (BEFORE session creation)
     if let Some(ref hive_config) = config.extensions.hive {
@@ -90,7 +97,9 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                         } else {
                             // Check extensions/hive/main.js (dev structure relative to target/debug or root)
                             // If running from cargo run, cwd is root, so try relative path
-                            let p = std::env::current_dir().unwrap_or_default().join("extensions/hive/main.js");
+                            let p = std::env::current_dir()
+                                .unwrap_or_default()
+                                .join("extensions/hive/main.js");
                             if p.exists() {
                                 hive_path = Some(p);
                             }
@@ -100,47 +109,68 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
             }
 
             if let Some(path) = hive_path {
-                 tracing::info!("Loading Hive extension from: {}", path.display());
+                tracing::info!("Loading Hive extension from: {}", path.display());
 
-                 // Initialize ScriptService with extension policy
-                 let policy = crate::cli::common::make_extension_policy(&project_dir, &config.workspace_path());
-                 let service = ScriptService::new(
-                     policy,
-                     config.workspace_path(),
-                     project_dir.clone(),
-                     config.workdir.strategy.clone(),
-                     None,
-                     None
-                 );
+                // Initialize ScriptService with extension policy
+                let policy = crate::cli::common::make_extension_policy(
+                    &project_dir,
+                    &config.workspace_path(),
+                );
+                let service = ScriptService::new(
+                    policy,
+                    config.workspace_path(),
+                    project_dir.clone(),
+                    config.workdir.strategy.clone(),
+                    None,
+                    None,
+                );
 
-                 match service {
-                     Ok(svc) => {
-                         if let Err(e) = svc.load_script(path.to_str().unwrap()).await {
-                             tracing::error!("Failed to load Hive extension: {}", e);
-                         } else {
-                             // Register tools
-                             match svc.get_tools().await {
-                                 Ok(tools) => {
-                                     let mut current_tools = agent.tools().to_vec();
-                                     for tool_def in tools {
-                                         current_tools.push(Arc::new(ScriptTool::new(tool_def, svc.clone())));
-                                     }
-                                     agent.set_tools(current_tools);
-                                     tracing::info!("Hive extension loaded successfully");
+                match service {
+                    Ok(svc) => {
+                        if let Err(e) = svc.load_script(path.to_str().unwrap()).await {
+                            tracing::error!("Failed to load Hive extension: {}", e);
+                        } else {
+                            // Register tools
+                            match svc.get_tools().await {
+                                Ok(tools) => {
+                                    let mut current_tools = agent.tools().to_vec();
+                                    for tool_def in tools {
+                                        current_tools
+                                            .push(Arc::new(ScriptTool::new(tool_def, svc.clone())));
+                                    }
+                                    agent.set_tools(current_tools);
+                                    tracing::info!("Hive extension loaded successfully");
 
-                                     // Propagate parent context to Hive for child agent inheritance
-                                     let parent_model = parent_model_for_context.clone();
-                                     let parent_tools: Vec<String> = agent.tools().iter().map(|t| t.name().to_string()).collect();
-                                     if let Err(e) = svc.set_parent_context(Some(parent_model), Some(parent_tools), None).await {
-                                         tracing::warn!("Failed to set parent context on Hive: {}", e);
-                                     }
-                                 }
-                                 Err(e) => tracing::error!("Failed to get tools from Hive extension: {}", e),
-                             }
-                         }
-                     }
-                     Err(e) => tracing::error!("Failed to initialize ScriptService: {}", e),
-                 }
+                                    // Propagate parent context to Hive for child agent inheritance
+                                    let parent_model = parent_model_for_context.clone();
+                                    let parent_tools: Vec<String> = agent
+                                        .tools()
+                                        .iter()
+                                        .map(|t| t.name().to_string())
+                                        .collect();
+                                    if let Err(e) = svc
+                                        .set_parent_context(
+                                            Some(parent_model),
+                                            Some(parent_tools),
+                                            None,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            "Failed to set parent context on Hive: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                                Err(e) => tracing::error!(
+                                    "Failed to get tools from Hive extension: {}",
+                                    e
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => tracing::error!("Failed to initialize ScriptService: {}", e),
+                }
             } else {
                 tracing::warn!("Hive extension enabled but main.js not found");
             }
@@ -159,7 +189,10 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                 }
                 let filtered_count = filtered.len();
                 agent.set_tools(filtered);
-                tracing::info!("Child tool filtering applied: {} tools remaining", filtered_count);
+                tracing::info!(
+                    "Child tool filtering applied: {} tools remaining",
+                    filtered_count
+                );
             }
             Err(e) => {
                 tracing::warn!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);

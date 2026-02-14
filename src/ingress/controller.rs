@@ -1,13 +1,13 @@
-use crate::agent::{Agent, AgentConfig, ContextStrategy, ScriptTool, Session};
 use crate::agent::tools::registry::ToolRegistry;
 use crate::agent::DiskMonitor;
+use crate::agent::{Agent, AgentConfig, ContextStrategy, ScriptTool, Session};
 use crate::config::Config;
 use crate::ingress::{IngressMessage, TelegramClient, TrustLevel};
 use crate::memory::{ArtifactWriter, MemoryManager};
 use crate::prompts::PromptRegistry;
 use crate::scheduler::JobConfig;
-use crate::state::session_manager::GlobalSessionManager;
 use crate::scripting::ScriptService;
+use crate::state::session_manager::GlobalSessionManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -73,7 +73,8 @@ pub async fn ingress_loop(
         disk_monitor.clone(),
         (*script_tools).clone(),
         project_dir.clone(),
-    ).unwrap_or_else(|e| {
+    )
+    .unwrap_or_else(|e| {
         error!("Failed to build initial tools: {}", e);
         Vec::new()
     });
@@ -90,12 +91,14 @@ pub async fn ingress_loop(
         &config,
         (*memory).clone(),
         ContextStrategy::Stateless,
-        project_dir.clone()
-    ).await {
+        project_dir.clone(),
+    )
+    .await
+    {
         Ok(mut a) => {
             a.set_tools((*base_tools).clone());
             a
-        },
+        }
         Err(e) => {
             error!("Failed to create base agent: {}", e);
             return;
@@ -135,13 +138,14 @@ pub async fn ingress_loop(
             };
 
             // Get session
-            let session: Arc<RwLock<Session>> = match session_manager.get_or_create_session(&msg.source).await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("Failed to get session for {}: {}", msg.source, e);
-                    return;
-                }
-            };
+            let session: Arc<RwLock<Session>> =
+                match session_manager.get_or_create_session(&msg.source).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Failed to get session for {}: {}", msg.source, e);
+                        return;
+                    }
+                };
 
             // Fetch status lines (plugins might have updated)
             let status_lines = match script_service.get_status_lines().await {
@@ -161,11 +165,11 @@ pub async fn ingress_loop(
                     // Fetch fresh script tools to support dynamic reloading
                     let current_script_tools = match script_service.get_tools().await {
                         Ok(defs) => {
-                             let mut tools = Vec::new();
-                             for def in defs {
-                                 tools.push(ScriptTool::new(def, script_service.clone()));
-                             }
-                             tools
+                            let mut tools = Vec::new();
+                            for def in defs {
+                                tools.push(ScriptTool::new(def, script_service.clone()));
+                            }
+                            tools
                         }
                         Err(e) => {
                             error!("Failed to refresh script tools: {}", e);
@@ -222,7 +226,8 @@ pub async fn ingress_loop(
                             // Output handling
                             if msg.source.starts_with("telegram:") {
                                 if let Some(client) = &telegram_client {
-                                    if let Some(chat_id_str) = msg.source.strip_prefix("telegram:") {
+                                    if let Some(chat_id_str) = msg.source.strip_prefix("telegram:")
+                                    {
                                         if let Ok(chat_id) = chat_id_str.parse::<i64>() {
                                             if let Err(e) =
                                                 client.send_message(chat_id, &response).await
@@ -297,7 +302,12 @@ pub async fn ingress_loop(
                                 Ok(response) => {
                                     info!("Job response: {}", response);
                                     let _ = artifact_writer
-                                        .write(&response, &msg.source, "TrustedEvent", agent.model())
+                                        .write(
+                                            &response,
+                                            &msg.source,
+                                            "TrustedEvent",
+                                            agent.model(),
+                                        )
                                         .await;
                                 }
                                 Err(e) => error!("Job execution failed: {}", e),
@@ -339,12 +349,7 @@ pub async fn ingress_loop(
                             Ok(response) => {
                                 info!("Sanitizer (fallback) response: {}", response);
                                 let _ = artifact_writer
-                                    .write(
-                                        &response,
-                                        &msg.source,
-                                        "UntrustedEvent",
-                                        agent.model(),
-                                    )
+                                    .write(&response, &msg.source, "UntrustedEvent", agent.model())
                                     .await;
                             }
                             Err(e) => error!("Sanitizer execution failed: {}", e),

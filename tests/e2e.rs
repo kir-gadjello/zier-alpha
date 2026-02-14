@@ -1,12 +1,14 @@
-use zier_alpha::config::{Config, MemoryConfig, AgentConfig, ServerConfig, SandboxPolicy, WorkdirStrategy};
-use zier_alpha::ingress::{IngressBus, IngressMessage, TrustLevel};
+use std::sync::Arc;
+use std::time::Duration;
+use tempfile::TempDir;
+use zier_alpha::config::{
+    AgentConfig, Config, MemoryConfig, SandboxPolicy, ServerConfig, WorkdirStrategy,
+};
 use zier_alpha::ingress::controller::ingress_loop;
+use zier_alpha::ingress::{IngressBus, IngressMessage, TrustLevel};
 use zier_alpha::prompts::PromptRegistry;
 use zier_alpha::scheduler::JobConfig;
 use zier_alpha::scripting::ScriptService;
-use std::sync::Arc;
-use tempfile::TempDir;
-use std::time::Duration;
 
 #[tokio::test]
 async fn test_e2e_flow() {
@@ -52,17 +54,16 @@ async fn test_e2e_flow() {
         workspace_path.clone(),
         WorkdirStrategy::Overlay,
         None,
-        None
-    ).unwrap();
+        None,
+    )
+    .unwrap();
 
-    let jobs = vec![
-        JobConfig {
-            name: "test_job".to_string(),
-            schedule: "* * * * *".to_string(),
-            prompt_ref: "test_prompt".to_string(),
-            tool_ref: "".to_string(),
-        }
-    ];
+    let jobs = vec![JobConfig {
+        name: "test_job".to_string(),
+        schedule: "* * * * *".to_string(),
+        prompt_ref: "test_prompt".to_string(),
+        tool_ref: "".to_string(),
+    }];
 
     // Spawn Ingress Loop
     let receiver = bus.receiver();
@@ -94,15 +95,24 @@ async fn test_e2e_flow() {
             prompts_clone,
             script_service,
             jobs,
-        ).await;
+        )
+        .await;
     });
 
     // 2. Send Untrusted Event (Sanitizer)
-    let msg = IngressMessage::new("test".to_string(), "hello".to_string(), TrustLevel::UntrustedEvent);
+    let msg = IngressMessage::new(
+        "test".to_string(),
+        "hello".to_string(),
+        TrustLevel::UntrustedEvent,
+    );
     bus.push(msg).await.unwrap();
 
     // 3. Send Owner Command
-    let msg = IngressMessage::new("test".to_string(), "run command".to_string(), TrustLevel::OwnerCommand);
+    let msg = IngressMessage::new(
+        "test".to_string(),
+        "run command".to_string(),
+        TrustLevel::OwnerCommand,
+    );
     bus.push(msg).await.unwrap();
 
     // Wait a bit

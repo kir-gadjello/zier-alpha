@@ -1,14 +1,14 @@
+use crate::agent::ImageAttachment;
+use crate::ingress::{IngressMessage, TelegramClient, TelegramUpdate, TrustLevel};
+use crate::server::http::AppState;
 use axum::{
-    extract::{State, Json},
-    http::{StatusCode, HeaderMap},
+    extract::{Json, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use base64::{engine::general_purpose, Engine as _};
 use std::sync::Arc;
 use tracing::{info, warn};
-use crate::agent::ImageAttachment;
-use crate::ingress::{IngressMessage, TelegramClient, TrustLevel, TelegramUpdate};
-use crate::server::http::AppState;
-use base64::{engine::general_purpose, Engine as _};
 
 pub async fn webhook_handler(
     headers: HeaderMap,
@@ -43,28 +43,26 @@ pub async fn webhook_handler(
                 if let Some(token) = &state.config.server.telegram_bot_token {
                     let client = TelegramClient::new(token.clone());
                     match client.get_file_download_url(&largest.file_id).await {
-                        Ok(url) => {
-                            match reqwest::get(&url).await {
-                                Ok(resp) => match resp.bytes().await {
-                                    Ok(bytes) => {
-                                        let b64 = general_purpose::STANDARD.encode(&bytes);
-                                        let img = ImageAttachment {
-                                            data: b64,
-                                            media_type: "image/jpeg".to_string(),
-                                        };
-                                        (Some("User sent an image".to_string()), vec![img])
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to download image bytes: {}", e);
-                                        (None, Vec::new())
-                                    }
-                                },
+                        Ok(url) => match reqwest::get(&url).await {
+                            Ok(resp) => match resp.bytes().await {
+                                Ok(bytes) => {
+                                    let b64 = general_purpose::STANDARD.encode(&bytes);
+                                    let img = ImageAttachment {
+                                        data: b64,
+                                        media_type: "image/jpeg".to_string(),
+                                    };
+                                    (Some("User sent an image".to_string()), vec![img])
+                                }
                                 Err(e) => {
-                                    warn!("Failed to download image: {}", e);
+                                    warn!("Failed to download image bytes: {}", e);
                                     (None, Vec::new())
                                 }
+                            },
+                            Err(e) => {
+                                warn!("Failed to download image: {}", e);
+                                (None, Vec::new())
                             }
-                        }
+                        },
                         Err(e) => {
                             warn!("Failed to get file url: {}", e);
                             (None, Vec::new())

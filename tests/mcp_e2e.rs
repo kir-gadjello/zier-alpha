@@ -1,8 +1,8 @@
-use zier_alpha::config::{SandboxPolicy, WorkdirStrategy};
-use zier_alpha::scripting::ScriptService;
-use tempfile::NamedTempFile;
 use std::io::Write;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
+use zier_alpha::config::{SandboxPolicy, WorkdirStrategy};
+use zier_alpha::scripting::ScriptService;
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg_attr(target_os = "macos", ignore)]
@@ -38,12 +38,14 @@ async fn test_mcp_e2e() {
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
         None,
-        None
-    ).expect("Failed to create script service");
+        None,
+    )
+    .expect("Failed to create script service");
 
     // 4. Create JS script to drive MCP
     // We construct the config object in JS directly for the test
-    let script_content = format!(r#"
+    let script_content = format!(
+        r#"
     try {{
         const config = {{
             servers: [
@@ -110,27 +112,41 @@ async fn test_mcp_e2e() {
         // We don't throw here to let load_script return successfully,
         // but the failure will be evident if tools aren't registered.
     }}
-    "#, mock_server_path.to_str().unwrap().replace("\\", "\\\\"));
+    "#,
+        mock_server_path.to_str().unwrap().replace("\\", "\\\\")
+    );
 
     let mut script_file = NamedTempFile::new().unwrap();
     script_file.write_all(script_content.as_bytes()).unwrap();
     let script_path = script_file.path().to_str().unwrap().to_string();
 
-    service.load_script(&script_path).await.expect("Failed to load script");
+    service
+        .load_script(&script_path)
+        .await
+        .expect("Failed to load script");
 
     // 5. Test List Tools
-    let result_list = service.execute_tool("test_list", "{}").await.expect("Failed to list tools");
+    let result_list = service
+        .execute_tool("test_list", "{}")
+        .await
+        .expect("Failed to list tools");
     println!("List Result: {}", result_list);
     assert!(result_list.contains("echo"));
     assert!(result_list.contains("add"));
 
     // 6. Test Call Echo
-    let result_echo = service.execute_tool("test_call_echo", r#"{"text": "hello mcp"}"#).await.expect("Failed to call echo");
+    let result_echo = service
+        .execute_tool("test_call_echo", r#"{"text": "hello mcp"}"#)
+        .await
+        .expect("Failed to call echo");
     println!("Echo Result: {}", result_echo);
     assert!(result_echo.contains("hello mcp"));
 
     // 7. Test Call Add
-    let result_add = service.execute_tool("test_call_add", r#"{"a": 10, "b": 32}"#).await.expect("Failed to call add");
+    let result_add = service
+        .execute_tool("test_call_add", r#"{"a": 10, "b": 32}"#)
+        .await
+        .expect("Failed to call add");
     println!("Add Result: {}", result_add);
     assert!(result_add.contains("42"));
 }
@@ -149,8 +165,9 @@ async fn test_simple_ping_no_mcp() {
         WorkdirStrategy::Overlay,
         None,
         None,
-        None
-    ).expect("Failed to create runtime");
+        None,
+    )
+    .expect("Failed to create runtime");
 
     // Register simple tool
     let script = r#"

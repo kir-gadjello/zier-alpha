@@ -1,8 +1,8 @@
 use crate::scripting::ScriptService;
 use anyhow::Result;
+use glob::glob;
 use std::path::Path;
 use tracing::{info, warn};
-use glob::glob;
 
 pub struct ScriptLoader {
     service: ScriptService,
@@ -19,7 +19,9 @@ impl ScriptLoader {
         }
 
         let pattern = dir.join("*.js");
-        let pattern_str = pattern.to_str().ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
+        let pattern_str = pattern
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
 
         for entry in glob(pattern_str)? {
             match entry {

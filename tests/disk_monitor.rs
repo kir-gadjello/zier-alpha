@@ -1,7 +1,7 @@
-use zier_alpha::config::DiskConfig;
-use zier_alpha::agent::disk_monitor::DiskMonitor;
-use tempfile::TempDir;
 use std::time::Duration;
+use tempfile::TempDir;
+use zier_alpha::agent::disk_monitor::DiskMonitor;
+use zier_alpha::config::DiskConfig;
 
 #[tokio::test]
 async fn test_disk_monitor() {

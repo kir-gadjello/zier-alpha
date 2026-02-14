@@ -1,8 +1,8 @@
+use crate::agent::llm_error::LlmError;
 use crate::agent::providers::{
     create_provider, AnthropicProvider, ClaudeCliProvider, LLMProvider, LLMResponse, Message,
     OllamaProvider, OpenAIProvider, StreamResult, ToolSchema,
 };
-use crate::agent::llm_error::LlmError;
 use crate::config::{
     models::{resolve_model_config, ModelConfig},
     Config,
@@ -72,18 +72,18 @@ impl SmartClient {
 
         // Extract status code from LlmError if available
         let status_code = if let Some(llm_err) = error.downcast_ref::<LlmError>() {
-             if let Some(code) = llm_err.status_code() {
-                 code.to_string()
-             } else {
-                 "500".to_string()
-             }
+            if let Some(code) = llm_err.status_code() {
+                code.to_string()
+            } else {
+                "500".to_string()
+            }
         } else {
             // Default to 500 if unknown, or try parsing string (legacy behavior)
             err_str
-            .split_whitespace()
-            .find(|w| w.chars().all(char::is_numeric) && w.len() == 3)
-            .unwrap_or("500")
-            .to_string()
+                .split_whitespace()
+                .find(|w| w.chars().all(char::is_numeric) && w.len() == 3)
+                .unwrap_or("500")
+                .to_string()
         };
 
         // Check allow list
@@ -121,9 +121,7 @@ impl SmartClient {
         };
 
         let get_url = |override_url: &Option<String>, default: &String| -> String {
-            override_url
-                .clone()
-                .unwrap_or_else(|| default.clone())
+            override_url.clone().unwrap_or_else(|| default.clone())
         };
 
         match provider_name.as_str() {
@@ -173,9 +171,7 @@ impl SmartClient {
                 } else {
                     "claude"
                 };
-                Ok(Box::new(ClaudeCliProvider::new(
-                    cmd, &model_id, workspace,
-                )?))
+                Ok(Box::new(ClaudeCliProvider::new(cmd, &model_id, workspace)?))
             }
             _ => {
                 // Fallback to legacy creation if simple string
@@ -353,8 +349,6 @@ fn parse_provider_model(s: &str) -> (String, String) {
 fn detect_tokenizer(model: &str) -> String {
     if model.contains("gpt-4o") || model.contains("o1") {
         "o200k_base".to_string()
-    } else if model.contains("gpt-4") || model.contains("gpt-3.5") || model.contains("claude") {
-        "cl100k_base".to_string()
     } else {
         "cl100k_base".to_string()
     }

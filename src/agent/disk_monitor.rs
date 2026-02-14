@@ -1,10 +1,10 @@
+use crate::config::DiskConfig;
+use fs2;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use std::path::Path;
-use fs2;
-use tracing::{info, warn, error};
-use crate::config::DiskConfig;
+use tracing::{error, info, warn};
 
 #[derive(Clone)]
 pub struct DiskMonitor {
@@ -46,9 +46,28 @@ impl DiskMonitor {
                         while let Ok(Some(entry)) = entries.next_entry().await {
                             if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
                                 let sessions_dir = entry.path().join("sessions");
-                                match self.cleanup_directory(&sessions_dir, "jsonl", self.config.session_retention_days).await {
-                                    Ok(count) => if count > 0 { report.push(format!("Deleted {} old sessions for agent {:?}", count, entry.file_name())); },
-                                    Err(e) => error!("Failed to cleanup sessions for {:?}: {}", entry.file_name(), e),
+                                match self
+                                    .cleanup_directory(
+                                        &sessions_dir,
+                                        "jsonl",
+                                        self.config.session_retention_days,
+                                    )
+                                    .await
+                                {
+                                    Ok(count) => {
+                                        if count > 0 {
+                                            report.push(format!(
+                                                "Deleted {} old sessions for agent {:?}",
+                                                count,
+                                                entry.file_name()
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => error!(
+                                        "Failed to cleanup sessions for {:?}: {}",
+                                        entry.file_name(),
+                                        e
+                                    ),
                                 }
                             }
                         }
@@ -69,10 +88,18 @@ impl DiskMonitor {
 
                 if let Ok(mut entries) = tokio::fs::read_dir(&logs_dir).await {
                     while let Ok(Some(entry)) = entries.next_entry().await {
-                        if entry.path().extension().map(|e| e == "log").unwrap_or(false) {
+                        if entry
+                            .path()
+                            .extension()
+                            .map(|e| e == "log")
+                            .unwrap_or(false)
+                        {
                             if let Ok(meta) = entry.metadata().await {
                                 total_size += meta.len();
-                                log_files.push((entry.path(), meta.modified().unwrap_or(SystemTime::now())));
+                                log_files.push((
+                                    entry.path(),
+                                    meta.modified().unwrap_or(SystemTime::now()),
+                                ));
                             }
                         }
                     }
@@ -98,7 +125,10 @@ impl DiskMonitor {
                         }
                     }
                     if deleted_count > 0 {
-                        report.push(format!("Deleted {} log files to enforce size limit", deleted_count));
+                        report.push(format!(
+                            "Deleted {} log files to enforce size limit",
+                            deleted_count
+                        ));
                     }
                 }
             }
@@ -111,7 +141,12 @@ impl DiskMonitor {
         }
     }
 
-    async fn cleanup_directory(&self, dir: &Path, extension: &str, retention_days: u32) -> anyhow::Result<usize> {
+    async fn cleanup_directory(
+        &self,
+        dir: &Path,
+        extension: &str,
+        retention_days: u32,
+    ) -> anyhow::Result<usize> {
         if !dir.exists() {
             return Ok(0);
         }
@@ -144,7 +179,8 @@ impl DiskMonitor {
 
     fn start_monitoring(monitor: &Arc<Self>) {
         let weak_monitor = Arc::downgrade(monitor);
-        let interval_duration = parse_duration(&monitor.config.monitor_interval).unwrap_or(Duration::from_secs(60));
+        let interval_duration =
+            parse_duration(&monitor.config.monitor_interval).unwrap_or(Duration::from_secs(60));
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(interval_duration);
@@ -168,29 +204,33 @@ impl DiskMonitor {
         };
 
         match fs2::available_space(&path) {
-            Ok(available_bytes) => {
-                match fs2::total_space(&path) {
-                    Ok(total_bytes) => {
-                        let available_percent = (available_bytes as f64 / total_bytes as f64) * 100.0;
-                        let threshold = self.config.min_free_percent as f64;
+            Ok(available_bytes) => match fs2::total_space(&path) {
+                Ok(total_bytes) => {
+                    let available_percent = (available_bytes as f64 / total_bytes as f64) * 100.0;
+                    let threshold = self.config.min_free_percent as f64;
 
-                        let currently_degraded = self.is_degraded();
+                    let currently_degraded = self.is_degraded();
 
-                        if available_percent < threshold {
-                            if !currently_degraded {
-                                warn!("Disk space low ({:.1}% free). Entering degraded mode.", available_percent);
-                                self.degraded_mode.store(true, Ordering::Relaxed);
-                            }
-                        } else {
-                            if currently_degraded {
-                                info!("Disk space recovered ({:.1}% free). Exiting degraded mode.", available_percent);
-                                self.degraded_mode.store(false, Ordering::Relaxed);
-                            }
+                    if available_percent < threshold {
+                        if !currently_degraded {
+                            warn!(
+                                "Disk space low ({:.1}% free). Entering degraded mode.",
+                                available_percent
+                            );
+                            self.degraded_mode.store(true, Ordering::Relaxed);
+                        }
+                    } else {
+                        if currently_degraded {
+                            info!(
+                                "Disk space recovered ({:.1}% free). Exiting degraded mode.",
+                                available_percent
+                            );
+                            self.degraded_mode.store(false, Ordering::Relaxed);
                         }
                     }
-                    Err(e) => warn!("Failed to get total disk space: {}", e),
                 }
-            }
+                Err(e) => warn!("Failed to get total disk space: {}", e),
+            },
             Err(e) => warn!("Failed to check disk space: {}", e),
         }
     }

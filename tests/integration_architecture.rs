@@ -1,11 +1,11 @@
-use zier_alpha::config::{Config, MemoryConfig, AgentConfig, ServerConfig};
-use zier_alpha::ingress::{IngressBus, IngressMessage, TrustLevel};
-use zier_alpha::ingress::controller::ingress_loop;
-use zier_alpha::prompts::PromptRegistry;
-use std::sync::Arc;
-use tempfile::TempDir;
-use std::time::Duration;
 use std::fs;
+use std::sync::Arc;
+use std::time::Duration;
+use tempfile::TempDir;
+use zier_alpha::config::{AgentConfig, Config, MemoryConfig, ServerConfig};
+use zier_alpha::ingress::controller::ingress_loop;
+use zier_alpha::ingress::{IngressBus, IngressMessage, TrustLevel};
+use zier_alpha::prompts::PromptRegistry;
 
 #[tokio::test]
 async fn test_architecture_concurrency() {
@@ -49,7 +49,8 @@ async fn test_architecture_concurrency() {
         zier_alpha::config::WorkdirStrategy::Overlay,
         Some(bus.clone()),
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     tokio::spawn(async move {
         ingress_loop(
@@ -59,7 +60,8 @@ async fn test_architecture_concurrency() {
             prompts_clone,
             script_service,
             vec![],
-        ).await;
+        )
+        .await;
     });
 
     // 2. Send multiple concurrent messages
@@ -75,7 +77,8 @@ async fn test_architecture_concurrency() {
 
     // 3. Wait for processing
     let mut success = false;
-    for _ in 0..50 { // Wait up to 5s
+    for _ in 0..50 {
+        // Wait up to 5s
         tokio::time::sleep(Duration::from_millis(100)).await;
         if artifacts_path.exists() {
             if let Ok(entries) = fs::read_dir(&artifacts_path) {

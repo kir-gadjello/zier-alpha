@@ -9,9 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::PathBuf;
-use uuid::Uuid;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use uuid::Uuid;
 
 use super::providers::{LLMProvider, Message, Role, ToolCall, Usage};
 use tiktoken_rs::cl100k_base;
@@ -157,7 +157,9 @@ impl Session {
         Self {
             id,
             created_at: Utc::now(),
-            cwd: std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| ".".to_string()),
+            cwd: std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string()),
             messages: Vec::new(),
             system_context: None,
             token_count: 0,
@@ -180,12 +182,16 @@ impl Session {
         // Also keep Memory Context if present (usually second?)
         // Simple heuristic: keep system messages, then keep last N non-system messages.
 
-        let system_messages: Vec<_> = self.messages.iter()
+        let system_messages: Vec<_> = self
+            .messages
+            .iter()
             .filter(|m| m.message.role == Role::System)
             .cloned()
             .collect();
 
-        let mut other_messages: Vec<_> = self.messages.iter()
+        let mut other_messages: Vec<_> = self
+            .messages
+            .iter()
             .filter(|m| m.message.role != Role::System)
             .cloned()
             .collect();
@@ -412,7 +418,8 @@ impl Session {
             "compactionCount": self.compaction_count,
             "memoryFlushCompactionCount": self.memory_flush_compaction_count
         });
-        file.write_all(serde_json::to_string(&header)?.as_bytes()).await?;
+        file.write_all(serde_json::to_string(&header)?.as_bytes())
+            .await?;
         file.write_all(b"\n").await?;
 
         // Write system context as a system message
@@ -424,14 +431,16 @@ impl Session {
                 tool_call_id: None,
                 images: Vec::new(),
             }));
-            file.write_all(serde_json::to_string(&system_msg)?.as_bytes()).await?;
+            file.write_all(serde_json::to_string(&system_msg)?.as_bytes())
+                .await?;
             file.write_all(b"\n").await?;
         }
 
         // Write messages in Pi format
         for sm in &self.messages {
             let entry = self.format_message_entry(sm);
-            file.write_all(serde_json::to_string(&entry)?.as_bytes()).await?;
+            file.write_all(serde_json::to_string(&entry)?.as_bytes())
+                .await?;
             file.write_all(b"\n").await?;
         }
 
@@ -668,7 +677,10 @@ impl Session {
             usage,
             stop_reason: msg["stopReason"].as_str().map(|s| s.to_string()),
             timestamp: msg["timestamp"].as_u64().unwrap_or(0),
-            model_config_name: msg.get("modelConfigName").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            model_config_name: msg
+                .get("modelConfigName")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             latency_ms: msg.get("latencyMs").and_then(|v| v.as_u64()),
         })
     }
@@ -873,7 +885,10 @@ pub async fn search_sessions(query: &str) -> Result<Vec<SessionSearchResult>> {
     search_sessions_for_agent(DEFAULT_AGENT_ID, query).await
 }
 
-pub async fn search_sessions_for_agent(agent_id: &str, query: &str) -> Result<Vec<SessionSearchResult>> {
+pub async fn search_sessions_for_agent(
+    agent_id: &str,
+    query: &str,
+) -> Result<Vec<SessionSearchResult>> {
     let sessions_dir = get_sessions_dir_for_agent(agent_id)?;
 
     if !sessions_dir.exists() {
@@ -896,7 +911,8 @@ pub async fn search_sessions_for_agent(agent_id: &str, query: &str) -> Result<Ve
                     if match_count > 0 {
                         let preview = extract_match_preview(&content, &query_lower, 100);
 
-                        let created_at = fs::metadata(&path).await
+                        let created_at = fs::metadata(&path)
+                            .await
                             .and_then(|m| m.created())
                             .map(DateTime::<Utc>::from)
                             .unwrap_or_else(|_| Utc::now());

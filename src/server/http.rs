@@ -5,9 +5,7 @@
 
 use anyhow::Result;
 use axum::{
-    extract::{
-        Path, Query, State,
-    },
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{
         sse::{Event, Sse},
@@ -28,7 +26,7 @@ use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{debug, info};
 
-use crate::agent::{extract_tool_detail, Agent, AgentConfig, StreamEvent, LlmError};
+use crate::agent::{extract_tool_detail, Agent, AgentConfig, LlmError, StreamEvent};
 use crate::concurrency::{TurnGate, WorkspaceLock};
 use crate::config::Config;
 use crate::heartbeat::{get_last_heartbeat_event, HeartbeatStatus};
@@ -172,8 +170,14 @@ impl Server {
             .route("/api/saved-sessions", get(list_saved_sessions))
             .route("/api/saved-sessions/{session_id}", get(get_saved_session))
             .route("/api/logs/daemon", get(get_daemon_logs))
-            .route("/webhooks/telegram", post(crate::server::telegram::webhook_handler))
-            .route("/v1/chat/completions", post(crate::server::openai::chat_completions))
+            .route(
+                "/webhooks/telegram",
+                post(crate::server::telegram::webhook_handler),
+            )
+            .route(
+                "/v1/chat/completions",
+                post(crate::server::openai::chat_completions),
+            )
             .route("/v1/models", get(crate::server::openai::list_models))
             .layer(cors.clone())
             .with_state(state.clone());
@@ -184,25 +188,28 @@ impl Server {
         info!("Starting HTTP server on http://{}", addr);
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        
+
         // Start OpenAI proxy if enabled
         if self.config.server.openai_proxy.enabled {
             let openai_addr: SocketAddr = format!(
                 "{}:{}",
-                self.config.server.openai_proxy.bind,
-                self.config.server.openai_proxy.port
-            ).parse()?;
-            
+                self.config.server.openai_proxy.bind, self.config.server.openai_proxy.port
+            )
+            .parse()?;
+
             let openai_state = state.clone();
             let openai_cors = cors.clone();
-            
+
             tokio::spawn(async move {
                 let openai_app = Router::new()
-                    .route("/v1/chat/completions", post(crate::server::openai::chat_completions))
+                    .route(
+                        "/v1/chat/completions",
+                        post(crate::server::openai::chat_completions),
+                    )
                     .route("/v1/models", get(crate::server::openai::list_models))
                     .layer(openai_cors)
                     .with_state(openai_state);
-                
+
                 info!("Starting OpenAI-compatible proxy on http://{}", openai_addr);
                 if let Ok(listener) = tokio::net::TcpListener::bind(openai_addr).await {
                     if let Err(e) = axum::serve(listener, openai_app).await {
@@ -260,7 +267,13 @@ async fn load_persisted_sessions(state: &Arc<AppState>) -> Result<(), anyhow::Er
             reserve_tokens: state.config.agent.reserve_tokens,
         };
 
-        let mut agent = Agent::new(agent_config, &state.config, state.memory.clone(), crate::agent::ContextStrategy::Full).await?;
+        let mut agent = Agent::new(
+            agent_config,
+            &state.config,
+            state.memory.clone(),
+            crate::agent::ContextStrategy::Full,
+        )
+        .await?;
 
         // Try to resume the session
         if agent.resume_session(&session_info.id).await.is_ok() {
@@ -346,9 +359,14 @@ async fn get_or_create_session(
         reserve_tokens: state.config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new(agent_config, &state.config, state.memory.clone(), crate::agent::ContextStrategy::Full)
-        .await
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut agent = Agent::new(
+        agent_config,
+        &state.config,
+        state.memory.clone(),
+        crate::agent::ContextStrategy::Full,
+    )
+    .await
+    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     agent
         .new_session()
@@ -735,7 +753,8 @@ async fn chat(State(state): State<Arc<AppState>>, Json(request): Json<ChatReques
         let entry = match sessions.get_mut(&session_id) {
             Some(e) => e,
             None => {
-                return AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response()
+                return AppError(StatusCode::NOT_FOUND, "Session not found".to_string())
+                    .into_response()
             }
         };
 
@@ -777,7 +796,11 @@ async fn approve_tool(
         // If rejected, maybe we should tell the agent?
         // For now, we just return error or do nothing?
         // TODO: Implement rejection flow (tell agent user denied)
-        return AppError(StatusCode::BAD_REQUEST, "Rejection not implemented".to_string()).into_response();
+        return AppError(
+            StatusCode::BAD_REQUEST,
+            "Rejection not implemented".to_string(),
+        )
+        .into_response();
     }
 
     // Acquire locks similar to chat
@@ -786,15 +809,30 @@ async fn approve_tool(
     let ws_lock_path = state.workspace_lock.clone();
     let ws_guard = match tokio::task::spawn_blocking(move || ws_lock_path.acquire()).await {
         Ok(Ok(guard)) => guard,
-        Ok(Err(e)) => return AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("Lock error: {}", e)).into_response(),
-        Err(e) => return AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("Task error: {}", e)).into_response(),
+        Ok(Err(e)) => {
+            return AppError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Lock error: {}", e),
+            )
+            .into_response()
+        }
+        Err(e) => {
+            return AppError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Task error: {}", e),
+            )
+            .into_response()
+        }
     };
 
     let agent = {
         let mut sessions = state.sessions.lock().await;
         let entry = match sessions.get_mut(&request.session_id) {
             Some(e) => e,
-            None => return AppError(StatusCode::NOT_FOUND, "Session not found".to_string()).into_response(),
+            None => {
+                return AppError(StatusCode::NOT_FOUND, "Session not found".to_string())
+                    .into_response()
+            }
         };
         entry.last_accessed = Instant::now();
         entry.agent.clone()
@@ -863,7 +901,8 @@ async fn handle_chat_result(
                                 arguments: call.arguments.clone(),
                             }),
                         }),
-                    ).into_response();
+                    )
+                        .into_response();
                 }
             }
             // Other errors
@@ -1445,4 +1484,3 @@ async fn get_daemon_logs(Query(query): Query<LogsQuery>) -> Response {
     })
     .into_response()
 }
-

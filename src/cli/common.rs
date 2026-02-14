@@ -1,12 +1,9 @@
-use zier_alpha::config::SandboxPolicy;
 use std::path::PathBuf;
+use zier_alpha::config::SandboxPolicy;
 
 /// Construct a SandboxPolicy for extension/script execution.
 /// This policy is used by commands that load and run Deno-based extensions (e.g., Hive).
-pub fn make_extension_policy(
-    project_dir: &PathBuf,
-    workspace: &PathBuf,
-) -> SandboxPolicy {
+pub fn make_extension_policy(project_dir: &PathBuf, workspace: &PathBuf) -> SandboxPolicy {
     let mut policy = SandboxPolicy::default();
 
     // Extensions typically need to read environment variables (e.g., HOME, ZIER_*)

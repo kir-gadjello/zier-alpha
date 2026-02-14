@@ -2,9 +2,9 @@ use crate::agent::Session;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
-use std::time::Duration;
 
 #[derive(Clone)]
 pub struct GlobalSessionManager {

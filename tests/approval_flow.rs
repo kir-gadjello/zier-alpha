@@ -1,19 +1,21 @@
+use async_trait::async_trait;
+use std::sync::Arc;
+use tempfile::TempDir;
 use zier_alpha::agent::{Agent, AgentConfig, ContextStrategy, Tool, ToolSchema};
 use zier_alpha::config::Config;
 use zier_alpha::memory::MemoryManager;
-use tempfile::TempDir;
-use std::sync::Arc;
-use async_trait::async_trait;
 
 struct MockTool;
 #[async_trait]
 impl Tool for MockTool {
-    fn name(&self) -> &str { "test_write" }
+    fn name(&self) -> &str {
+        "test_write"
+    }
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "test_write".into(),
             description: "Mock tool".into(),
-            parameters: serde_json::json!({})
+            parameters: serde_json::json!({}),
         }
     }
     async fn execute(&self, _args: &str) -> anyhow::Result<String> {
@@ -34,7 +36,8 @@ async fn test_approval_flow_non_streaming() {
     config.tools.require_approval = vec!["test_write".to_string()];
     config.tools.allowed_builtin = vec!["*".to_string()];
 
-    let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), "test-agent").unwrap();
+    let memory =
+        MemoryManager::new_with_full_config(&config.memory, Some(&config), "test-agent").unwrap();
 
     let agent_config = AgentConfig {
         model: "mock/test".to_string(),
@@ -42,7 +45,9 @@ async fn test_approval_flow_non_streaming() {
         reserve_tokens: 1000,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full).await.unwrap();
+    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full)
+        .await
+        .unwrap();
 
     // Add MockTool
     let mut tools = agent.tools().to_vec();
@@ -104,9 +109,12 @@ async fn test_approval_flow_non_streaming() {
 
                         // Verify tool output is in session history
                         let messages = agent.session_messages().await;
-                        let tool_msg = messages.iter().find(|m| m.role == zier_alpha::agent::Role::Tool).expect("Tool message missing");
+                        let tool_msg = messages
+                            .iter()
+                            .find(|m| m.role == zier_alpha::agent::Role::Tool)
+                            .expect("Tool message missing");
                         assert!(tool_msg.content.contains("Tool execution verified"));
-                    },
+                    }
                     _ => panic!("Wrong error type: {:?}", err),
                 }
             } else {

@@ -144,7 +144,11 @@ pub async fn chat_completions(
     headers: axum::http::HeaderMap,
     Json(request): Json<OpenAIRequest>,
 ) -> Response {
-    let mut message = request.messages.last().map(|m| m.content.clone()).unwrap_or_default();
+    let mut message = request
+        .messages
+        .last()
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
     let mut trace_enabled = false;
 
     if message.starts_with("/v ") || message == "/v" {
@@ -162,7 +166,14 @@ pub async fn chat_completions(
     } else if let Some(auth_val) = headers.get(header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_val.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                format!("openai-{}", token.chars().filter(|c: &char| c.is_alphanumeric()).take(20).collect::<String>())
+                format!(
+                    "openai-{}",
+                    token
+                        .chars()
+                        .filter(|c: &char| c.is_alphanumeric())
+                        .take(20)
+                        .collect::<String>()
+                )
             } else {
                 "openai-proxy".to_string()
             }
@@ -185,7 +196,14 @@ pub async fn chat_completions(
                 reserve_tokens: state.config.agent.reserve_tokens,
             };
 
-            match Agent::new(agent_config, &state.config, state.memory.clone(), ContextStrategy::Full).await {
+            match Agent::new(
+                agent_config,
+                &state.config,
+                state.memory.clone(),
+                ContextStrategy::Full,
+            )
+            .await
+            {
                 Ok(mut agent) => {
                     if let Err(e) = agent.new_session().await {
                         return openai_error(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -231,25 +249,44 @@ async fn handle_non_stream(
     };
 
     let mut agent_lock = agent.lock().await;
-    
+
     {
-        let chat_res = agent_lock.chat_stream_with_tools(&message, Vec::new()).await;
+        let chat_res = agent_lock
+            .chat_stream_with_tools(&message, Vec::new())
+            .await;
         match chat_res {
             Ok(event_stream) => {
-                let mut pinned_stream: Pin<Box<dyn futures::Stream<Item = anyhow::Result<StreamEvent>> + Send>> = Box::pin(event_stream);
+                let mut pinned_stream: Pin<
+                    Box<dyn futures::Stream<Item = anyhow::Result<StreamEvent>> + Send>,
+                > = Box::pin(event_stream);
                 while let Some(event) = pinned_stream.next().await {
                     match event {
                         Ok(StreamEvent::Content(content)) => {
                             final_content.push_str(&content);
                         }
-                        Ok(StreamEvent::ToolCallStart { name, id: _, arguments }) => {
+                        Ok(StreamEvent::ToolCallStart {
+                            name,
+                            id: _,
+                            arguments,
+                        }) => {
                             let detail = extract_tool_detail(&name, &arguments).unwrap_or_default();
                             tool_traces.push(format!("🛠️ {}: {}", name, detail));
                         }
-                        Ok(StreamEvent::ToolCallEnd { name: _, id: _, output }) => {
+                        Ok(StreamEvent::ToolCallEnd {
+                            name: _,
+                            id: _,
+                            output,
+                        }) => {
                             if let Some(trace) = tool_traces.last_mut() {
                                 let status = if output.len() > 50 {
-                                    format!("{}...", output.chars().take(47).collect::<String>().replace('\n', " "))
+                                    format!(
+                                        "{}...",
+                                        output
+                                            .chars()
+                                            .take(47)
+                                            .collect::<String>()
+                                            .replace('\n', " ")
+                                    )
                                 } else {
                                     output.replace('\n', " ")
                                 };
@@ -289,14 +326,18 @@ async fn handle_non_stream(
                 response_text.push_str(&format!("│ {}\n", trace));
             }
         }
-        response_text.push_str("└──────────────────────────────────────────────────────────────\n\n");
+        response_text
+            .push_str("└──────────────────────────────────────────────────────────────\n\n");
     }
     response_text.push_str(&final_content);
 
     let res = OpenAIResponse {
         id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
         object: "chat.completion".to_string(),
-        created: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+        created: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
         model,
         choices: vec![OpenAIChoice {
             index: 0,
@@ -357,7 +398,7 @@ async fn handle_stream(
 
         {
             let event_stream_res = agent_lock.chat_stream_with_tools(&message, Vec::new()).await;
-            
+
             match event_stream_res {
                 Ok(event_stream) => {
                     let mut pinned_stream: Pin<Box<dyn futures::Stream<Item = anyhow::Result<StreamEvent>> + Send>> = Box::pin(event_stream);
@@ -493,7 +534,7 @@ async fn handle_stream(
                 }
             }
         }
-        
+
         let usage = agent_lock.usage().clone();
         drop(agent_lock);
 

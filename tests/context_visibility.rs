@@ -3,11 +3,11 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+use std::sync::Arc;
 use zier_alpha::agent::{Agent, AgentConfig, ContextStrategy, ScriptTool};
 use zier_alpha::config::{Config, SandboxPolicy};
 use zier_alpha::memory::MemoryManager;
 use zier_alpha::scripting::ScriptService;
-use std::sync::Arc;
 
 #[tokio::test]
 async fn test_context_visibility() -> Result<()> {
@@ -37,7 +37,10 @@ async fn test_context_visibility() -> Result<()> {
     if source_ext.exists() {
         copy_dir_recursive(&source_ext, &ext_dst)?;
     } else {
-        eprintln!("Hive extension source not found at {}", source_ext.display());
+        eprintln!(
+            "Hive extension source not found at {}",
+            source_ext.display()
+        );
         // Skip test if extension not present
         return Ok(());
     }
@@ -118,19 +121,21 @@ workspace = "{}"
             if hive_path.exists() {
                 eprintln!("TEST: loading Hive script from {:?}", hive_path);
                 // Build a permissive policy for the test
-                let mut policy = SandboxPolicy::default();
-                policy.allow_env = true;
                 let temp_dir = std::env::temp_dir().to_string_lossy().to_string();
-                policy.allow_read.push(temp_dir.clone());
-                policy.allow_write.push(temp_dir);
-                policy
-                    .allow_read
-                    .push(workspace_dir.to_string_lossy().to_string());
-                policy
-                    .allow_write
-                    .push(workspace_dir.to_string_lossy().to_string());
-                policy.allow_read.push(root.to_string_lossy().to_string());
-                policy.allow_write.push(root.to_string_lossy().to_string());
+                let policy = SandboxPolicy {
+                    allow_env: true,
+                    allow_read: vec![
+                        temp_dir.clone(),
+                        workspace_dir.to_string_lossy().to_string(),
+                        root.to_string_lossy().to_string(),
+                    ],
+                    allow_write: vec![
+                        temp_dir,
+                        workspace_dir.to_string_lossy().to_string(),
+                        root.to_string_lossy().to_string(),
+                    ],
+                    ..Default::default()
+                };
 
                 let service = ScriptService::new(
                     policy,
@@ -152,7 +157,10 @@ workspace = "{}"
                 agent.set_tools(current_tools);
                 eprintln!("TEST: tools set on agent");
             } else {
-                return Err(anyhow::anyhow!("Hive extension not found at {:?}", hive_path));
+                return Err(anyhow::anyhow!(
+                    "Hive extension not found at {:?}",
+                    hive_path
+                ));
             }
         }
     } else {
@@ -165,11 +173,7 @@ workspace = "{}"
     eprintln!("TEST: session created");
 
     // Assert that hive_delegate tool is registered
-    let tool_names: Vec<String> = agent
-        .tools()
-        .iter()
-        .map(|t| t.name().to_string())
-        .collect();
+    let tool_names: Vec<String> = agent.tools().iter().map(|t| t.name().to_string()).collect();
     eprintln!("TEST: tools: {:?}", tool_names);
     assert!(
         tool_names.contains(&"hive_delegate".to_string()),
@@ -178,7 +182,10 @@ workspace = "{}"
     );
 
     // Assert that system prompt includes hive_delegate
-    let system_ctx = agent.system_prompt().await.ok_or_else(|| anyhow::anyhow!("System context not set"))?;
+    let system_ctx = agent
+        .system_prompt()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("System context not set"))?;
     eprintln!("TEST: system prompt length: {}", system_ctx.len());
     assert!(
         system_ctx.contains("hive_delegate"),

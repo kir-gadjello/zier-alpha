@@ -59,7 +59,11 @@ impl TelegramClient {
         }
     }
 
-    pub async fn get_updates(&self, offset: Option<i64>, timeout: u64) -> Result<Vec<TelegramUpdate>> {
+    pub async fn get_updates(
+        &self,
+        offset: Option<i64>,
+        timeout: u64,
+    ) -> Result<Vec<TelegramUpdate>> {
         let url = format!("{}/bot{}/getUpdates", self.api_base, self.bot_token);
         let mut body = json!({
             "timeout": timeout,
@@ -69,7 +73,10 @@ impl TelegramClient {
             body["offset"] = json!(off);
         }
 
-        debug!("Polling Telegram updates (offset={:?}, timeout={}s)", offset, timeout);
+        debug!(
+            "Polling Telegram updates (offset={:?}, timeout={}s)",
+            offset, timeout
+        );
 
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
@@ -120,16 +127,19 @@ impl TelegramClient {
 
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
-             let err = resp.text().await?;
-             anyhow::bail!("Telegram getFile failed: {}", err);
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram getFile failed: {}", err);
         }
 
         let json: serde_json::Value = resp.json().await?;
 
         if let Some(path) = json["result"]["file_path"].as_str() {
-             Ok(format!("{}/file/bot{}/{}", self.api_base, self.bot_token, path))
+            Ok(format!(
+                "{}/file/bot{}/{}",
+                self.api_base, self.bot_token, path
+            ))
         } else {
-             anyhow::bail!("Failed to get file path from Telegram: {:?}", json);
+            anyhow::bail!("Failed to get file path from Telegram: {:?}", json);
         }
     }
 }

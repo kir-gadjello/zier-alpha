@@ -1,11 +1,10 @@
-use zier_alpha::agent::tools::system::SystemIntrospectTool;
-use zier_alpha::agent::mcp_manager::McpManager;
+use tempfile::TempDir;
 use zier_alpha::agent::disk_monitor::DiskMonitor;
+use zier_alpha::agent::mcp_manager::McpManager;
+use zier_alpha::agent::tools::system::SystemIntrospectTool;
+use zier_alpha::agent::Tool;
 use zier_alpha::config::{Config, DiskConfig};
 use zier_alpha::scripting::ScriptService;
-use zier_alpha::agent::{Tool, ToolSchema};
-use std::sync::Arc;
-use tempfile::TempDir;
 
 #[tokio::test]
 async fn test_system_introspect_tool() {
@@ -24,15 +23,11 @@ async fn test_system_introspect_tool() {
         temp.path().to_path_buf(),
         zier_alpha::config::WorkdirStrategy::Overlay,
         None,
-        None
-    ).unwrap();
+        None,
+    )
+    .unwrap();
 
-    let tool = SystemIntrospectTool::new(
-        config,
-        mcp_manager,
-        service,
-        disk_monitor,
-    );
+    let tool = SystemIntrospectTool::new(config, mcp_manager, service, disk_monitor);
 
     // Test status
     let result = tool.execute(r#"{"command": "status"}"#).await.unwrap();
@@ -44,6 +39,13 @@ async fn test_system_introspect_tool() {
     assert!(result.contains("[")); // Empty array
 
     // Test cleanup_disk: should report completion (message contains "completed" or "Deleted")
-    let result = tool.execute(r#"{"command": "cleanup_disk"}"#).await.unwrap();
-    assert!(result.contains("completed") || result.contains("Deleted"), "cleanup_disk result: {}", result);
+    let result = tool
+        .execute(r#"{"command": "cleanup_disk"}"#)
+        .await
+        .unwrap();
+    assert!(
+        result.contains("completed") || result.contains("Deleted"),
+        "cleanup_disk result: {}",
+        result
+    );
 }

@@ -1,15 +1,15 @@
+use crate::agent::mcp_manager::McpManager;
 use crate::config::{SandboxPolicy, WorkdirStrategy};
-use crate::scripting::deno::{DenoRuntime, DenoToolDefinition};
-use anyhow::Result;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
-use std::thread;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::collections::HashMap;
-use tracing::error;
 use crate::ingress::IngressBus;
 use crate::scheduler::Scheduler;
-use crate::agent::mcp_manager::McpManager;
+use crate::scripting::deno::{DenoRuntime, DenoToolDefinition};
+use anyhow::Result;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::thread;
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tracing::error;
 
 enum ScriptCommand {
     ExecuteTool {
@@ -44,7 +44,7 @@ pub struct ScriptService {
     // Ideally we should isolate per script.
     // To support `execute_tool` without knowing extension name, we need a lookup table for tools.
     extensions: Arc<RwLock<HashMap<String, ExtensionHandle>>>, // Key: script path
-    tool_map: Arc<RwLock<HashMap<String, String>>>, // Tool Name -> Extension Path
+    tool_map: Arc<RwLock<HashMap<String, String>>>,            // Tool Name -> Extension Path
 
     // Shared state for creating new runtimes
     policy: SandboxPolicy,
@@ -68,7 +68,7 @@ impl ScriptService {
         project_dir: PathBuf,
         strategy: WorkdirStrategy,
         ingress_bus: Option<Arc<IngressBus>>,
-        scheduler: Option<Arc<Mutex<Scheduler>>>
+        scheduler: Option<Arc<Mutex<Scheduler>>>,
     ) -> Result<Self> {
         let mcp_manager = Some(McpManager::new(600));
 
@@ -108,19 +108,30 @@ impl ScriptService {
             match runtime {
                 Ok(rt) => {
                     rt.block_on(async move {
-                        let mut deno = match DenoRuntime::new(policy, workspace, project_dir, strategy, ingress_bus, scheduler, mcp_manager) {
+                        let mut deno = match DenoRuntime::new(
+                            policy,
+                            workspace,
+                            project_dir,
+                            strategy,
+                            ingress_bus,
+                            scheduler,
+                            mcp_manager,
+                        ) {
                             Ok(d) => d,
                             Err(e) => {
-                                error!("Failed to initialize Deno runtime for {}: {}", script_path_clone, e);
+                                error!(
+                                    "Failed to initialize Deno runtime for {}: {}",
+                                    script_path_clone, e
+                                );
                                 return;
                             }
                         };
 
                         // Immediately load the script
                         if let Err(e) = deno.execute_script(&script_path_clone).await {
-                             error!("Failed to load script {}: {}", script_path_clone, e);
-                             // We continue running to handle potential get_tools/status calls which might return empty/error,
-                             // but practically this extension is dead.
+                            error!("Failed to load script {}: {}", script_path_clone, e);
+                            // We continue running to handle potential get_tools/status calls which might return empty/error,
+                            // but practically this extension is dead.
                         }
 
                         while let Some(cmd) = rx.recv().await {
@@ -138,7 +149,11 @@ impl ScriptService {
                                     let _ = resp.send(res.map_err(|e| anyhow::anyhow!(e)));
                                 }
                                 ScriptCommand::Shutdown => break,
-                                ScriptCommand::SetParentContext { model, tools, system_prompt_append } => {
+                                ScriptCommand::SetParentContext {
+                                    model,
+                                    tools,
+                                    system_prompt_append,
+                                } => {
                                     deno.set_parent_context(model, tools, system_prompt_append);
                                 }
                             }
@@ -146,7 +161,10 @@ impl ScriptService {
                     });
                 }
                 Err(e) => {
-                    error!("Failed to build runtime for extension {}: {}", script_path_clone, e);
+                    error!(
+                        "Failed to build runtime for extension {}: {}",
+                        script_path_clone, e
+                    );
                 }
             }
         });
@@ -169,11 +187,14 @@ impl ScriptService {
             let parent_tools = self.parent_tools.read().await.clone();
             let parent_spa = self.parent_system_prompt_append.read().await.clone();
             if parent_model.is_some() || parent_tools.is_some() || parent_spa.is_some() {
-                let _ = handle.sender.send(ScriptCommand::SetParentContext { 
-                    model: parent_model.clone(), 
-                    tools: parent_tools.clone(), 
-                    system_prompt_append: parent_spa 
-                }).await;
+                let _ = handle
+                    .sender
+                    .send(ScriptCommand::SetParentContext {
+                        model: parent_model.clone(),
+                        tools: parent_tools.clone(),
+                        system_prompt_append: parent_spa,
+                    })
+                    .await;
             }
         }
 
@@ -198,7 +219,10 @@ impl ScriptService {
                 // The loop starts AFTER execute_script returns or concurrently?
                 // In `spawn_extension`, we do `deno.execute_script(...).await` BEFORE loop.
                 // So if we send GetTools, it will process AFTER load finishes.
-                handle.sender.send(ScriptCommand::GetTools { resp: tx }).await?;
+                handle
+                    .sender
+                    .send(ScriptCommand::GetTools { resp: tx })
+                    .await?;
                 rx.await?
             } else {
                 return Err(anyhow::anyhow!("Extension handle lost"));
@@ -226,12 +250,23 @@ impl ScriptService {
             let exts = self.extensions.read().await;
             if let Some(handle) = exts.get(&path) {
                 let (tx, rx) = oneshot::channel();
-                handle.sender.send(ScriptCommand::ExecuteTool { name: name.to_string(), args: args.to_string(), resp: tx }).await?;
-                return Ok(rx.await??);
+                handle
+                    .sender
+                    .send(ScriptCommand::ExecuteTool {
+                        name: name.to_string(),
+                        args: args.to_string(),
+                        resp: tx,
+                    })
+                    .await?;
+                let result = rx.await??;
+                return Ok(result);
             }
         }
 
-        Err(anyhow::anyhow!("Tool not found or extension not loaded: {}", name))
+        Err(anyhow::anyhow!(
+            "Tool not found or extension not loaded: {}",
+            name
+        ))
     }
 
     pub async fn get_tools(&self) -> Result<Vec<DenoToolDefinition>> {
@@ -240,7 +275,12 @@ impl ScriptService {
 
         for handle in exts.values() {
             let (tx, rx) = oneshot::channel();
-            if handle.sender.send(ScriptCommand::GetTools { resp: tx }).await.is_ok() {
+            if handle
+                .sender
+                .send(ScriptCommand::GetTools { resp: tx })
+                .await
+                .is_ok()
+            {
                 if let Ok(tools) = rx.await {
                     all_tools.extend(tools);
                 }
@@ -278,7 +318,12 @@ impl ScriptService {
         self.load_script(name).await
     }
 
-    pub async fn set_parent_context(&self, model: Option<String>, tools: Option<Vec<String>>, system_prompt_append: Option<String>) -> Result<()> {
+    pub async fn set_parent_context(
+        &self,
+        model: Option<String>,
+        tools: Option<Vec<String>>,
+        system_prompt_append: Option<String>,
+    ) -> Result<()> {
         // Update stored parent context
         *self.parent_model.write().await = model.clone();
         *self.parent_tools.write().await = tools.clone();
@@ -287,11 +332,14 @@ impl ScriptService {
         // Broadcast to all currently loaded extensions
         let exts = self.extensions.read().await;
         for handle in exts.values() {
-            let _ = handle.sender.send(ScriptCommand::SetParentContext { 
-                model: model.clone(), 
-                tools: tools.clone(), 
-                system_prompt_append: system_prompt_append.clone() 
-            }).await;
+            let _ = handle
+                .sender
+                .send(ScriptCommand::SetParentContext {
+                    model: model.clone(),
+                    tools: tools.clone(),
+                    system_prompt_append: system_prompt_append.clone(),
+                })
+                .await;
         }
         Ok(())
     }

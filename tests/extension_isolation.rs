@@ -1,7 +1,7 @@
+use std::io::Write;
+use tempfile::NamedTempFile;
 use zier_alpha::config::{SandboxPolicy, WorkdirStrategy};
 use zier_alpha::scripting::ScriptService;
-use tempfile::NamedTempFile;
-use std::io::Write;
 
 #[tokio::test]
 async fn test_extension_isolation_panic() {
@@ -12,8 +12,9 @@ async fn test_extension_isolation_panic() {
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
         None,
-        None
-    ).unwrap();
+        None,
+    )
+    .unwrap();
 
     // Script A: Panics (throws error)
     let script_a_content = r#"
@@ -76,7 +77,10 @@ async fn test_extension_isolation_panic() {
     script_b.write_all(script_b_content.as_bytes()).unwrap();
 
     // Load Script B
-    service.load_script(script_b.path().to_str().unwrap()).await.expect("Script B failed to load");
+    service
+        .load_script(script_b.path().to_str().unwrap())
+        .await
+        .expect("Script B failed to load");
 
     // Verify Script B works despite A crashing
     let tools = service.get_tools().await.unwrap();
@@ -93,8 +97,9 @@ async fn test_extension_isolation_separation() {
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
         None,
-        None
-    ).unwrap();
+        None,
+    )
+    .unwrap();
 
     // Script A
     let script_a_content = r#"
@@ -103,7 +108,10 @@ async fn test_extension_isolation_separation() {
     "#;
     let mut script_a = NamedTempFile::new().unwrap();
     script_a.write_all(script_a_content.as_bytes()).unwrap();
-    service.load_script(script_a.path().to_str().unwrap()).await.unwrap();
+    service
+        .load_script(script_a.path().to_str().unwrap())
+        .await
+        .unwrap();
 
     // Script B
     let script_b_content = r#"
@@ -112,7 +120,10 @@ async fn test_extension_isolation_separation() {
     "#;
     let mut script_b = NamedTempFile::new().unwrap();
     script_b.write_all(script_b_content.as_bytes()).unwrap();
-    service.load_script(script_b.path().to_str().unwrap()).await.unwrap();
+    service
+        .load_script(script_b.path().to_str().unwrap())
+        .await
+        .unwrap();
 
     // Verify isolation
     let res_a = service.execute_tool("tool_a", "{}").await.unwrap();

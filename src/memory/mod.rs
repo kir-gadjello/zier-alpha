@@ -6,10 +6,10 @@ mod watcher;
 mod workspace;
 
 pub use artifact::ArtifactWriter;
-#[cfg(feature = "gguf")]
-pub use embeddings::LlamaCppProvider;
 #[cfg(feature = "fastembed")]
 pub use embeddings::FastEmbedProvider;
+#[cfg(feature = "gguf")]
+pub use embeddings::LlamaCppProvider;
 pub use embeddings::{hash_text, EmbeddingProvider, OpenAIEmbeddingProvider};
 pub use index::{MemoryIndex, ReindexStats};
 pub use search::MemoryChunk;
@@ -335,14 +335,17 @@ impl MemoryManager {
             // Run embedding (embedding provider is likely async)
             if let Ok(embedding) = provider.embed(&query_string).await {
                 debug!("Using hybrid search with {} dimensions", embedding.len());
-                return self.index.search_hybrid(
-                    query,
-                    Some(&embedding),
-                    &model,
-                    limit,
-                    0.3, // FTS weight
-                    0.7, // Vector weight
-                ).await;
+                return self
+                    .index
+                    .search_hybrid(
+                        query,
+                        Some(&embedding),
+                        &model,
+                        limit,
+                        0.3, // FTS weight
+                        0.7, // Vector weight
+                    )
+                    .await;
             }
         }
 
@@ -628,9 +631,10 @@ impl MemoryManager {
                 let text_hash = hash_text(text);
 
                 // Check cache first
-                if let Ok(Some(cached)) =
-                    self.index
-                        .get_cached_embedding(&provider_id, &model, &text_hash).await
+                if let Ok(Some(cached)) = self
+                    .index
+                    .get_cached_embedding(&provider_id, &model, &text_hash)
+                    .await
                 {
                     from_cache.push((chunk_id.clone(), cached));
                     cache_hits += 1;
@@ -641,7 +645,11 @@ impl MemoryManager {
 
             // Store cached embeddings
             for (chunk_id, embedding) in from_cache {
-                if let Err(e) = self.index.store_embedding(&chunk_id, &embedding, &model).await {
+                if let Err(e) = self
+                    .index
+                    .store_embedding(&chunk_id, &embedding, &model)
+                    .await
+                {
                     warn!(
                         "Failed to store cached embedding for chunk {}: {}",
                         chunk_id, e
@@ -661,7 +669,10 @@ impl MemoryManager {
                             to_embed.iter().zip(embeddings.iter())
                         {
                             // Store in chunk
-                            if let Err(e) = self.index.store_embedding(chunk_id, embedding, &model).await
+                            if let Err(e) = self
+                                .index
+                                .store_embedding(chunk_id, embedding, &model)
+                                .await
                             {
                                 warn!("Failed to store embedding for chunk {}: {}", chunk_id, e);
                             } else {
@@ -669,13 +680,17 @@ impl MemoryManager {
                             }
 
                             // Store in cache for future reuse
-                            if let Err(e) = self.index.cache_embedding(
-                                &provider_id,
-                                &model,
-                                "", // provider_key (API key identifier, can be empty)
-                                text_hash,
-                                embedding,
-                            ).await {
+                            if let Err(e) = self
+                                .index
+                                .cache_embedding(
+                                    &provider_id,
+                                    &model,
+                                    "", // provider_key (API key identifier, can be empty)
+                                    text_hash,
+                                    embedding,
+                                )
+                                .await
+                            {
                                 debug!("Failed to cache embedding: {}", e);
                             }
                         }

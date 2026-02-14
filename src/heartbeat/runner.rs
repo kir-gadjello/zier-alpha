@@ -240,7 +240,13 @@ impl HeartbeatRunner {
             reserve_tokens: self.config.agent.reserve_tokens,
         };
 
-        let mut agent = Agent::new(agent_config, &self.config, self.memory.clone(), crate::agent::ContextStrategy::Full).await?;
+        let mut agent = Agent::new(
+            agent_config,
+            &self.config,
+            self.memory.clone(),
+            crate::agent::ContextStrategy::Full,
+        )
+        .await?;
         agent.new_session().await?;
 
         // Check if workspace is a git repo
@@ -273,9 +279,12 @@ impl HeartbeatRunner {
             // Record the heartbeat (re-read from disk to avoid clobbering)
             let session_id = agent.session_status().await.id;
             let response_clone = response.clone();
-            if let Err(e) = store.load_and_update(session_key, &session_id, move |entry| {
-                entry.record_heartbeat(&response_clone);
-            }).await {
+            if let Err(e) = store
+                .load_and_update(session_key, &session_id, move |entry| {
+                    entry.record_heartbeat(&response_clone);
+                })
+                .await
+            {
                 warn!("Failed to record heartbeat in session store: {}", e);
             }
         }

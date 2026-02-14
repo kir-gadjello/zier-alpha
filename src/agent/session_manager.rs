@@ -1,14 +1,14 @@
+use crate::agent::compaction::{CompactionStrategy, NativeCompactor};
+use crate::agent::session::{Session, SessionStatus};
+use crate::agent::Role;
+use crate::agent::SmartClient;
+use crate::config::Config;
+use crate::memory::MemoryManager;
 use anyhow::Result;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
-use std::path::PathBuf;
-use crate::agent::session::{Session, SessionStatus};
-use crate::config::Config;
-use crate::agent::compaction::{CompactionStrategy, NativeCompactor};
-use crate::agent::SmartClient;
-use crate::agent::Role;
-use crate::memory::MemoryManager;
 
 /// Soft threshold buffer before compaction (tokens)
 /// Memory flush runs when within this buffer of the hard limit
@@ -60,7 +60,12 @@ impl SessionManager {
         self.compaction_strategy = strategy;
     }
 
-    pub async fn new_session(&self, _memory: &MemoryManager, _tools_prompt: Option<String>, system_prompt_fn: impl FnOnce() -> String) -> Result<()> {
+    pub async fn new_session(
+        &self,
+        _memory: &MemoryManager,
+        _tools_prompt: Option<String>,
+        system_prompt_fn: impl FnOnce() -> String,
+    ) -> Result<()> {
         // Reset session
         {
             let mut session = self.session.write().await;
@@ -111,7 +116,8 @@ impl SessionManager {
 
     pub async fn should_compact(&self, context_window: usize, reserve_tokens: usize) -> bool {
         let limit = context_window - reserve_tokens;
-        self.compaction_strategy.should_compact(&*self.session.read().await, limit)
+        self.compaction_strategy
+            .should_compact(&*self.session.read().await, limit)
     }
 
     pub async fn should_memory_flush(&self, context_window: usize, reserve_tokens: usize) -> bool {
@@ -134,8 +140,12 @@ impl SessionManager {
             let mut session = self.session.write().await;
 
             // Try primary strategy first
-            match self.compaction_strategy.compact(&mut *session, client).await {
-                Ok(_) => {},
+            match self
+                .compaction_strategy
+                .compact(&mut session, client)
+                .await
+            {
+                Ok(_) => {}
                 Err(e) => {
                     info!("Compaction failed with primary model: {}", e);
 
@@ -150,16 +160,25 @@ impl SessionManager {
                         for model in &self.config.agent.compaction.fallback_models {
                             info!("Retrying compaction with fallback model: {}", model);
 
-                            let fallback_client = SmartClient::new(self.config.clone(), model.clone());
+                            let fallback_client =
+                                SmartClient::new(self.config.clone(), model.clone());
 
-                            match self.compaction_strategy.compact(&mut *session, &fallback_client).await {
+                            match self
+                                .compaction_strategy
+                                .compact(&mut session, &fallback_client)
+                                .await
+                            {
                                 Ok(_) => {
                                     fallback_success = true;
                                     info!("Fallback compaction succeeded with {}", model);
                                     break;
-                                },
+                                }
                                 Err(e_fallback) => {
-                                    tracing::warn!("Fallback compaction with {} failed: {}", model, e_fallback);
+                                    tracing::warn!(
+                                        "Fallback compaction with {} failed: {}",
+                                        model,
+                                        e_fallback
+                                    );
                                 }
                             }
                         }
@@ -170,7 +189,7 @@ impl SessionManager {
                         // "models_then_truncate" or "truncate" implies truncation is last resort
                         if strategy == "truncate" || strategy == "models_then_truncate" {
                             info!("Compaction models failed, falling back to truncation.");
-                            self.compact_truncate(&mut *session);
+                            self.compact_truncate(&mut session);
                         } else {
                             return Err(e);
                         }
@@ -257,11 +276,15 @@ impl SessionManager {
         Ok(Some(path))
     }
 
-    pub async fn session_status(&self, cumulative_input: u64, cumulative_output: u64) -> SessionStatus {
-        self.session.read().await.status_with_usage(
-            cumulative_input,
-            cumulative_output,
-        )
+    pub async fn session_status(
+        &self,
+        cumulative_input: u64,
+        cumulative_output: u64,
+    ) -> SessionStatus {
+        self.session
+            .read()
+            .await
+            .status_with_usage(cumulative_input, cumulative_output)
     }
 
     pub async fn auto_save_session(&self) -> Result<()> {

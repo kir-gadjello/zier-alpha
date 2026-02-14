@@ -1,20 +1,23 @@
+pub mod chat_engine;
 pub mod client;
 pub mod compaction;
+pub mod llm_error;
+pub mod mcp_manager;
+pub mod memory_context;
 pub mod providers;
 pub mod sanitize;
 pub mod session;
+pub mod session_manager;
 pub mod session_store;
 pub mod skills;
 pub mod system_prompt;
-pub mod tools;
-pub mod llm_error;
-pub mod mcp_manager;
 pub mod tool_executor;
-pub mod memory_context;
-pub mod session_manager;
-pub mod chat_engine;
+pub mod tools;
 
+pub use chat_engine::ChatEngine;
 pub use llm_error::LlmError;
+pub use mcp_manager::McpManager;
+pub use memory_context::MemoryContextBuilder;
 pub use providers::{
     ImageAttachment, LLMProvider, LLMResponse, LLMResponseContent, Message, Role, StreamChunk,
     StreamEvent, StreamResult, ToolCall, ToolSchema, Usage,
@@ -29,18 +32,15 @@ pub use session::{
     list_sessions, list_sessions_for_agent, search_sessions, search_sessions_for_agent, Session,
     SessionInfo, SessionMessage, SessionSearchResult, SessionStatus, DEFAULT_AGENT_ID,
 };
+pub use session_manager::SessionManager;
 pub use session_store::{SessionEntry, SessionStore};
 pub use skills::{get_skills_summary, load_skills, parse_skill_command, Skill, SkillInvocation};
 pub use system_prompt::{
     build_heartbeat_prompt, is_heartbeat_ok, is_silent_reply, HEARTBEAT_OK_TOKEN,
     SILENT_REPLY_TOKEN,
 };
-pub use tools::{create_default_tools, extract_tool_detail, ScriptTool, Tool, ToolResult};
 pub use tool_executor::ToolExecutor;
-pub use memory_context::MemoryContextBuilder;
-pub use session_manager::SessionManager;
-pub use chat_engine::ChatEngine;
-pub use mcp_manager::McpManager;
+pub use tools::{create_default_tools, extract_tool_detail, ScriptTool, Tool, ToolResult};
 pub mod disk_monitor;
 pub use disk_monitor::DiskMonitor;
 
@@ -48,12 +48,12 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 
-pub use client::{SmartClient, SmartResponse};
-pub use compaction::{CompactionStrategy, NativeCompactor, ScriptCompactor};
 use crate::config::Config;
 use crate::memory::{MemoryChunk, MemoryManager};
+pub use client::{SmartClient, SmartResponse};
+pub use compaction::{CompactionStrategy, NativeCompactor, ScriptCompactor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextStrategy {
@@ -102,8 +102,9 @@ impl Agent {
             app_config,
             memory,
             context_strategy,
-            std::env::current_dir()?
-        ).await
+            std::env::current_dir()?,
+        )
+        .await
     }
 
     pub async fn new_with_project(
@@ -119,10 +120,10 @@ impl Agent {
         let disk_monitor = DiskMonitor::new(app_config.disk.clone());
 
         let mut tools = tools::create_default_tools_with_project(
-            app_config, 
-            Some(Arc::clone(&memory)), 
+            app_config,
+            Some(Arc::clone(&memory)),
             disk_monitor.clone(),
-            project_dir.clone()
+            project_dir.clone(),
         )?;
 
         // Initialize MCP Manager
@@ -142,30 +143,30 @@ impl Agent {
                 // We do this eagerly for now to register tools
                 for (name, _) in &mcp_config.servers {
                     match mcp_manager.ensure_server(name).await {
-                        Ok(_) => {
-                            match mcp_manager.list_tools(name).await {
-                                Ok(tool_defs) => {
-                                    for tool_def in tool_defs {
-                                        if let (Some(tname), Some(desc), Some(schema)) = (
-                                            tool_def.get("name").and_then(|v| v.as_str()),
-                                            tool_def.get("description").and_then(|v| v.as_str()),
-                                            tool_def.get("inputSchema")
-                                        ) {
-                                            let tool = crate::agent::tools::mcp::McpTool::new(
-                                                mcp_manager.clone(),
-                                                name.clone(),
-                                                tname.to_string(),
-                                                desc.to_string(),
-                                                schema.clone()
-                                            );
-                                            tools.push(Arc::new(tool));
-                                        }
+                        Ok(_) => match mcp_manager.list_tools(name).await {
+                            Ok(tool_defs) => {
+                                for tool_def in tool_defs {
+                                    if let (Some(tname), Some(desc), Some(schema)) = (
+                                        tool_def.get("name").and_then(|v| v.as_str()),
+                                        tool_def.get("description").and_then(|v| v.as_str()),
+                                        tool_def.get("inputSchema"),
+                                    ) {
+                                        let tool = crate::agent::tools::mcp::McpTool::new(
+                                            mcp_manager.clone(),
+                                            name.clone(),
+                                            tname.to_string(),
+                                            desc.to_string(),
+                                            schema.clone(),
+                                        );
+                                        tools.push(Arc::new(tool));
                                     }
-                                    info!("Loaded tools from MCP server: {}", name);
                                 }
-                                Err(e) => error!("Failed to list tools from MCP server {}: {}", name, e),
+                                info!("Loaded tools from MCP server: {}", name);
                             }
-                        }
+                            Err(e) => {
+                                error!("Failed to list tools from MCP server {}: {}", name, e)
+                            }
+                        },
                         Err(e) => error!("Failed to connect to MCP server {}: {}", name, e),
                     }
                 }
@@ -206,7 +207,10 @@ impl Agent {
 
         let session_manager = SessionManager::new(app_config.clone());
         let tool_executor = ToolExecutor::new(tools, app_config.clone());
-        let memory_context = Arc::new(MemoryContextBuilder::new(memory.clone(), app_config.clone()));
+        let memory_context = Arc::new(MemoryContextBuilder::new(
+            memory.clone(),
+            app_config.clone(),
+        ));
         // disk_monitor moved up
 
         let chat_engine = ChatEngine::new(
@@ -298,8 +302,7 @@ impl Agent {
         self.update_chat_engine();
     }
 
-    pub fn set_context_strategy(&mut self, _strategy: ContextStrategy) {
-    }
+    pub fn set_context_strategy(&mut self, _strategy: ContextStrategy) {}
 
     pub fn tools(&self) -> &[Arc<dyn Tool>] {
         self.tool_executor.tools()
@@ -352,7 +355,12 @@ impl Agent {
         let skills_prompt = skills::build_skills_prompt(&workspace_skills);
         debug!("Loaded {} skills from workspace", workspace_skills.len());
 
-        let tool_names: Vec<&str> = self.tool_executor.tools().iter().map(|t| t.name()).collect();
+        let tool_names: Vec<&str> = self
+            .tool_executor
+            .tools()
+            .iter()
+            .map(|t| t.name())
+            .collect();
         let system_prompt_params =
             system_prompt::SystemPromptParams::new(self.memory.workspace(), &self.config.model)
                 .with_project(&self.project_dir, self.app_config.workdir.clone())
@@ -372,7 +380,9 @@ impl Agent {
             )
         };
 
-        self.session_manager.new_session(&self.memory, None, || full_context).await
+        self.session_manager
+            .new_session(&self.memory, None, || full_context)
+            .await
     }
 
     pub async fn hydrate_from_file(&mut self, path: &PathBuf) -> Result<()> {
@@ -380,7 +390,11 @@ impl Agent {
     }
 
     pub async fn set_system_prompt(&mut self, prompt: &str) {
-        self.session_manager.session().write().await.set_system_context(prompt.to_string());
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .set_system_context(prompt.to_string());
     }
 
     pub async fn resume_session(&mut self, session_id: &str) -> Result<()> {
@@ -408,11 +422,15 @@ impl Agent {
     }
 
     pub async fn compact_session(&mut self) -> Result<(usize, usize)> {
-        self.session_manager.compact_session(self.chat_engine.client()).await
+        self.session_manager
+            .compact_session(self.chat_engine.client())
+            .await
     }
 
     pub async fn save_session_to_memory(&self) -> Result<Option<PathBuf>> {
-        self.session_manager.save_session_to_memory(&self.memory).await
+        self.session_manager
+            .save_session_to_memory(&self.memory)
+            .await
     }
 
     pub async fn clear_session(&mut self) {
@@ -438,15 +456,22 @@ impl Agent {
     }
 
     pub async fn session_status(&self) -> SessionStatus {
-        self.session_manager.session_status(
-            self.cumulative_usage.input_tokens,
-            self.cumulative_usage.output_tokens,
-        ).await
+        self.session_manager
+            .session_status(
+                self.cumulative_usage.input_tokens,
+                self.cumulative_usage.output_tokens,
+            )
+            .await
     }
 
     /// Get the current system prompt (context) of the active session.
     pub async fn system_prompt(&self) -> Option<String> {
-        self.session_manager.session().read().await.system_context().map(String::from)
+        self.session_manager
+            .session()
+            .read()
+            .await
+            .system_context()
+            .map(String::from)
     }
 
     pub async fn chat_stream(&mut self, message: &str) -> Result<StreamResult> {
@@ -458,7 +483,9 @@ impl Agent {
         message: &str,
         images: Vec<ImageAttachment>,
     ) -> Result<StreamResult> {
-        self.chat_engine.chat_stream_with_images(message, images).await
+        self.chat_engine
+            .chat_stream_with_images(message, images)
+            .await
     }
 
     pub async fn finish_chat_stream(&mut self, response: &str) {
@@ -478,31 +505,48 @@ impl Agent {
     }
 
     pub async fn session_messages(&self) -> Vec<Message> {
-        self.session_manager.session().read().await.messages_for_llm()
+        self.session_manager
+            .session()
+            .read()
+            .await
+            .messages_for_llm()
     }
 
     pub async fn raw_session_messages(&self) -> Vec<SessionMessage> {
-        self.session_manager.session().read().await.raw_messages().to_vec()
+        self.session_manager
+            .session()
+            .read()
+            .await
+            .raw_messages()
+            .to_vec()
     }
 
     pub async fn add_user_message(&mut self, content: &str) {
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::User,
-            content: content.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::User,
+                content: content.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                images: Vec::new(),
+            });
     }
 
     pub async fn add_assistant_message(&mut self, content: &str) {
-        self.session_manager.session().write().await.add_message(Message {
-            role: Role::Assistant,
-            content: content.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-            images: Vec::new(),
-        });
+        self.session_manager
+            .session()
+            .write()
+            .await
+            .add_message(Message {
+                role: Role::Assistant,
+                content: content.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+                images: Vec::new(),
+            });
     }
 
     pub async fn chat_stream_with_tools(
@@ -510,7 +554,9 @@ impl Agent {
         message: &str,
         images: Vec<ImageAttachment>,
     ) -> Result<impl futures::Stream<Item = Result<StreamEvent>> + '_> {
-        self.chat_engine.chat_stream_with_tools(message, images).await
+        self.chat_engine
+            .chat_stream_with_tools(message, images)
+            .await
     }
 
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
@@ -528,7 +574,7 @@ impl Agent {
     pub async fn resume_chat_stream_with_tools(
         &mut self,
     ) -> Result<impl futures::Stream<Item = Result<StreamEvent>> + '_> {
-         self.chat_engine.resume_chat_stream_with_tools().await
+        self.chat_engine.resume_chat_stream_with_tools().await
     }
 
     pub async fn auto_save_session(&self) -> Result<()> {

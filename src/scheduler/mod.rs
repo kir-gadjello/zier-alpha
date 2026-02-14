@@ -1,10 +1,10 @@
-use tokio_cron_scheduler::{Job, JobScheduler};
 use crate::ingress::IngressBus;
-use serde::Deserialize;
-use std::sync::Arc;
 use anyhow::Result;
-use tracing::{info, error};
+use serde::Deserialize;
 use std::path::Path;
+use std::sync::Arc;
+use tokio_cron_scheduler::{Job, JobScheduler};
+use tracing::{error, info};
 
 pub mod dispatcher;
 
@@ -31,23 +31,34 @@ pub struct Scheduler {
 impl Scheduler {
     pub async fn new(bus: Arc<IngressBus>) -> Result<Self> {
         let scheduler = JobScheduler::new().await?;
-        Ok(Self { scheduler, bus, jobs: Vec::new() })
+        Ok(Self {
+            scheduler,
+            bus,
+            jobs: Vec::new(),
+        })
     }
 
     pub async fn load_jobs(&mut self, config_path: &Path) -> Result<()> {
         if !config_path.exists() {
-            info!("No scheduler config found at {}, skipping.", config_path.display());
+            info!(
+                "No scheduler config found at {}, skipping.",
+                config_path.display()
+            );
             return Ok(());
         }
 
         let content = std::fs::read_to_string(config_path)?;
         let config: SchedulerConfig = toml::from_str(&content)?;
-        self.jobs = config.job.iter().map(|j| JobConfig {
-            name: j.name.clone(),
-            schedule: j.schedule.clone(),
-            prompt_ref: j.prompt_ref.clone(),
-            tool_ref: j.tool_ref.clone(),
-        }).collect();
+        self.jobs = config
+            .job
+            .iter()
+            .map(|j| JobConfig {
+                name: j.name.clone(),
+                schedule: j.schedule.clone(),
+                prompt_ref: j.prompt_ref.clone(),
+                tool_ref: j.tool_ref.clone(),
+            })
+            .collect();
 
         for job_config in config.job {
             let bus = self.bus.clone();
@@ -68,12 +79,20 @@ impl Scheduler {
             })?;
 
             self.scheduler.add(job).await?;
-            info!("Scheduled job: {} ({})", job_config.name, job_config.schedule);
+            info!(
+                "Scheduled job: {} ({})",
+                job_config.name, job_config.schedule
+            );
         }
         Ok(())
     }
 
-    pub async fn register_dynamic_job(&self, name: String, schedule: String, script_path: String) -> Result<()> {
+    pub async fn register_dynamic_job(
+        &self,
+        name: String,
+        schedule: String,
+        script_path: String,
+    ) -> Result<()> {
         let bus = self.bus.clone();
         let job_name = name.clone();
         let script = script_path.clone();
@@ -83,20 +102,23 @@ impl Scheduler {
             let name = job_name.clone();
             let script = script.clone();
             Box::pin(async move {
-                 let payload = format!("EXECUTE_SCRIPT: {}", script);
-                 let msg = crate::ingress::IngressMessage::new(
-                     format!("scheduler:{}", name),
-                     payload,
-                     crate::ingress::TrustLevel::TrustedEvent
-                 );
-                 if let Err(e) = bus.push(msg).await {
-                     error!("Failed to push dynamic job {}: {}", name, e);
-                 }
+                let payload = format!("EXECUTE_SCRIPT: {}", script);
+                let msg = crate::ingress::IngressMessage::new(
+                    format!("scheduler:{}", name),
+                    payload,
+                    crate::ingress::TrustLevel::TrustedEvent,
+                );
+                if let Err(e) = bus.push(msg).await {
+                    error!("Failed to push dynamic job {}: {}", name, e);
+                }
             })
         })?;
 
         self.scheduler.add(job).await?;
-        info!("Registered dynamic job: {} ({}) -> {}", name, schedule, script_path);
+        info!(
+            "Registered dynamic job: {} ({}) -> {}",
+            name, schedule, script_path
+        );
         Ok(())
     }
 

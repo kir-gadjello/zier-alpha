@@ -1,8 +1,8 @@
-use crate::agent::tools::{create_default_tools_with_project, Tool};
 use crate::agent::tools::script::ScriptTool;
+use crate::agent::tools::{create_default_tools_with_project, Tool};
+use crate::agent::DiskMonitor;
 use crate::config::Config;
 use crate::memory::MemoryManager;
-use crate::agent::DiskMonitor;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,7 +22,8 @@ impl ToolRegistry {
         let mut tools_map: HashMap<String, Arc<dyn Tool>> = HashMap::new();
 
         // 1. Load Builtins
-        let builtins = create_default_tools_with_project(config, memory, disk_monitor, project_dir.clone())?;
+        let builtins =
+            create_default_tools_with_project(config, memory, disk_monitor, project_dir.clone())?;
 
         let allowed = &config.tools.allowed_builtin;
         let allow_all = allowed.contains(&"*".to_string());

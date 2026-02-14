@@ -1,11 +1,11 @@
-use anyhow::{Result, Context};
+use crate::agent::providers::ToolSchema;
+use crate::agent::tools::Tool;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
-use crate::agent::tools::Tool;
-use crate::agent::providers::ToolSchema;
 use tracing::debug;
 
 #[derive(Debug, Clone)]
@@ -25,9 +25,16 @@ impl ExternalTool {
         command: String,
         args: Vec<String>,
         working_dir: Option<PathBuf>,
-        sandbox: bool
+        sandbox: bool,
     ) -> Self {
-        Self { name, description, command, args, working_dir, sandbox }
+        Self {
+            name,
+            description,
+            command,
+            args,
+            working_dir,
+            sandbox,
+        }
     }
 
     async fn run_sandboxed(&self, extra_args: &[String]) -> Result<String> {
@@ -36,17 +43,32 @@ impl ExternalTool {
         let mut full_args = self.args.clone();
         full_args.extend_from_slice(extra_args);
 
-        let cwd = self.working_dir.clone().unwrap_or_else(|| std::path::PathBuf::from("."));
+        let cwd = self
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-        debug!("Executing sandboxed external tool: {} {:?}", self.command, full_args);
+        debug!(
+            "Executing sandboxed external tool: {} {:?}",
+            self.command, full_args
+        );
 
-        let output = crate::agent::tools::runner::run_sandboxed_command(&self.command, &full_args, &cwd, None).await?;
+        let output = crate::agent::tools::runner::run_sandboxed_command(
+            &self.command,
+            &full_args,
+            &cwd,
+            None,
+        )
+        .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         if !output.status.success() {
-            return Ok(format!("Command failed ({}):\nSTDOUT: {}\nSTDERR: {}", output.status, stdout, stderr));
+            return Ok(format!(
+                "Command failed ({}):\nSTDOUT: {}\nSTDERR: {}",
+                output.status, stdout, stderr
+            ));
         }
 
         Ok(stdout.to_string())
@@ -70,12 +92,18 @@ impl ExternalTool {
 
         debug!("Executing external tool {}: {:?}", self.name, cmd);
 
-        let output = cmd.output().await.context("Failed to execute external command")?;
+        let output = cmd
+            .output()
+            .await
+            .context("Failed to execute external command")?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         if !output.status.success() {
-            return Ok(format!("Command failed ({}):\nSTDOUT: {}\nSTDERR: {}", output.status, stdout, stderr));
+            return Ok(format!(
+                "Command failed ({}):\nSTDOUT: {}\nSTDERR: {}",
+                output.status, stdout, stderr
+            ));
         }
 
         Ok(stdout.to_string())
@@ -107,9 +135,14 @@ impl Tool for ExternalTool {
 
     async fn execute(&self, arguments: &str) -> Result<String> {
         let args_val: Value = serde_json::from_str(arguments)?;
-        let extra_args = args_val.get("args")
+        let extra_args = args_val
+            .get("args")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         if self.sandbox {

@@ -1,8 +1,8 @@
+use std::time::Duration;
+use tempfile::TempDir;
+use tokio::time::sleep;
 use zier_alpha::agent::mcp_manager::McpManager;
 use zier_alpha::agent::mcp_manager::ServerConfig;
-use tempfile::TempDir;
-use std::time::Duration;
-use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_mcp_resilience_dead_process() {
@@ -69,7 +69,10 @@ sys.exit(1) # Crash
     manager.initialize(vec![config]).await;
 
     // Start server
-    manager.ensure_server("test-server").await.expect("Failed to start server");
+    manager
+        .ensure_server("test-server")
+        .await
+        .expect("Failed to start server");
 
     // Wait for it to crash (script sleeps 1s then exits)
     sleep(Duration::from_secs(2)).await;
@@ -85,7 +88,10 @@ sys.exit(1) # Crash
     // We can't easily spy on "restart happened", but we can check logs or side effects.
     // Or we can rely on the fact that if it didn't restart, the next call would fail.
 
-    manager.ensure_server("test-server").await.expect("Failed to restart server");
+    manager
+        .ensure_server("test-server")
+        .await
+        .expect("Failed to restart server");
 
     // Now it should be running (new process)
     // The new process will handshake again.

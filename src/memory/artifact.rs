@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use uuid::Uuid;
-use anyhow::Result;
+use std::path::PathBuf;
 use tokio::fs;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
 pub struct ArtifactMetadata {
@@ -53,7 +53,11 @@ impl ArtifactWriter {
             "{}__{}__{}.md",
             now.format("%Y-%m-%d--%H-%M-%S"),
             source_job.replace('/', "_"),
-            id.as_simple().to_string().chars().take(8).collect::<String>()
+            id.as_simple()
+                .to_string()
+                .chars()
+                .take(8)
+                .collect::<String>()
         );
 
         let path = self.storage_path.join(filename);

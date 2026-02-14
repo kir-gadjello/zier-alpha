@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::{RwLock, oneshot, mpsc};
-use tokio::process::{Command, Child};
-use std::process::Stdio;
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use anyhow::{Result, anyhow, Context};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{info, error, debug};
+use tokio::process::{Child, Command};
+use tokio::sync::{mpsc, oneshot, RwLock};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct McpConfig {
@@ -29,7 +29,10 @@ pub struct McpConfig {
 
 fn default_cache_dir() -> String {
     if let Some(base) = directories::BaseDirs::new() {
-        base.home_dir().join(".zier-alpha/cache/mcp").to_string_lossy().to_string()
+        base.home_dir()
+            .join(".zier-alpha/cache/mcp")
+            .to_string_lossy()
+            .to_string()
     } else {
         "~/.zier-alpha/cache/mcp".to_string()
     }
@@ -184,10 +187,16 @@ impl McpManager {
         // 2. Fetch config
         let config = {
             let configs = self.configs.read().await;
-            configs.get(server_name).cloned().ok_or_else(|| anyhow!("Server config not found: {}", server_name))?
+            configs
+                .get(server_name)
+                .cloned()
+                .ok_or_else(|| anyhow!("Server config not found: {}", server_name))?
         };
 
-        info!("Spawning MCP server: {} ({} {:?})", config.name, config.command, config.args);
+        info!(
+            "Spawning MCP server: {} ({} {:?})",
+            config.name, config.command, config.args
+        );
 
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args);
@@ -203,14 +212,26 @@ impl McpManager {
         }
 
         let mut child = cmd.spawn().context("Failed to spawn MCP server process")?;
-        let stdin = child.stdin.take().ok_or_else(|| anyhow!("Failed to capture stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to capture stdout"))?;
-        let stderr = child.stderr.take().ok_or_else(|| anyhow!("Failed to capture stderr"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("Failed to capture stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to capture stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("Failed to capture stderr"))?;
 
         let (tx, mut rx) = mpsc::channel::<JsonRpcRequest>(32);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
-        let pending = Arc::new(RwLock::new(HashMap::<u64, oneshot::Sender<Result<serde_json::Value>>>::new()));
+        let pending = Arc::new(RwLock::new(HashMap::<
+            u64,
+            oneshot::Sender<Result<serde_json::Value>>,
+        >::new()));
 
         // Writer task
         let mut writer_stdin = stdin;
@@ -369,7 +390,10 @@ impl McpManager {
         // Insert into map, handling concurrent insertion
         let mut servers = self.servers.write().await;
         if let Some(existing) = servers.get(server_name) {
-            info!("Server {} started concurrently by another task. Using existing instance.", server_name);
+            info!(
+                "Server {} started concurrently by another task. Using existing instance.",
+                server_name
+            );
             // Cleanup our redundant process
             if let Some(tx) = handle.shutdown_tx.write().await.take() {
                 let _ = tx.send(());
@@ -388,7 +412,9 @@ impl McpManager {
     }
 
     pub async fn list_tools(&self, server_name: &str) -> Result<Vec<serde_json::Value>> {
-        let resp = self.call(server_name, "tools/list", serde_json::json!({})).await?;
+        let resp = self
+            .call(server_name, "tools/list", serde_json::json!({}))
+            .await?;
 
         if let Some(tools) = resp.get("tools").and_then(|t| t.as_array()) {
             Ok(tools.clone())
@@ -397,10 +423,17 @@ impl McpManager {
         }
     }
 
-    pub async fn call(&self, server_name: &str, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+    pub async fn call(
+        &self,
+        server_name: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let (sender, pending) = {
             let servers = self.servers.read().await;
-            let handle = servers.get(server_name).ok_or_else(|| anyhow!("Server not connected: {}", server_name))?;
+            let handle = servers
+                .get(server_name)
+                .ok_or_else(|| anyhow!("Server not connected: {}", server_name))?;
 
             // Update last used
             let mut last_used = handle.last_used.write().await;
@@ -409,7 +442,10 @@ impl McpManager {
             (handle.sender.clone(), handle.pending.clone())
         };
 
-        let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
         let req = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: method.to_string(),
@@ -423,7 +459,7 @@ impl McpManager {
             map.insert(id, tx);
         }
 
-        if let Err(_) = sender.send(req).await {
+        if sender.send(req).await.is_err() {
             let mut map = pending.write().await;
             map.remove(&id);
             return Err(anyhow!("Failed to send request (server likely dead)"));
@@ -432,15 +468,15 @@ impl McpManager {
         match tokio::time::timeout(Duration::from_secs(60), rx).await {
             Ok(Ok(Ok(res))) => Ok(res),
             Ok(Ok(Err(e))) => {
-                 let mut map = pending.write().await;
-                 map.remove(&id);
-                 Err(e)
+                let mut map = pending.write().await;
+                map.remove(&id);
+                Err(e)
             }
             Ok(Err(_)) => {
-                 let mut map = pending.write().await;
-                 map.remove(&id);
-                 Err(anyhow!("Response channel closed"))
-            },
+                let mut map = pending.write().await;
+                map.remove(&id);
+                Err(anyhow!("Response channel closed"))
+            }
             Err(_) => {
                 let mut map = pending.write().await;
                 map.remove(&id);
@@ -463,13 +499,13 @@ impl McpManager {
             }
         } else {
             for (_, handle) in servers.drain() {
-                 let mut tx_lock = handle.shutdown_tx.write().await;
-                 if let Some(tx) = tx_lock.take() {
+                let mut tx_lock = handle.shutdown_tx.write().await;
+                if let Some(tx) = tx_lock.take() {
                     let _ = tx.send(());
-                 }
-                 let mut process = handle.process.write().await;
-                 let _ = process.kill().await;
-                 let _ = process.wait().await;
+                }
+                let mut process = handle.process.write().await;
+                let _ = process.kill().await;
+                let _ = process.wait().await;
             }
         }
     }
@@ -492,10 +528,13 @@ impl McpManager {
             // Check for dead process
             match handle.process.write().await.try_wait() {
                 Ok(Some(status)) => {
-                    error!("MCP server '{}' exited unexpectedly with status: {}", name, status);
+                    error!(
+                        "MCP server '{}' exited unexpectedly with status: {}",
+                        name, status
+                    );
                     to_remove.push((name.clone(), "dead"));
                 }
-                Ok(None) => {}, // Still running
+                Ok(None) => {} // Still running
                 Err(e) => {
                     error!("Failed to check status of MCP server '{}': {}", name, e);
                     // Assume dead if we can't check status? Or keep it?
@@ -508,14 +547,14 @@ impl McpManager {
         for (name, reason) in to_remove {
             info!("Reaping {} MCP server: {}", reason, name);
             if let Some(handle) = servers.remove(&name) {
-                 let mut tx_lock = handle.shutdown_tx.write().await;
-                 if let Some(tx) = tx_lock.take() {
+                let mut tx_lock = handle.shutdown_tx.write().await;
+                if let Some(tx) = tx_lock.take() {
                     let _ = tx.send(());
-                 }
-                 // If process is already dead, kill/wait might be redundant but safe
-                 let mut process = handle.process.write().await;
-                 let _ = process.kill().await;
-                 let _ = process.wait().await;
+                }
+                // If process is already dead, kill/wait might be redundant but safe
+                let mut process = handle.process.write().await;
+                let _ = process.kill().await;
+                let _ = process.wait().await;
             }
         }
     }
@@ -545,7 +584,10 @@ impl McpManager {
                     let msg = e.to_string();
                     if msg.contains("MCP Error") {
                         // Alive, just didn't like ping
-                        debug!("Server {} responded to ping with error (alive): {}", name, msg);
+                        debug!(
+                            "Server {} responded to ping with error (alive): {}",
+                            name, msg
+                        );
                     } else {
                         // Dead or hung
                         error!("Server {} failed health check: {}", name, msg);
@@ -555,13 +597,13 @@ impl McpManager {
                         // Let's remove it so next ensure_server restarts it.
                         let mut servers = self.servers.write().await;
                         if let Some(handle) = servers.remove(&name) {
-                             let mut tx_lock = handle.shutdown_tx.write().await;
-                             if let Some(tx) = tx_lock.take() {
+                            let mut tx_lock = handle.shutdown_tx.write().await;
+                            if let Some(tx) = tx_lock.take() {
                                 let _ = tx.send(());
-                             }
-                             let mut process = handle.process.write().await;
-                             let _ = process.kill().await;
-                             let _ = process.wait().await;
+                            }
+                            let mut process = handle.process.write().await;
+                            let _ = process.kill().await;
+                            let _ = process.wait().await;
                         }
                     }
                 }

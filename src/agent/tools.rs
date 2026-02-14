@@ -7,16 +7,16 @@ use std::sync::Arc;
 use tracing::debug;
 
 pub mod external;
+pub mod mcp;
+pub mod registry;
 pub mod runner;
 pub mod script;
-pub mod registry;
-pub mod mcp;
 pub mod system;
 
 use super::providers::ToolSchema;
+use crate::agent::DiskMonitor;
 use crate::config::{Config, WorkdirStrategy};
 use crate::memory::MemoryManager;
-use crate::agent::DiskMonitor;
 pub use script::ScriptTool;
 
 #[derive(Debug, Clone)]
@@ -58,10 +58,29 @@ pub fn create_default_tools_with_project(
     let strategy = &config.workdir.strategy;
 
     Ok(vec![
-        Arc::new(BashTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), config.tools.bash_timeout_ms)),
-        Arc::new(ReadFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
-        Arc::new(WriteFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), disk_monitor.clone())),
-        Arc::new(EditFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), disk_monitor.clone())),
+        Arc::new(BashTool::new(
+            workspace.clone(),
+            project_dir.clone(),
+            strategy.clone(),
+            config.tools.bash_timeout_ms,
+        )),
+        Arc::new(ReadFileTool::new(
+            workspace.clone(),
+            project_dir.clone(),
+            strategy.clone(),
+        )),
+        Arc::new(WriteFileTool::new(
+            workspace.clone(),
+            project_dir.clone(),
+            strategy.clone(),
+            disk_monitor.clone(),
+        )),
+        Arc::new(EditFileTool::new(
+            workspace.clone(),
+            project_dir.clone(),
+            strategy.clone(),
+            disk_monitor.clone(),
+        )),
         memory_search_tool,
         Arc::new(MemoryGetTool::new(workspace)),
         Arc::new(WebFetchTool::new(config.tools.web_fetch_max_bytes)),
@@ -69,10 +88,15 @@ pub fn create_default_tools_with_project(
 }
 
 /// Helper to resolve a path based on strategy and cognitive routing
-pub fn resolve_path(path: &str, workspace: &PathBuf, project_dir: &PathBuf, strategy: &WorkdirStrategy) -> PathBuf {
+pub fn resolve_path(
+    path: &str,
+    workspace: &PathBuf,
+    project_dir: &PathBuf,
+    strategy: &WorkdirStrategy,
+) -> PathBuf {
     let expanded = shellexpand::tilde(path).to_string();
     let p = PathBuf::from(&expanded);
-    
+
     if p.is_absolute() {
         return p;
     }
@@ -107,14 +131,14 @@ pub fn resolve_path(path: &str, workspace: &PathBuf, project_dir: &PathBuf, stra
 /// Check if a path refers to a cognitive memory file
 pub fn is_cognitive_path(path: &str) -> bool {
     let p = path.to_lowercase();
-    p == "memory.md" || 
-    p == "soul.md" || 
-    p == "heartbeat.md" || 
-    p == "identity.md" || 
-    p == "user.md" || 
-    p == "agents.md" ||
-    p == "tools.md" ||
-    p.starts_with("memory/")
+    p == "memory.md"
+        || p == "soul.md"
+        || p == "heartbeat.md"
+        || p == "identity.md"
+        || p == "user.md"
+        || p == "agents.md"
+        || p == "tools.md"
+        || p.starts_with("memory/")
 }
 
 // Bash Tool
@@ -126,8 +150,18 @@ pub struct BashTool {
 }
 
 impl BashTool {
-    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy, default_timeout_ms: u64) -> Self {
-        Self { workspace, project_dir, strategy, default_timeout_ms }
+    pub fn new(
+        workspace: PathBuf,
+        project_dir: PathBuf,
+        strategy: WorkdirStrategy,
+        default_timeout_ms: u64,
+    ) -> Self {
+        Self {
+            workspace,
+            project_dir,
+            strategy,
+            default_timeout_ms,
+        }
     }
 }
 
@@ -227,7 +261,11 @@ pub struct ReadFileTool {
 
 impl ReadFileTool {
     pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Self {
-        Self { workspace, project_dir, strategy }
+        Self {
+            workspace,
+            project_dir,
+            strategy,
+        }
     }
 }
 
@@ -305,8 +343,18 @@ pub struct WriteFileTool {
 }
 
 impl WriteFileTool {
-    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy, disk_monitor: Arc<DiskMonitor>) -> Self {
-        Self { workspace, project_dir, strategy, disk_monitor }
+    pub fn new(
+        workspace: PathBuf,
+        project_dir: PathBuf,
+        strategy: WorkdirStrategy,
+        disk_monitor: Arc<DiskMonitor>,
+    ) -> Self {
+        Self {
+            workspace,
+            project_dir,
+            strategy,
+            disk_monitor,
+        }
     }
 }
 
@@ -339,7 +387,9 @@ impl Tool for WriteFileTool {
 
     async fn execute(&self, arguments: &str) -> Result<String> {
         if self.disk_monitor.is_degraded() {
-            return Err(anyhow::anyhow!("Disk full - operation not permitted until space is freed."));
+            return Err(anyhow::anyhow!(
+                "Disk full - operation not permitted until space is freed."
+            ));
         }
 
         let args: Value = serde_json::from_str(arguments)?;
@@ -378,8 +428,18 @@ pub struct EditFileTool {
 }
 
 impl EditFileTool {
-    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy, disk_monitor: Arc<DiskMonitor>) -> Self {
-        Self { workspace, project_dir, strategy, disk_monitor }
+    pub fn new(
+        workspace: PathBuf,
+        project_dir: PathBuf,
+        strategy: WorkdirStrategy,
+        disk_monitor: Arc<DiskMonitor>,
+    ) -> Self {
+        Self {
+            workspace,
+            project_dir,
+            strategy,
+            disk_monitor,
+        }
     }
 }
 
@@ -420,7 +480,9 @@ impl Tool for EditFileTool {
 
     async fn execute(&self, arguments: &str) -> Result<String> {
         if self.disk_monitor.is_degraded() {
-            return Err(anyhow::anyhow!("Disk full - operation not permitted until space is freed."));
+            return Err(anyhow::anyhow!(
+                "Disk full - operation not permitted until space is freed."
+            ));
         }
 
         let args: Value = serde_json::from_str(arguments)?;
@@ -452,7 +514,11 @@ impl Tool for EditFileTool {
 
         fs::write(&resolved_path, &new_content)?;
 
-        Ok(format!("Replaced {} occurrence(s) in {}", count, resolved_path.display()))
+        Ok(format!(
+            "Replaced {} occurrence(s) in {}",
+            count,
+            resolved_path.display()
+        ))
     }
 }
 

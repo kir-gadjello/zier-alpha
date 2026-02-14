@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
-use std::path::{Path, PathBuf};
-use regex::Regex;
 use once_cell::sync::Lazy;
+use regex::Regex;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CommandSafety {
@@ -56,19 +56,26 @@ impl SafetyPolicy {
                 // Attempt to canonicalize to resolve symlinks
                 // Fallback to absolute path if file doesn't exist yet (though usually CWD must exist)
                 let canonical_cwd = abs_cwd.canonicalize().unwrap_or(abs_cwd.clone());
-                let canonical_project = self.project_dir.canonicalize().unwrap_or(self.project_dir.clone());
-                let canonical_workspace = self.workspace_dir.canonicalize().unwrap_or(self.workspace_dir.clone());
+                let canonical_project = self
+                    .project_dir
+                    .canonicalize()
+                    .unwrap_or(self.project_dir.clone());
+                let canonical_workspace = self
+                    .workspace_dir
+                    .canonicalize()
+                    .unwrap_or(self.workspace_dir.clone());
 
                 // Check if CWD is inside project_dir OR workspace_dir
                 // Also allow /tmp and /var/tmp for temporary operations
                 if !canonical_cwd.starts_with(&canonical_project)
-                   && !canonical_cwd.starts_with(&canonical_workspace)
-                   && !canonical_cwd.starts_with("/tmp")
-                   && !canonical_cwd.starts_with("/var/tmp") {
-                        return Ok(CommandSafety::HardBlock(format!(
-                            "CWD confinement violation: {} is outside project/workspace",
-                            path.display()
-                        )));
+                    && !canonical_cwd.starts_with(&canonical_workspace)
+                    && !canonical_cwd.starts_with("/tmp")
+                    && !canonical_cwd.starts_with("/var/tmp")
+                {
+                    return Ok(CommandSafety::HardBlock(format!(
+                        "CWD confinement violation: {} is outside project/workspace",
+                        path.display()
+                    )));
                 }
             }
         }
@@ -79,7 +86,7 @@ impl SafetyPolicy {
             for arg in cmd {
                 for char in dangerous_chars {
                     if arg.contains(char) {
-                         return Ok(CommandSafety::HardBlock(format!(
+                        return Ok(CommandSafety::HardBlock(format!(
                             "Shell chaining/injection detected ('{}') and allow_shell_chaining is false",
                             char
                         )));
@@ -93,28 +100,42 @@ impl SafetyPolicy {
         // 3. Heuristic Blocking
 
         // HARD BLOCK
-        static HARD_BLOCK_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(rm\s+-rf\s+(/|~)|mkfs\.|dd\s+if=|:\(\)\{\s+:\|:&;?\};:)").unwrap());
+        static HARD_BLOCK_REGEX: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(rm\s+-rf\s+(/|~)|mkfs\.|dd\s+if=|:\(\)\{\s+:\|:&;?\};:)").unwrap()
+        });
         if HARD_BLOCK_REGEX.is_match(&full_cmd_str) {
-             return Ok(CommandSafety::HardBlock("Destructive command detected (rm -rf root, mkfs, dd, fork bomb)".to_string()));
+            return Ok(CommandSafety::HardBlock(
+                "Destructive command detected (rm -rf root, mkfs, dd, fork bomb)".to_string(),
+            ));
         }
 
         // REQUIRE APPROVAL
-        static APPROVAL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(terraform\s+destroy|aws\s+.*\s+delete|az\s+group\s+delete|nmap|masscan)").unwrap());
+        static APPROVAL_REGEX: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(terraform\s+destroy|aws\s+.*\s+delete|az\s+group\s+delete|nmap|masscan)")
+                .unwrap()
+        });
         if APPROVAL_REGEX.is_match(&full_cmd_str) {
-             return Ok(CommandSafety::RequireApproval(format!("Command requires approval: {}", full_cmd_str)));
+            return Ok(CommandSafety::RequireApproval(format!(
+                "Command requires approval: {}",
+                full_cmd_str
+            )));
         }
 
         // SOFT BLOCK
         if full_cmd_str.contains("grep -r /") {
-             return Ok(CommandSafety::SoftBlock("Recursive grep on root detected. Please scope to project dir.".to_string()));
+            return Ok(CommandSafety::SoftBlock(
+                "Recursive grep on root detected. Please scope to project dir.".to_string(),
+            ));
         }
 
         // 4. Tmux Payload Inspection
         // If the command is tmux, we inspect arguments for dangerous patterns
         if cmd[0] == "tmux" {
-             if full_cmd_str.contains("cat /etc/shadow") || full_cmd_str.contains("sudo") {
-                  return Ok(CommandSafety::HardBlock("Dangerous tmux payload detected".to_string()));
-             }
+            if full_cmd_str.contains("cat /etc/shadow") || full_cmd_str.contains("sudo") {
+                return Ok(CommandSafety::HardBlock(
+                    "Dangerous tmux payload detected".to_string(),
+                ));
+            }
         }
 
         Ok(CommandSafety::Allowed)

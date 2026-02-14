@@ -21,8 +21,14 @@ pub fn compile_profile(policy: &SandboxPolicy, executable_path: &str, script_pat
     }
 
     // Always allow reading the executable itself and the script being executed
-    sbpl.push_str(&format!("(allow file-read* (literal \"{}\"))\n", executable_path));
-    sbpl.push_str(&format!("(allow file-read* (literal \"{}\"))\n", script_path));
+    sbpl.push_str(&format!(
+        "(allow file-read* (literal \"{}\"))\n",
+        executable_path
+    ));
+    sbpl.push_str(&format!(
+        "(allow file-read* (literal \"{}\"))\n",
+        script_path
+    ));
 
     // User-defined Read Paths
     for path in &policy.allow_read {
@@ -51,7 +57,10 @@ fn append_path_rule(sbpl: &mut String, rule_type: &str, path: &str) {
     // Expand tilde if present (simple expansion)
     let expanded_path = shellexpand::tilde(clean_path).to_string();
 
-    sbpl.push_str(&format!("(allow {} ({} \"{}\"))\n", rule_type, directive, expanded_path));
+    sbpl.push_str(&format!(
+        "(allow {} ({} \"{}\"))\n",
+        rule_type, directive, expanded_path
+    ));
 }
 
 #[cfg(test)]

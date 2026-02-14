@@ -6,19 +6,19 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use daemonize::Daemonize;
 
+use zier_alpha::agent::ScriptTool;
 use zier_alpha::concurrency::TurnGate;
 use zier_alpha::config::Config;
+use zier_alpha::config::TelegramMode;
 use zier_alpha::heartbeat::HeartbeatRunner;
-use zier_alpha::ingress::IngressBus;
 use zier_alpha::ingress::controller::ingress_loop;
+use zier_alpha::ingress::IngressBus;
 use zier_alpha::memory::MemoryManager;
 use zier_alpha::prompts::PromptRegistry;
 use zier_alpha::scheduler::Scheduler;
-use zier_alpha::server::{Server, telegram_polling::TelegramPollingService};
-use zier_alpha::config::TelegramMode;
-use zier_alpha::scripting::ScriptService;
 use zier_alpha::scripting::loader::ScriptLoader;
-use zier_alpha::agent::ScriptTool;
+use zier_alpha::scripting::ScriptService;
+use zier_alpha::server::{telegram_polling::TelegramPollingService, Server};
 
 /// Synchronously stop the daemon (for use before Tokio runtime starts)
 pub fn stop_sync() -> Result<()> {
@@ -183,7 +183,8 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     // Determine project directory for extension sandbox
     let project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     // Build a permissive policy for extensions
-    let extension_policy = crate::cli::common::make_extension_policy(&project_dir, &config.workspace_path());
+    let extension_policy =
+        crate::cli::common::make_extension_policy(&project_dir, &config.workspace_path());
 
     // VIZIER: Initialize Scripting Service
     let script_service = ScriptService::new(
@@ -192,7 +193,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
         project_dir.clone(),
         config.workdir.strategy.clone(),
         Some(bus.clone()),
-        Some(scheduler.clone())
+        Some(scheduler.clone()),
     )?;
     let script_loader = ScriptLoader::new(script_service.clone());
 
@@ -319,7 +320,6 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
 
     Ok(())
 }
-
 
 #[derive(Args)]
 pub struct DaemonArgs {

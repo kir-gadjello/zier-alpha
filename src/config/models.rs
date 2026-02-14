@@ -1,14 +1,14 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use anyhow::Result;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ModelConfig {
     pub provider: Option<String>,
     pub api_base: Option<String>,
     pub api_key_env: Option<String>, // e.g., "OPENROUTER_API_KEY"
-    pub model: String, // The actual wire name (e.g., "openai/gpt-4o")
-    pub extend: Option<String>, // Parent key
+    pub model: String,               // The actual wire name (e.g., "openai/gpt-4o")
+    pub extend: Option<String>,      // Parent key
     pub timeout: Option<u64>,
     pub extra_body: Option<serde_json::Value>,
     pub fallback_models: Option<Vec<String>>,
@@ -20,7 +20,7 @@ pub struct ModelConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FallbackSettings {
-    pub default: String, // "deny" or "allow"
+    pub default: String,    // "deny" or "allow"
     pub allow: Vec<String>, // ["429", "5*"]
     pub deny: Vec<String>,
 }
@@ -39,7 +39,10 @@ pub fn resolve_model_config(
             config_chain.push(config.clone());
             if let Some(parent) = &config.extend {
                 if visited.contains(parent) {
-                    anyhow::bail!("Circular dependency detected in model config: {:?}", visited);
+                    anyhow::bail!(
+                        "Circular dependency detected in model config: {:?}",
+                        visited
+                    );
                 }
                 current_key = parent.clone();
                 visited.push(current_key.clone());
@@ -61,18 +64,38 @@ pub fn resolve_model_config(
     let mut final_config = config_chain[0].clone();
 
     for child in config_chain.iter().skip(1) {
-        if let Some(v) = &child.provider { final_config.provider = Some(v.clone()); }
-        if let Some(v) = &child.api_base { final_config.api_base = Some(v.clone()); }
-        if let Some(v) = &child.api_key_env { final_config.api_key_env = Some(v.clone()); }
+        if let Some(v) = &child.provider {
+            final_config.provider = Some(v.clone());
+        }
+        if let Some(v) = &child.api_base {
+            final_config.api_base = Some(v.clone());
+        }
+        if let Some(v) = &child.api_key_env {
+            final_config.api_key_env = Some(v.clone());
+        }
         final_config.model = child.model.clone(); // Always override model name
-        // extend is irrelevant in final config
-        if let Some(v) = child.timeout { final_config.timeout = Some(v); }
-        if let Some(v) = &child.extra_body { final_config.extra_body = Some(v.clone()); }
-        if let Some(v) = &child.fallback_models { final_config.fallback_models = Some(v.clone()); }
-        if let Some(v) = &child.fallback_settings { final_config.fallback_settings = Some(v.clone()); }
-        if let Some(v) = &child.aliases { final_config.aliases = Some(v.clone()); }
-        if let Some(v) = child.supports_vision { final_config.supports_vision = Some(v); }
-    if let Some(v) = &child.tokenizer_name { final_config.tokenizer_name = Some(v.clone()); }
+                                                  // extend is irrelevant in final config
+        if let Some(v) = child.timeout {
+            final_config.timeout = Some(v);
+        }
+        if let Some(v) = &child.extra_body {
+            final_config.extra_body = Some(v.clone());
+        }
+        if let Some(v) = &child.fallback_models {
+            final_config.fallback_models = Some(v.clone());
+        }
+        if let Some(v) = &child.fallback_settings {
+            final_config.fallback_settings = Some(v.clone());
+        }
+        if let Some(v) = &child.aliases {
+            final_config.aliases = Some(v.clone());
+        }
+        if let Some(v) = child.supports_vision {
+            final_config.supports_vision = Some(v);
+        }
+        if let Some(v) = &child.tokenizer_name {
+            final_config.tokenizer_name = Some(v.clone());
+        }
     }
 
     Ok(final_config)

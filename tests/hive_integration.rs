@@ -25,7 +25,10 @@ fn test_hive_integration() -> Result<()> {
     if source_ext.exists() {
         copy_dir_recursive(&source_ext, &ext_dir)?;
     } else {
-        eprintln!("Hive extension source not found at {}", source_ext.display());
+        eprintln!(
+            "Hive extension source not found at {}",
+            source_ext.display()
+        );
         // In some CI envs, cwd might be different. Try finding it.
         // But for this environment, it should be present.
         return Ok(());
@@ -33,7 +36,8 @@ fn test_hive_integration() -> Result<()> {
 
     // Create config
     let config_path = root.join("config.toml");
-    let config_content = format!(r#"
+    let config_content = format!(
+        r#"
 [agent]
 default_model = "mock/gpt-4o"
 
@@ -45,19 +49,24 @@ agents_dir = "agents"
 workspace = "{}"
 
 [providers.mock]
-"#, workspace_dir.display());
+"#,
+        workspace_dir.display()
+    );
     fs::write(&config_path, config_content)?;
 
     // Create a test agent in the "agents" dir (scanned by registry)
     let agent_path = agents_dir.join("echo.md");
-    fs::write(&agent_path, r#"---
+    fs::write(
+        &agent_path,
+        r#"---
 description: "Echo bot"
 model: "mock/gpt-4o"
 tools: ["hive_delegate"]
 context_mode: "fresh"
 ---
 You are EchoBot.
-"#)?;
+"#,
+    )?;
 
     // 2. Run Test: hive_fresh_basic
     // Trigger delegation via mock tool call
@@ -70,7 +79,7 @@ You are EchoBot.
     fs::create_dir(&bin_dir)?;
 
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&bin_path, bin_dir.join("zier"))?;
+    std::os::unix::fs::symlink(bin_path, bin_dir.join("zier"))?;
     #[cfg(windows)]
     std::os::windows::fs::symlink_file(&bin_path, bin_dir.join("zier.exe"))?;
 
@@ -88,32 +97,52 @@ You are EchoBot.
         .env("HOME", &home_dir) // Force Config::load to use our config
         .env("ZIER_ALPHA_WORKSPACE", &workspace_dir)
         // Add our temp bin dir to PATH so 'zier' is found
-        .env("PATH", format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default()))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
         .current_dir(root)
         .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {
         panic!("zier ask failed with status: {:?}", output.status);
     }
 
-    assert!(stdout.contains("Mock response"), "Output did not contain expected mock response");
+    assert!(
+        stdout.contains("Mock response"),
+        "Output did not contain expected mock response"
+    );
 
     // 3. Test: hive_depth_limit
-    let output_depth = Command::new(&bin_path)
+    let output_depth = Command::new(bin_path)
         .arg("ask")
         .arg("test_tool_json:hive_delegate|{\"agent_name\": \"echo\", \"task\": \"hello\"}")
         .env("HOME", &home_dir)
         .env("ZIER_ALPHA_WORKSPACE", &workspace_dir)
-        .env("PATH", format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default()))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
         .env("ZIER_HIVE_DEPTH", "3")
         .current_dir(root)
         .output()?;
 
     let stdout_depth = String::from_utf8_lossy(&output_depth.stdout);
-    assert!(stdout_depth.contains("Max recursion depth exceeded"), "Output did not contain recursion error");
+    assert!(
+        stdout_depth.contains("Max recursion depth exceeded"),
+        "Output did not contain recursion error"
+    );
 
     // 4. Test: hive_fork_context
     // Create a mock session file in the expected path: ~/.zier-alpha/agents/main/sessions/{id}.jsonl
@@ -129,12 +158,14 @@ You are EchoBot.
         r#"{{"type":"session","version":1,"id":"{0}","timestamp":"{1}","cwd":"{2}"}}
 {{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"The secret code is 42"}}]}}}}
 "#,
-        session_id, timestamp, root.display()
+        session_id,
+        timestamp,
+        root.display()
     );
     fs::write(&session_path, session_content)?;
 
     // Run ask with ZIER_SESSION_ID set, triggering fork mode
-    let output_fork = Command::new(&bin_path)
+    let output_fork = Command::new(bin_path)
         .arg("ask")
         // We instruct the subagent to recall the secret code
         .arg("test_tool_json:hive_delegate|{\"agent_name\": \"echo\", \"task\": \"What is the secret code?\", \"context_mode\": \"fork\"}")
@@ -172,7 +203,7 @@ You are EchoBot.
 
     // Let's enable RUST_LOG for the fork test
     // Rerun fork test with logging
-    let output_fork_log = Command::new(&bin_path)
+    let output_fork_log = Command::new(bin_path)
         .arg("ask")
         .arg("test_tool_json:hive_delegate|{\"agent_name\": \"echo\", \"task\": \"Context check\", \"context_mode\": \"fork\"}")
         .env("HOME", &home_dir)
@@ -205,7 +236,11 @@ You are EchoBot.
     // The orchestrator throws if it fails to write the hydration file.
 
     assert!(output_fork.status.success());
-    assert!(stdout_fork.contains("The secret code is 42"), "Expected hydrated response with secret, got: {}", stdout_fork);
+    assert!(
+        stdout_fork.contains("The secret code is 42"),
+        "Expected hydrated response with secret, got: {}",
+        stdout_fork
+    );
 
     Ok(())
 }
