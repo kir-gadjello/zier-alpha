@@ -265,7 +265,7 @@ impl HeartbeatRunner {
         let session_key = "heartbeat"; // Use dedicated session key for heartbeat state
 
         // Load session store to check for duplicates
-        if let Ok(mut store) = SessionStore::load_for_agent(&self.agent_id) {
+        if let Ok(store) = SessionStore::load_for_agent(&self.agent_id) {
             if let Some(entry) = store.get(session_key) {
                 if entry.is_duplicate_heartbeat(&response) {
                     debug!(

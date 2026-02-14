@@ -259,7 +259,7 @@ impl SessionStore {
 
     /// Set CLI session ID for a session and provider
     pub async fn set_cli_session_id(
-        mut self,
+        self,
         session_key: &str,
         session_id: &str,
         provider: &str,
