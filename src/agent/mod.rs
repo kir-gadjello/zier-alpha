@@ -413,6 +413,11 @@ impl Agent {
         ).await
     }
 
+    /// Get the current system prompt (context) of the active session.
+    pub async fn system_prompt(&self) -> Option<String> {
+        self.session_manager.session().read().await.system_context().map(String::from)
+    }
+
     pub async fn chat_stream(&mut self, message: &str) -> Result<StreamResult> {
         self.chat_engine.chat_stream(message).await
     }

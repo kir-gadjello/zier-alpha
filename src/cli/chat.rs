@@ -146,67 +146,8 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
     };
 
     let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Full, project_dir.clone()).await?;
-    let workspace_lock = WorkspaceLock::new()?;
 
-    // Determine session to use
-    let session_id = if let Some(id) = args.session {
-        Some(id)
-    } else if args.resume {
-        get_last_session_id_for_agent(agent_id).await?
-    } else {
-        None
-    };
-
-    // Resume or create session
-    if let Some(session_id) = session_id {
-        match agent.resume_session(&session_id).await {
-            Ok(()) => {
-                let status = agent.session_status().await;
-                println!(
-                    "Resumed session {} ({} messages)\n",
-                    &session_id[..8],
-                    status.message_count
-                );
-            }
-            Err(e) => {
-                eprintln!("Could not resume session: {}. Starting new session.\n", e);
-                agent.new_session().await?;
-            }
-        }
-    } else {
-        agent.new_session().await?;
-    }
-
-    // Load skills from workspace
-    let workspace = config.workspace_path();
-    let skills = load_skills(&workspace).unwrap_or_default();
-    let skills_count = skills.iter().filter(|s| s.eligibility.is_ready()).count();
-
-    let embedding_status = if agent.has_embeddings() {
-        " | Embeddings: enabled"
-    } else {
-        ""
-    };
-    let skills_status = if skills_count > 0 {
-        format!(" | Skills: {}", skills_count)
-    } else {
-        String::new()
-    };
-    println!(
-        "Zier Alpha v{} | Agent: {} | Model: {} | Memory: {} chunks{}{}\n",
-        env!("CARGO_PKG_VERSION"),
-        agent_id,
-        agent.model(),
-        agent.memory_chunk_count().await,
-        embedding_status,
-        skills_status
-    );
-    println!("Type /help for commands, /quit to exit\n");
-
-    // Store agent_id for command handling
-    let agent_id = agent_id.to_string();
-
-    // Load enabled extensions (e.g., Hive)
+    // Load enabled extensions (e.g., Hive) BEFORE session creation
     if let Some(ref hive_config) = config.extensions.hive {
         if hive_config.enabled {
             // Find hive extension path
@@ -276,6 +217,66 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
             }
         }
     }
+
+    let workspace_lock = WorkspaceLock::new()?;
+
+    // Determine session to use
+    let session_id = if let Some(id) = args.session {
+        Some(id)
+    } else if args.resume {
+        get_last_session_id_for_agent(agent_id).await?
+    } else {
+        None
+    };
+
+    // Resume or create session (AFTER Hive loading)
+    if let Some(session_id) = session_id {
+        match agent.resume_session(&session_id).await {
+            Ok(()) => {
+                let status = agent.session_status().await;
+                println!(
+                    "Resumed session {} ({} messages)\n",
+                    &session_id[..8],
+                    status.message_count
+                );
+            }
+            Err(e) => {
+                eprintln!("Could not resume session: {}. Starting new session.\n", e);
+                agent.new_session().await?;
+            }
+        }
+    } else {
+        agent.new_session().await?;
+    }
+
+    // Load skills from workspace
+    let workspace = config.workspace_path();
+    let skills = load_skills(&workspace).unwrap_or_default();
+    let skills_count = skills.iter().filter(|s| s.eligibility.is_ready()).count();
+
+    let embedding_status = if agent.has_embeddings() {
+        " | Embeddings: enabled"
+    } else {
+        ""
+    };
+    let skills_status = if skills_count > 0 {
+        format!(" | Skills: {}", skills_count)
+    } else {
+        String::new()
+    };
+    println!(
+        "Zier Alpha v{} | Agent: {} | Model: {} | Memory: {} chunks{}{}\n",
+        env!("CARGO_PKG_VERSION"),
+        agent_id,
+        agent.model(),
+        agent.memory_chunk_count().await,
+        embedding_status,
+        skills_status
+    );
+    println!("Type /help for commands, /quit to exit\n");
+
+    // Store agent_id for command handling
+    let agent_id = agent_id.to_string();
 
     let mut rl = DefaultEditor::new()?;
     let mut stdout = io::stdout();

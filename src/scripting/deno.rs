@@ -367,21 +367,6 @@ pub async fn op_zier_exec(
         },
     }
 
-    let mut command = tokio::process::Command::new(&cmd[0]);
-    if cmd.len() > 1 {
-        command.args(&cmd[1..]);
-    }
-
-    // Environment validation
-    if let Some(ref env) = opts.env {
-        for key in env.keys() {
-            let key_upper = key.to_uppercase();
-            if key_upper == "PATH" || key_upper == "HOME" || key_upper.starts_with("LD_") || key_upper == "SHELL" || key_upper == "PYTHONPATH" {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Setting environment variable {} is not allowed", key)));
-            }
-        }
-    }
-
     // Determine target CWD
     let target_cwd = if let Some(ref path) = opts.cwd {
         if Path::new(path).is_absolute() {
@@ -395,13 +380,29 @@ pub async fn op_zier_exec(
 
     let args = if cmd.len() > 1 { cmd[1..].to_vec() } else { Vec::new() };
 
+    // Merge parent environment with overrides (if any)
+    // Child processes should inherit parent environment by default; `opts.env` provides overrides.
+    let mut merged_env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    if let Some(ref overrides) = opts.env {
+        // Validate that overrides don't attempt to set blocked variables (PATH, HOME, etc.)
+        // We allow inheriting these from parent, but scripts cannot explicitly set them as overrides.
+        for key in overrides.keys() {
+            let key_upper = key.to_uppercase();
+            if key_upper == "PATH" || key_upper == "HOME" || key_upper.starts_with("LD_") || key_upper == "SHELL" || key_upper == "PYTHONPATH" {
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Setting environment variable {} is not allowed", key)));
+            }
+        }
+        merged_env.extend(overrides.clone());
+    }
+
     let output = if {
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
         sandbox.policy.enable_os_sandbox
     } {
         use crate::agent::tools::runner::run_sandboxed_command;
-        run_sandboxed_command(&cmd[0], &args, &target_cwd, opts.env)
+        // Pass merged environment (clone for sandboxed path)
+        run_sandboxed_command(&cmd[0], &args, &target_cwd, Some(merged_env.clone()))
             .await
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
     } else {
@@ -409,11 +410,8 @@ pub async fn op_zier_exec(
         let mut command = tokio::process::Command::new(&cmd[0]);
         command.args(&args);
         command.current_dir(&target_cwd);
-        if let Some(env) = opts.env {
-            command.envs(env);
-        }
+        command.envs(&merged_env);
 
-        // Stdin/out handling?
         // op_zier_exec assumes captured output.
         command.output().await?
     };
@@ -825,15 +823,22 @@ impl DenoRuntime {
             }
         }
 
-
         let module_specifier = ModuleSpecifier::parse(&format!("file://{}", path))?;
-
         let mod_id = self.runtime.load_main_es_module_from_code(&module_specifier, code).await?;
-
-        let _ = self.runtime.mod_evaluate(mod_id).await?;
-
-        self.runtime.run_event_loop(Default::default()).await?;
-
+        // Interleave mod_evaluate with run_event_loop to allow top-level await to progress.
+        // mod_evaluate future depends on event loop progress; run_event_loop pumps events.
+        let mut eval_fut = self.runtime.mod_evaluate(mod_id);
+        loop {
+            tokio::select! {
+                res = &mut eval_fut => {
+                    res?;
+                    break;
+                }
+                _ = self.runtime.run_event_loop(Default::default()) => {
+                    // Continue looping until eval_fut completes
+                }
+            }
+        }
 
         Ok(())
     }

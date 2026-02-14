@@ -25,6 +25,8 @@
 
 **Dependencies**: None
 
+✅ **Completed**: 2025‑02‑14 – Hive loading moved before `new_session()`.
+
 ---
 
 ### Task 1.2: Reorder Hive Extension Loading in `zier chat`
@@ -42,6 +44,8 @@
 - `test_hive_integration` still passes (uses `zier ask`, but validates consistency)
 
 **Dependencies**: Task 1.1 (for pattern reference)
+
+✅ **Completed**: 2025‑02‑14 – Hive loading moved before session creation/resumption.
 
 ---
 
@@ -81,6 +85,8 @@
 
 **Dependencies**: None
 
+✅ **Completed**: 2025‑02‑14 – Environment merging implemented.
+
 ---
 
 ### Task 1.4: Inherit Environment in MCP Server Spawning
@@ -108,6 +114,8 @@
 
 **Dependencies**: None
 
+✅ **Completed**: 2025‑02‑14 – MCP servers now inherit parent env.
+
 ---
 
 ## Priority 2: Testing & Validation
@@ -131,6 +139,8 @@
 - Test is deterministic and self-contained (no network calls)
 
 **Dependencies**: Tasks 1.1-1.4 (must have fixes in place)
+
+✅ **Completed**: 2025‑02‑14 – Test implemented and passing. Added `system_prompt()` getter to `Agent`.
 
 ---
 

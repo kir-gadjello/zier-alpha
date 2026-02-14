@@ -168,6 +168,9 @@ impl McpManager {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
+        // Inherit parent environment to ensure PATH, HOME, etc. are available for command resolution
+        cmd.envs(std::env::vars());
+        // Then apply server-specific overrides
         if let Some(env) = config.env {
             cmd.envs(env);
         }

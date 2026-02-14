@@ -58,9 +58,8 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
     };
 
     let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Stateless, project_dir.clone()).await?;
-    agent.new_session().await?;
 
-    // Load extensions if enabled
+    // Load extensions if enabled (BEFORE session creation)
     if let Some(ref hive_config) = config.extensions.hive {
         if hive_config.enabled {
             // Find hive extension path
@@ -136,6 +135,8 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
             }
         }
     }
+
+    agent.new_session().await?;
 
     if let Some(hydrate_path) = &args.hydrate_from {
         let path = PathBuf::from(hydrate_path);
