@@ -18,6 +18,8 @@ async fn test_openai_proxy_chat() {
     config.server.openai_proxy.enabled = true;
     config.server.openai_proxy.port = 37779; 
     config.server.openai_proxy.bind = "127.0.0.1".to_string();
+    // Prevent disk monitor from entering degraded mode in test environments
+    config.disk.min_free_percent = 1;
 
     let server = Server::new(&config).unwrap();
     

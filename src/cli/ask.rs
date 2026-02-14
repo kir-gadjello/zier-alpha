@@ -9,6 +9,7 @@ use zier_alpha::scripting::ScriptService;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use serde_json;
 
 #[derive(Args)]
 pub struct AskArgs {
@@ -56,6 +57,9 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
         context_window: config.agent.context_window,
         reserve_tokens: config.agent.reserve_tokens,
     };
+
+    // Capture model for parent context before moving agent_config
+    let parent_model_for_context = agent_config.model.clone();
 
     let mut agent = Agent::new_with_project(agent_config, &config, memory, ContextStrategy::Stateless, project_dir.clone()).await?;
 
@@ -123,6 +127,13 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                                      }
                                      agent.set_tools(current_tools);
                                      tracing::info!("Hive extension loaded successfully");
+
+                                     // Propagate parent context to Hive for child agent inheritance
+                                     let parent_model = parent_model_for_context.clone();
+                                     let parent_tools: Vec<String> = agent.tools().iter().map(|t| t.name().to_string()).collect();
+                                     if let Err(e) = svc.set_parent_context(Some(parent_model), Some(parent_tools), None).await {
+                                         tracing::warn!("Failed to set parent context on Hive: {}", e);
+                                     }
                                  }
                                  Err(e) => tracing::error!("Failed to get tools from Hive extension: {}", e),
                              }
@@ -132,6 +143,26 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                  }
             } else {
                 tracing::warn!("Hive extension enabled but main.js not found");
+            }
+        }
+    }
+
+    // Apply child tool restrictions if ZIER_CHILD_TOOLS is set (Hive inheritance)
+    if let Ok(child_tools_json) = std::env::var("ZIER_CHILD_TOOLS") {
+        match serde_json::from_str::<Vec<String>>(&child_tools_json) {
+            Ok(allowed_tools) => {
+                let mut filtered = Vec::new();
+                for tool in agent.tools() {
+                    if allowed_tools.contains(&tool.name().to_string()) {
+                        filtered.push(tool.clone());
+                    }
+                }
+                let filtered_count = filtered.len();
+                agent.set_tools(filtered);
+                tracing::info!("Child tool filtering applied: {} tools remaining", filtered_count);
+            }
+            Err(e) => {
+                tracing::warn!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);
             }
         }
     }

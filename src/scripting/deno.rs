@@ -43,6 +43,10 @@ pub struct SandboxState {
     pub scheduler: Option<Arc<Mutex<Scheduler>>>,
     pub mcp_manager: Option<Arc<McpManager>>,
     pub capabilities: Capabilities,
+    // Parent context for Hive tool inheritance
+    pub parent_model: Option<String>,
+    pub parent_tools: Option<Vec<String>>,
+    pub parent_system_prompt_append: Option<String>,
 }
 
 fn check_path(path: &str, allowed_paths: &[PathBuf], _is_write: bool, state: &SandboxState) -> Result<PathBuf, std::io::Error> {
@@ -577,6 +581,27 @@ pub async fn op_zier_mcp_shutdown(
     }
 }
 
+#[op2]
+#[serde]
+pub fn op_zier_get_parent_context(
+    state: &mut OpState,
+) -> Option<serde_json::Value> {
+    let sandbox = state.borrow::<SandboxState>();
+    match (&sandbox.parent_model, &sandbox.parent_tools, &sandbox.parent_system_prompt_append) {
+        (model, tools, spa) => {
+            if model.is_none() && tools.is_none() && spa.is_none() {
+                None
+            } else {
+                Some(serde_json::json!({
+                    "model": model,
+                    "tools": tools,
+                    "systemPromptAppend": spa,
+                }))
+            }
+        }
+    }
+}
+
 // Needed to make SandboxState cloneable for above usage or just re-borrow
 impl Clone for SandboxState {
     fn clone(&self) -> Self {
@@ -596,6 +621,9 @@ impl Clone for SandboxState {
             scheduler: self.scheduler.clone(),
             mcp_manager: self.mcp_manager.clone(),
             capabilities: self.capabilities.clone(),
+            parent_model: self.parent_model.clone(),
+            parent_tools: self.parent_tools.clone(),
+            parent_system_prompt_append: self.parent_system_prompt_append.clone(),
         }
     }
 }
@@ -624,7 +652,8 @@ deno_core::extension!(
         op_zier_mcp_ensure_server,
         op_zier_mcp_list_tools,
         op_zier_mcp_call,
-        op_zier_mcp_shutdown
+        op_zier_mcp_shutdown,
+        op_zier_get_parent_context,
     ],
 );
 
@@ -682,6 +711,9 @@ impl DenoRuntime {
             scheduler,
             mcp_manager,
             capabilities: caps,
+            parent_model: None,
+            parent_tools: None,
+            parent_system_prompt_append: None,
         };
         runtime.op_state().borrow_mut().put(state);
 
@@ -748,6 +780,7 @@ impl DenoRuntime {
                 hooks: {
                     on_status: undefined
                 },
+                getParentContext: () => Deno.core.ops.op_zier_get_parent_context(),
                 workspace: null
             };
         "#;
@@ -850,6 +883,15 @@ impl DenoRuntime {
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
         sandbox.registered_tools.clone()
+    }
+
+    pub fn set_parent_context(&mut self, model: Option<String>, tools: Option<Vec<String>>, system_prompt_append: Option<String>) {
+        let op_state = self.runtime.op_state();
+        let mut state = op_state.borrow_mut();
+        let sandbox = state.borrow_mut::<SandboxState>();
+        sandbox.parent_model = model;
+        sandbox.parent_tools = tools;
+        sandbox.parent_system_prompt_append = system_prompt_append;
     }
 
     pub async fn execute_tool(&mut self, name: &str, args: &str) -> Result<String, AnyError> {

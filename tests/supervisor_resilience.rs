@@ -2,11 +2,11 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::thread;
 use std::io::Write;
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
 #[test]
 fn test_supervisor_restarts_on_crash() {
-    // 1. Build the binary (no default features to avoid winit issues)
+    // Build the binary (no default features to avoid winit issues)
     let status = Command::new("cargo")
         .args(&["build", "--bin", "zier-alpha", "--no-default-features"])
         .status()
@@ -19,34 +19,31 @@ fn test_supervisor_restarts_on_crash() {
         "./target/release/zier-alpha"
     };
 
-    // 2. Create invalid config file to trigger child failure
-    let mut bad_config = NamedTempFile::new().unwrap();
-    write!(bad_config, "this is not valid toml").unwrap();
-    let _config_path = bad_config.path().to_str().unwrap().to_string();
+    // Create a temporary HOME directory with an invalid config file
+    let temp_home = TempDir::new().unwrap();
+    let home_dir = temp_home.path();
+    let config_dir = home_dir.join(".zier-alpha");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config_path = config_dir.join("config.toml");
+    std::fs::write(&config_path, "this is not valid toml").unwrap();
 
-    // 3. Run supervisor
-    // We use "ask" which should attempt to use LLM.
-    // Since we don't configure valid keys/tools in default environment, it should fail.
-    // If "claude" is missing (default model), it might fail.
-    // Or we force a non-existent model/provider.
-    // "invalid/model" might fail config validation or agent creation.
-    // Agent creation failure returns error -> main returns error -> exit non-zero.
-
+    // Run supervisor with HOME pointing to the invalid config
     let mut child = Command::new(bin_path)
         .arg("--supervised")
         .arg("--agent")
         .arg("crash_test_agent")
         .arg("ask")
         .arg("why is the sky blue")
-        .env("OPENAI_API_KEY", "invalid-key") // Ensure if it falls back it fails
+        .env("HOME", home_dir) // Use temporary HOME with invalid config
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("Failed to spawn supervisor");
 
-    // 4. Monitor output for restart messages
+    // Wait a few seconds for child to start and crash
     thread::sleep(Duration::from_secs(5));
 
+    // Kill the supervisor (it will keep restarting, but we stop after 5s)
     let _ = child.kill();
     let output = child.wait_with_output().expect("Failed to wait on child");
 
@@ -56,11 +53,10 @@ fn test_supervisor_restarts_on_crash() {
     println!("Supervisor stdout:\n{}", stdout);
     println!("Supervisor stderr:\n{}", stderr);
 
+    // Supervisor should have started and detected at least one crash/restart cycle
     assert!(stdout.contains("Starting supervisor for"), "Supervisor didn't start. Stderr: {}", stderr);
-    assert!(stdout.contains("Child exited with error"), "Supervisor didn't detect crash");
+    assert!(stdout.contains("Child exited with error"), "Supervisor didn't detect any crash. stdout: {}", stdout);
     assert!(stdout.contains("Restarting in"), "Supervisor didn't attempt restart");
-
-    // Check that it tried at least twice
     let crash_count = stdout.matches("Child exited with error").count();
     assert!(crash_count >= 1, "Supervisor should have restarted at least once (count: {})", crash_count);
 }

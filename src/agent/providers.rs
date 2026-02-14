@@ -1616,15 +1616,13 @@ impl LLMProvider for ClaudeCliProvider {
 
         // Update CLI session ID for next turn and persist to session store
         if let Some(ref new_cli_sid) = new_session_id {
-            let mut cli_session = self
-                .cli_session_id
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
-            *cli_session = Some(new_cli_sid.clone());
-
-            // Persist to session store for cross-restart continuity
-            // Drop guard before await to avoid Send issues
-            drop(cli_session);
+            {
+                let mut guard = self
+                    .cli_session_id
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
+                *guard = Some(new_cli_sid.clone());
+            }
 
             if let Err(e) = save_cli_session_to_store(
                 &self.session_key,
@@ -1879,7 +1877,7 @@ impl LLMProvider for ClaudeCliProvider {
                                     &zier_alpha_session_id,
                                     CLAUDE_CLI_PROVIDER,
                                     sid,
-                                ) {
+                                ).await {
                                     debug!("Failed to persist CLI session: {}", e);
                                 }
 

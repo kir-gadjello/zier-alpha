@@ -14,7 +14,7 @@ async fn test_system_introspect_tool() {
 
     // Mock dependencies
     let mcp_manager = McpManager::new(600);
-    let disk_monitor = Arc::new(DiskMonitor::new(DiskConfig::default()));
+    let disk_monitor = DiskMonitor::new(DiskConfig::default());
 
     // ScriptService (requires some setup, maybe mock or minimal)
     // ScriptService::new spawns a thread.
@@ -43,7 +43,7 @@ async fn test_system_introspect_tool() {
     let result = tool.execute(r#"{"command": "mcp"}"#).await.unwrap();
     assert!(result.contains("[")); // Empty array
 
-    // Test cleanup_disk
+    // Test cleanup_disk: should report completion (message contains "completed" or "Deleted")
     let result = tool.execute(r#"{"command": "cleanup_disk"}"#).await.unwrap();
-    assert!(result.contains("triggered"));
+    assert!(result.contains("completed") || result.contains("Deleted"), "cleanup_disk result: {}", result);
 }

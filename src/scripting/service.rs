@@ -24,6 +24,11 @@ enum ScriptCommand {
         resp: oneshot::Sender<Result<Vec<String>>>,
     },
     Shutdown,
+    SetParentContext {
+        model: Option<String>,
+        tools: Option<Vec<String>>,
+        system_prompt_append: Option<String>,
+    },
 }
 
 struct ExtensionHandle {
@@ -50,10 +55,10 @@ pub struct ScriptService {
     scheduler: Option<Arc<Mutex<Scheduler>>>,
     mcp_manager: Option<Arc<McpManager>>,
 
-    // Legacy support: enable isolation or use single shared runtime?
-    // For this refactor, we enable per-script isolation by default.
-    // The previous implementation used one runtime for all scripts.
-    // Now each `load_script` spawns a NEW runtime/thread.
+    // Parent context propagation (for Hive inheritance)
+    parent_model: Arc<RwLock<Option<String>>>,
+    parent_tools: Arc<RwLock<Option<Vec<String>>>>,
+    parent_system_prompt_append: Arc<RwLock<Option<String>>>,
 }
 
 impl ScriptService {
@@ -77,6 +82,9 @@ impl ScriptService {
             ingress_bus,
             scheduler,
             mcp_manager,
+            parent_model: Arc::new(RwLock::new(None)),
+            parent_tools: Arc::new(RwLock::new(None)),
+            parent_system_prompt_append: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -130,6 +138,9 @@ impl ScriptService {
                                     let _ = resp.send(res.map_err(|e| anyhow::anyhow!(e)));
                                 }
                                 ScriptCommand::Shutdown => break,
+                                ScriptCommand::SetParentContext { model, tools, system_prompt_append } => {
+                                    deno.set_parent_context(model, tools, system_prompt_append);
+                                }
                             }
                         }
                     });
@@ -152,6 +163,20 @@ impl ScriptService {
         // Spawn new isolate
         let handle = self.spawn_extension(path_string.clone());
 
+        // Propagate parent context to this new extension BEFORE moving handle into map
+        {
+            let parent_model = self.parent_model.read().await.clone();
+            let parent_tools = self.parent_tools.read().await.clone();
+            let parent_spa = self.parent_system_prompt_append.read().await.clone();
+            if parent_model.is_some() || parent_tools.is_some() || parent_spa.is_some() {
+                let _ = handle.sender.send(ScriptCommand::SetParentContext { 
+                    model: parent_model.clone(), 
+                    tools: parent_tools.clone(), 
+                    system_prompt_append: parent_spa 
+                }).await;
+            }
+        }
+
         // Register handle
         {
             let mut exts = self.extensions.write().await;
@@ -164,13 +189,6 @@ impl ScriptService {
 
         // We don't need to send LoadScript command because spawn_extension loads it.
         // But we need to wait for it to load to get tools and register them in tool_map.
-        // We can't easily "wait" on spawn unless we use a channel in spawn.
-        // But `spawn_extension` is fire-and-forget for loading in current impl.
-        // Wait, `load_script` usually returns Result.
-
-        // Let's modify spawn_extension to return a Result or wait for load?
-        // Or we can send a "GetTools" command to verify it's alive and get tools?
-
         let tools = {
             let exts = self.extensions.read().await;
             if let Some(handle) = exts.get(&path_string) {
@@ -258,5 +276,23 @@ impl ScriptService {
 
     pub async fn reload_extension(&self, name: &str) -> Result<()> {
         self.load_script(name).await
+    }
+
+    pub async fn set_parent_context(&self, model: Option<String>, tools: Option<Vec<String>>, system_prompt_append: Option<String>) -> Result<()> {
+        // Update stored parent context
+        *self.parent_model.write().await = model.clone();
+        *self.parent_tools.write().await = tools.clone();
+        *self.parent_system_prompt_append.write().await = system_prompt_append.clone();
+
+        // Broadcast to all currently loaded extensions
+        let exts = self.extensions.read().await;
+        for handle in exts.values() {
+            let _ = handle.sender.send(ScriptCommand::SetParentContext { 
+                model: model.clone(), 
+                tools: tools.clone(), 
+                system_prompt_append: system_prompt_append.clone() 
+            }).await;
+        }
+        Ok(())
     }
 }

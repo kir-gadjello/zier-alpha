@@ -14,6 +14,22 @@ export async function runAgent(agentName, task, contextMode, attachments) {
         throw new Error(`Max recursion depth exceeded (${currentDepth} >= ${maxDepth})`);
     }
 
+    const parentCtx = zier.getParentContext();
+    console.log(`[Hive] Parent context:`, parentCtx);
+
+    // Compute effective model/tools using inheritance markers
+    let effectiveModel = agent.model;
+    if (agent.model === '.') {
+        effectiveModel = parentCtx?.model;
+    }
+
+    let effectiveTools = agent.tools;
+    if (agent.tools === '.') {
+        effectiveTools = parentCtx?.tools || [];
+    } else if (agent.tools === '.no_delegate') {
+        effectiveTools = (parentCtx?.tools || []).filter(t => t !== 'hive_delegate');
+    }
+
     const uuid = crypto.randomUUID();
     const parentSessionId = zier.os.env.get("ZIER_SESSION_ID") || "root";
     const tempDir = zier.os.tempDir();
@@ -47,12 +63,13 @@ export async function runAgent(agentName, task, contextMode, attachments) {
     const childEnv = {
         "ZIER_HIVE_DEPTH": (currentDepth + 1).toString(),
         "ZIER_PARENT_SESSION": parentSessionId,
+        "ZIER_CHILD_TOOLS": JSON.stringify(effectiveTools),
     };
 
     // Build command dynamically
     const args = ["ask", "--child"];
-    if (agent.model) {
-        args.push("--model", agent.model);
+    if (effectiveModel) {
+        args.push("--model", effectiveModel);
     }
     args.push("--json-output", ipcPath);
     if (hydrationArgs.length > 0) {
@@ -78,7 +95,7 @@ export async function runAgent(agentName, task, contextMode, attachments) {
 
     const cmd = ["zier", ...args];
 
-    console.log(`[Hive] Spawning: ${cmd.join(" ")}`);
+    console.log(`[Hive] Spawning: ${cmd.join(" ")} (tools: ${effectiveTools.length})`);
 
     try {
         const result = await zier.os.exec(cmd, {
