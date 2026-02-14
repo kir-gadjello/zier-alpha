@@ -836,7 +836,7 @@ impl DenoRuntime {
         );
 
         let promise_global = self.runtime.execute_script("<tool_exec>", code)?;
-        let result_global = self.runtime.resolve_value(promise_global).await?;
+        let result_global = self.runtime.resolve(promise_global).await?;
 
         let scope = &mut self.runtime.handle_scope();
         let value = v8::Local::new(scope, result_global);

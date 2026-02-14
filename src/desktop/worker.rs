@@ -96,7 +96,7 @@ async fn worker_loop(
     });
 
     // Send initial session list
-    if let Ok(sessions) = list_sessions_for_agent(&agent_id) {
+    if let Ok(sessions) = list_sessions_for_agent(&agent_id).await {
         let _ = tx.send(WorkerMessage::Sessions(sessions));
     }
 
@@ -222,7 +222,7 @@ async fn worker_loop(
                 let _ = tx.send(WorkerMessage::Done);
             }
             UiMessage::RefreshSessions => {
-                if let Ok(sessions) = list_sessions_for_agent(&agent_id) {
+                if let Ok(sessions) = list_sessions_for_agent(&agent_id).await {
                     let _ = tx.send(WorkerMessage::Sessions(sessions));
                 }
             }
