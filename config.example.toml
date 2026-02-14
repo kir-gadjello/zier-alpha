@@ -1,67 +1,246 @@
+# =============================================================================
 # Zier Alpha Configuration
-# Auto-created on first run. Edit as needed.
+# =============================================================================
+# This file is automatically created at ~/.zier-alpha/config.toml on first run.
+# Edit it to customise your assistant.
 
+# -----------------------------------------------------------------------------
+# [agent]
+# -----------------------------------------------------------------------------
 [agent]
-# Default model: claude-cli/opus, anthropic/claude-sonnet-4-5, openai/gpt-4o, etc.
+# Default model to use. Supports several formats:
+#   - Provider/model: "anthropic/claude-sonnet-4-5", "openai/gpt-4o", "ollama/llama3"
+#   - CLI alias: "claude-cli/opus", "claude-cli/sonnet"
+#   - Short aliases: "opus", "sonnet", "gpt", "gpt-mini"
 default_model = "claude-cli/opus"
+
+# Total context window size in tokens (model-dependent)
 context_window = 128000
+
+# Tokens reserved for system prompt and tool schemas (subtracted from available)
 reserve_tokens = 8000
 
-# Anthropic API (for anthropic/* models)
-# [providers.anthropic]
-# api_key = "${ANTHROPIC_API_KEY}"
+# Maximum tokens for LLM response (passed to provider)
+max_tokens = 4096
 
-# OpenAI API (for openai/* models)
-# [providers.openai]
-# api_key = "${OPENAI_API_KEY}"
+# -----------------------------------------------------------------------------
+# [providers]
+# -----------------------------------------------------------------------------
+# Configure API providers. Each section is optional – omit if not used.
 
-# Claude CLI (for claude-cli/* models, requires claude CLI installed)
+# OpenAI API (for "openai/*" models)
+[providers.openai]
+api_key = "${OPENAI_API_KEY}"          # Can be a literal or env var
+base_url = "https://api.openai.com/v1" # Optional, default shown
+
+# Anthropic API (for "anthropic/*" models)
+[providers.anthropic]
+api_key = "${ANTHROPIC_API_KEY}"
+base_url = "https://api.anthropic.com"
+
+# Ollama (local models)
+[providers.ollama]
+endpoint = "http://localhost:11434"
+model = "llama3"                       # Default model when using "ollama/..."
+
+# Claude CLI (uses the external `claude` command)
 [providers.claude_cli]
-command = "claude"
+command = "claude"                      # Path or name of the claude binary
+model = "opus"                          # Model identifier for the CLI
 
+# -----------------------------------------------------------------------------
+# [models]
+# -----------------------------------------------------------------------------
+# Define custom model configurations with inheritance and fallback chains.
+# This allows you to create aliases and override specific parameters.
+#
+# Example:
+# [models.my-gpt4]
+# provider = "openai"
+# model = "gpt-4-turbo-preview"
+# api_key_env = "OPENAI_API_KEY"
+# fallback_models = ["gpt-4", "gpt-3.5-turbo"]
+#
+# [models.gpt4-fallback]
+# extend = "my-gpt4"
+# fallback_settings = { default = "deny", allow = ["429"], deny = ["5*"] }
+#
+# See documentation for full syntax.
+
+# -----------------------------------------------------------------------------
+# [heartbeat]
+# -----------------------------------------------------------------------------
+# Autonomous background tasks (daemon mode only)
 [heartbeat]
 enabled = true
-interval = "30m"
+interval = "30m"                       # Accepts s/m/h/d (e.g., 30m, 1h, 1h30m)
 
-# Only run during these hours (optional)
+# Optional: restrict heartbeat to certain hours of the day
 # [heartbeat.active_hours]
 # start = "09:00"
 # end = "22:00"
 
+# Optional: override timezone (defaults to system local)
+# timezone = "America/New_York"
+
+# -----------------------------------------------------------------------------
+# [memory]
+# -----------------------------------------------------------------------------
+# Long-term memory settings
 [memory]
-# Workspace directory for memory files (MEMORY.md, HEARTBEAT.md, etc.)
-# Can also be set via environment variables:
-#   ZIER_ALPHA_WORKSPACE=/path/to/workspace  - absolute path override
-#   ZIER_ALPHA_PROFILE=work                  - uses ~/.zier-alpha/workspace-work
+# Workspace directory for all memory files
+# Can be overridden by env ZIER_ALPHA_WORKSPACE or ZIER_ALPHA_PROFILE
 workspace = "~/.zier-alpha/workspace"
 
-# Embedding provider: "none" (default), "local" (requires 'fastembed' feature), "openai"
+# Embedding provider: "none" (FTS only), "local" (requires fastembed feature),
+# "openai", or "gguf" (requires gguf feature)
 embedding_provider = "none"
 
-# Session memory settings (for /new command)
-# session_max_messages = 15    # Max messages to save (0 = unlimited)
-# session_max_chars = 0        # Max chars per message (0 = unlimited, preserves full content)
+# Model name for the chosen provider
+# - local: "all-MiniLM-L6-v2" (default), "bge-base-en-v1.5", "multilingual-e5-base"
+# - openai: "text-embedding-3-small", "text-embedding-3-large"
+# - gguf: path to a GGUF file or model name (e.g., "embeddinggemma-300M-Q8_0.gguf")
+embedding_model = "all-MiniLM-L6-v2"
 
+# Cache directory for downloaded embedding models (local/gguf)
+# Default: ~/.cache/zier-alpha/models
+embedding_cache_dir = "~/.cache/zier-alpha/models"
+
+# Chunk size and overlap (in approximate tokens, 1 token ≈ 4 chars)
+chunk_size = 400
+chunk_overlap = 80
+
+# Additional paths to index (outside the workspace)
+# Each entry must have a 'path' and a glob 'pattern'
+paths = [
+    { path = "~/Documents/notes", pattern = "**/*.md" },
+    { path = "~/projects", pattern = "**/*.txt" }
+]
+
+# Session memory settings (used by the /new command)
+session_max_messages = 15    # 0 = unlimited
+session_max_chars = 0        # 0 = unlimited (preserve full content)
+
+# -----------------------------------------------------------------------------
+# [server]
+# -----------------------------------------------------------------------------
+# HTTP server settings (daemon mode)
 [server]
 enabled = true
 port = 31327
 bind = "127.0.0.1"
 
+# OpenAI‑compatible proxy (runs on a separate port)
 [server.openai_proxy]
 enabled = true
 port = 37777
 bind = "127.0.0.1"
 
-[logging]
-level = "info"
+# Telegram integration
+# Mode can be "webhook" (requires HTTPS) or "polling" (works behind NAT)
+telegram_mode = "polling"
 
+# Your Telegram user ID – messages from this user become OwnerCommand
+owner_telegram_id = 123456789
+
+# Bot token (required for sending messages and downloading photos)
+telegram_bot_token = "..."
+
+# Secret token for webhook verification (required in webhook mode)
+telegram_secret_token = "..."
+
+# Long polling timeout in seconds (polling mode only)
+telegram_poll_timeout = 30
+
+# -----------------------------------------------------------------------------
+# [logging]
+# -----------------------------------------------------------------------------
+[logging]
+level = "info"               # trace, debug, info, warn, error
+file = "~/.zier-alpha/logs/agent.log"
+retention_days = 7           # 0 = keep forever (no auto‑delete)
+
+# -----------------------------------------------------------------------------
+# [tools]
+# -----------------------------------------------------------------------------
+# Configuration for built-in tools
+[tools]
+# Timeout for bash commands (milliseconds)
+bash_timeout_ms = 30000
+
+# Maximum bytes returned by web_fetch
+web_fetch_max_bytes = 10000
+
+# Tools that require user approval before execution
+require_approval = ["bash", "write_file", "edit_file"]
+
+# Maximum characters in tool output (0 = unlimited)
+tool_output_max_chars = 50000
+
+# Log warnings when suspicious injection patterns are detected
+log_injection_warnings = true
+
+# Wrap tool outputs and memory content with XML‑style delimiters
+use_content_delimiters = true
+
+# Whitelist of built‑in tools to allow. "*" allows all.
+allowed_builtin = ["*"]
+
+# -----------------------------------------------------------------------------
+# [vision]
+# -----------------------------------------------------------------------------
+# Image processing fallback (when the main model does not support vision)
+[vision]
+enabled = true
+fallback_model = "gpt-4o"               # Model used to describe images
+fallback_prompt = "Transcribe text and describe details in this image for a text-only AI."
+
+# -----------------------------------------------------------------------------
+# [workdir]
+# -----------------------------------------------------------------------------
+# Strategy for handling project directories and cognitive files
 [workdir]
-# Strategy for handling project directories: "overlay" (default) or "mount"
-# - "overlay": Cognitive files go to workspace, others to project dir.
-# - "mount": Everything is in workspace; project dir is mounted at ./project.
+# "overlay" (default):
+#   - Cognitive files (MEMORY.md, SOUL.md, memory/*) go to the workspace.
+#   - All other relative paths go to the project directory (current directory or --workdir).
+# "mount":
+#   - Everything is relative to the workspace root.
+#   - The project directory is mounted at ./project inside the workspace.
 strategy = "overlay"
 
-# Tmux Bridge Plugin Configuration
-[tmux_bridge]
-# The plugin uses the default "zier" socket. No explicit config required yet.
-# To enable global CWD (unsafe), verify scripting policy in src/scripting/safety.rs
+# Optional custom prompt addition for this strategy.
+# If not set, a default informative prompt is used.
+# custom_prompt = "..."
+
+# -----------------------------------------------------------------------------
+# [extensions]
+# -----------------------------------------------------------------------------
+# Built‑in extensions can be configured here.
+
+# Hive – subagent orchestration
+[extensions.hive]
+enabled = true
+agents_dir = "agents"                    # Directory containing agent .md files
+max_depth = 3                            # Maximum recursion depth for delegation
+ipc_mode = "artifact"                    # How subagents communicate (reserved)
+default_model = ""                        # Default model for subagents (empty = use parent)
+timeout_seconds = 300
+cleanup_temp_files = true
+
+# MCP – Model Context Protocol servers
+[extensions.mcp]
+cache_dir = "~/.zier-alpha/cache/mcp"     # Directory for server‑specific caches
+idle_timeout_secs = 600                   # Auto‑stop servers after inactivity
+default_strategy = "hybrid"                # Not yet used
+
+# Define one or more MCP servers
+# [extensions.mcp.servers.filesystem]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+# env = { DEBUG = "*" }
+# native_tools = ["list_directory", "read_file"]   # Tools this server provides (optional)
+
+# -----------------------------------------------------------------------------
+# End of configuration
+# -----------------------------------------------------------------------------

@@ -1,176 +1,61 @@
+
 # Zier Alpha Architecture
 
-## Relationship with OpenClaw
+This document describes the internal architecture of Zier Alpha – a local‑first, secure, and autonomous AI assistant.  
+The design follows the **VIZIER** principles:
 
-Zier Alpha is a **fresh Rust implementation** inspired by OpenClaw's architecture, stripped down to essential components for local-only AI interaction.
-
-### Design Philosophy
-
-| Aspect | OpenClaw | Zier Alpha |
-|--------|----------|----------|
-| Language | TypeScript | Rust |
-| LOC (estimated) | ~200k | ~3k |
-| Remote channels | 20+ (Telegram, Discord, Slack, etc.) | 0 |
-| Dependencies | 500+ npm packages | ~30 crates |
-| Memory system | Markdown + SQLite | Same approach |
-| Heartbeat | HEARTBEAT.md driven | Same approach |
-| Startup time | ~2-3s | <100ms |
-| Binary size | ~100MB (node) | ~27MB |
-
-### Borrowed Concepts
-
-The following concepts were directly inspired by OpenClaw:
-
-1. **Memory System Design**
-   - `MEMORY.md` as curated long-term knowledge
-   - `memory/*.md` for daily append-only logs
-   - `HEARTBEAT.md` for pending tasks/reminders
-   - SQLite for indexing with FTS5
-
-2. **Heartbeat Runner**
-   - Periodic autonomous execution
-   - Active hours configuration
-   - Simple prompt-based task checking
-
-3. **Session Management**
-   - Context compaction with summarization
-   - Pre-compaction memory flush prompts
-   - JSONL transcript storage
-
-4. **Tool System**
-   - Bash execution
-   - File operations (read, write, edit)
-   - Memory search and append
-
-### Key Differences
-
-1. **No Remote Channels**: Zier Alpha is purely local - no Telegram, Discord, WhatsApp, etc.
-2. **No Plugin System**: OpenClaw has an extension architecture; Zier Alpha is monolithic
-3. **No Gateway**: OpenClaw's gateway handles multi-channel routing; Zier Alpha has only CLI and HTTP
-4. **No Canvas/UI**: OpenClaw has web-based chat UI; Zier Alpha is CLI-first
+- **V** – Verified ingress (trust levels)
+- **I** – Isolated execution (sandboxed tools)
+- **Z** – Zero‑latency memory (hybrid search)
+- **I** – Intelligent scheduling (heartbeat & cron)
+- **E** – Extensible runtime (Deno)
+- **R** – Reliable persistence (OpenClaw‑compatible sessions)
 
 ---
 
-## Current Implementation Status
+## High‑level Overview
 
-### Completed (MVP)
+```mermaid
+graph TD
+    subgraph Ingress Sources
+        CLI[CLI / Desktop]
+        HTTP[HTTP API]
+        WS[WebSocket]
+        TG[Telegram]
+        Cron[Scheduler]
+    end
 
-- [x] CLI interface (`chat`, `ask`, `daemon`, `memory`, `config` commands)
-- [x] LLM providers (OpenAI, Anthropic, Ollama)
-- [x] Memory files (MEMORY.md, memory/*.md, HEARTBEAT.md)
-- [x] Memory search (FTS5)
-- [x] Daemon mode with heartbeat
-- [x] Basic tool set (bash, file ops, memory ops, web fetch)
-- [x] TOML configuration
-- [x] HTTP server with REST API
-- [x] Session management with compaction
+    Ingress -->|IngressMessage| Bus[Ingress Bus]
 
-### Gaps and Remaining Work
+    Bus --> ControlPlane[Control Plane Loop]
 
-#### High Priority
+    ControlPlane -->|Trust Check| Routing{Trust Level}
 
-1. **Vector Search / Embeddings**
-   - Currently: FTS5 keyword search only
-   - Needed: Semantic search with embeddings
-   - Options: `sqlite-vec`, local ONNX embeddings, or API-based
-   - Effort: Medium
+    Routing -->|OwnerCommand| RootAgent[Root Agent<br/>(full tools)]
+    Routing -->|TrustedEvent| JobAgent[Job Agent<br/>(scoped tools)]
+    Routing -->|UntrustedEvent| Sanitizer[Sanitizer Agent<br/>(no tools)]
 
-2. **Thread Safety for Agent**
-   - Currently: Agent contains SQLite connection (not `Send`/`Sync`)
-   - Impact: HTTP server creates new agent per request (no session persistence)
-   - Fix: Wrap connection in `Arc<Mutex<>>` or use connection pooling
-   - Effort: Medium
+    RootAgent -->|execute| Tools
+    JobAgent -->|execute| Tools
 
-3. **Streaming Responses**
-   - Currently: Full response only
-   - Needed: SSE/WebSocket streaming for real-time output
-   - WebSocket handler is stubbed but not connected
-   - Effort: Medium
+    subgraph Tools
+        Builtin[Built‑in Rust Tools]
+        Script[Deno Script Tools]
+        MCP[MCP Servers]
+    end
 
-4. **Proper Token Counting**
-   - Currently: Rough estimate (4 chars = 1 token)
-   - Needed: Use `tiktoken-rs` properly per model
-   - Effort: Low
+    Tools -->|result| Artifacts[Artifact Storage<br/>(markdown + YAML)]
 
-#### Medium Priority
+    RootAgent -->|read/write| Memory[Memory Manager]
+    JobAgent -->|read| Memory
+    Sanitizer -->|read| Memory
 
-5. **Background Daemonization**
-   - Currently: `--foreground` mode only
-   - Needed: Proper Unix daemon with `fork()`
-   - Effort: Low
+    Memory -->|index| SQLite[(SQLite DB)]
+    Memory -->|files| Workspace[Workspace Files<br/>(MEMORY.md, etc.)]
 
-6. **Memory Flush Prompts**
-   - Currently: Pre-compaction flush is basic
-   - Needed: Better integration with daily logs
-   - Effort: Low
+    Heartbeat[Heartbeat Runner] -->|poll| Memory
+    Heartbeat -->|ingress| Bus
 
-7. **Session Resume in HTTP**
-   - Currently: Each HTTP request is stateless
-   - Needed: Session ID tracking across requests
-   - Effort: Medium
+    Scheduler[Scheduler] -->|cron| Bus
 
-8. **Error Handling**
-   - Currently: Basic `anyhow` errors
-   - Needed: Structured error types, better user messages
-   - Effort: Medium
-
-#### Low Priority / Nice to Have
-
-9. **Local LLM Inference**
-   - Add `llama-cpp-rs` for fully offline operation
-   - Effort: High
-
-10. **TUI Interface**
-    - Rich terminal UI with `ratatui`
-    - Effort: High
-
-11. **Shell Completions**
-    - Bash/Zsh/Fish completion scripts
-    - Effort: Low
-
-12. **Systemd/Launchd Integration**
-    - Service files for auto-start
-    - Effort: Low
-
-13. **Metrics/Observability**
-    - Token usage tracking
-    - Request latency metrics
-    - Effort: Medium
-
-14. **Multi-Session Support**
-    - Multiple concurrent chat sessions
-    - Session listing and management
-    - Effort: Medium
-
----
-
-## File Structure Reference
-
-```
-~/.zier-alpha/
-├── config.toml              # Main configuration
-├── workspace/
-│   ├── MEMORY.md            # Curated long-term knowledge
-│   ├── HEARTBEAT.md         # Pending tasks/reminders
-│   └── memory/
-│       ├── 2024-01-15.md    # Daily append-only logs
-│       └── ...
-├── sessions/
-│   └── <session_id>.jsonl   # Conversation transcripts
-├── memory.sqlite            # FTS index
-└── logs/
-    └── agent.log            # Operation logs
-```
-
----
-
-## Contributing
-
-When working on Zier Alpha:
-
-1. Keep the codebase small and focused
-2. Prefer simplicity over features
-3. Maintain Rust idioms and safety
-4. Test with `cargo test`
-5. Format with `cargo fmt`
-6. Lint with `cargo clippy`
+    Extensions[Deno Extensions] -->|register tools| Script
