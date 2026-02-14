@@ -272,9 +272,10 @@ impl HeartbeatRunner {
 
             // Record the heartbeat (re-read from disk to avoid clobbering)
             let session_id = agent.session_status().await.id;
-            if let Err(e) = store.load_and_update(session_key, &session_id, |entry| {
-                entry.record_heartbeat(&response);
-            }) {
+            let response_clone = response.clone();
+            if let Err(e) = store.load_and_update(session_key, &session_id, move |entry| {
+                entry.record_heartbeat(&response_clone);
+            }).await {
                 warn!("Failed to record heartbeat in session store: {}", e);
             }
         }

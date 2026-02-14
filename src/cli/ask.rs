@@ -153,7 +153,8 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
         tracing::info!("Running in child mode: assuming parent holds workspace lock");
         None
     } else {
-        Some(workspace_lock.acquire()?)
+        let lock_clone = workspace_lock.clone();
+        Some(tokio::task::spawn_blocking(move || lock_clone.acquire()).await??)
     };
 
     let response = agent.chat(&args.question).await?;

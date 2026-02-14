@@ -59,3 +59,33 @@ graph TD
     Scheduler[Scheduler] -->|cron| Bus
 
     Extensions[Deno Extensions] -->|register tools| Script
+```
+
+## Supervisor & Resilience
+
+Zier Alpha v2 includes a built-in supervisor mode (`--supervised`) that automatically restarts the daemon if it crashes.
+The supervisor is a lightweight process that forks the main daemon and monitors its exit status.
+
+## Disk Monitoring
+
+A background task (`DiskMonitor`) periodically checks free disk space.
+If space falls below a configured threshold (`min_free_percent`), the system enters **degraded mode**:
+- Background writes (auto-save, logs, embeddings) are disabled.
+- Write tools (e.g., `write_file`) return errors.
+- The agent is notified via system messages.
+- Read operations continue normally.
+
+## Introspection
+
+The `system_introspect` tool provides a unified interface for the agent to query and control the runtime:
+- `status`: Check version, degraded mode, and server status.
+- `mcp`: List running MCP servers.
+- `extensions`: List loaded extensions.
+- `restart_mcp`: Restart a specific MCP server.
+- `reload_extension`: Reload an extension script.
+- `cleanup_disk`: Trigger manual cleanup (log rotation, session pruning).
+
+## Extension Isolation
+
+Extensions are now isolated in their own threads with dedicated Deno runtimes.
+This prevents a crash in one extension from affecting others or the main daemon.

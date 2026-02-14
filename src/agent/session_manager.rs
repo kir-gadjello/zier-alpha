@@ -137,31 +137,43 @@ impl SessionManager {
             match self.compaction_strategy.compact(&mut *session, client).await {
                 Ok(_) => {},
                 Err(e) => {
+                    info!("Compaction failed with primary model: {}", e);
+
                     // Try fallback models if primary fails
                     let mut fallback_success = false;
-                    for model in &self.config.agent.compaction.fallback_models {
-                        info!("Compaction failed with default model, retrying with fallback: {}", model);
 
-                        // Create a temporary client with the fallback model
-                        // We clone Config because we need to pass it, but we override the model in the client call?
-                        // SmartClient::new takes Config and model name.
-                        // We can't easily change the model of 'client' passed in if it's &SmartClient.
-                        // But we can create a new one.
-                        let fallback_client = SmartClient::new(self.config.clone(), model.clone());
+                    // Check strategy setting
+                    let strategy = &self.config.agent.compaction.strategy;
+                    let try_models = strategy != "truncate";
 
-                        match self.compaction_strategy.compact(&mut *session, &fallback_client).await {
-                            Ok(_) => {
-                                fallback_success = true;
-                                break;
-                            },
-                            Err(e_fallback) => {
-                                tracing::warn!("Fallback compaction with {} failed: {}", model, e_fallback);
+                    if try_models {
+                        for model in &self.config.agent.compaction.fallback_models {
+                            info!("Retrying compaction with fallback model: {}", model);
+
+                            let fallback_client = SmartClient::new(self.config.clone(), model.clone());
+
+                            match self.compaction_strategy.compact(&mut *session, &fallback_client).await {
+                                Ok(_) => {
+                                    fallback_success = true;
+                                    info!("Fallback compaction succeeded with {}", model);
+                                    break;
+                                },
+                                Err(e_fallback) => {
+                                    tracing::warn!("Fallback compaction with {} failed: {}", model, e_fallback);
+                                }
                             }
                         }
                     }
 
                     if !fallback_success {
-                        return Err(e);
+                        // If all models failed (or skipped), try truncation if allowed
+                        // "models_then_truncate" or "truncate" implies truncation is last resort
+                        if strategy == "truncate" || strategy == "models_then_truncate" {
+                            info!("Compaction models failed, falling back to truncation.");
+                            self.compact_truncate(&mut *session);
+                        } else {
+                            return Err(e);
+                        }
                     }
                 }
             }
@@ -171,6 +183,12 @@ impl SessionManager {
         info!("Session compacted: {} -> {} tokens", before, after);
 
         Ok((before, after))
+    }
+
+    fn compact_truncate(&self, session: &mut Session) {
+        let keep = self.config.agent.compaction.keep_last;
+        session.truncate_history(keep);
+        info!("Truncated session history to last {} messages", keep);
     }
 
     pub async fn save_session_to_memory(&self, memory: &MemoryManager) -> Result<Option<PathBuf>> {

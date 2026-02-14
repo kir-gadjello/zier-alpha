@@ -8,7 +8,7 @@ use crate::agent::sanitize;
 
 #[derive(Debug, thiserror::Error)]
 #[error("Tool '{0}' requires approval")]
-pub struct ApprovalRequiredError(pub String);
+pub struct ApprovalRequiredError(pub String, pub ToolCall);
 
 #[derive(Clone)]
 pub struct ToolExecutor {
@@ -88,7 +88,7 @@ impl ToolExecutor {
                 // ChatEngine::stream_with_tool_loop handles this BEFORE calling execute_tool.
                 // So if we are here, it means we are in non-streaming mode OR the engine failed to check.
                 // If non-streaming, we fail hard.
-                return Err(anyhow::Error::new(ApprovalRequiredError(call.name.clone())));
+                return Err(anyhow::Error::new(ApprovalRequiredError(call.name.clone(), call.clone())));
             }
         }
 

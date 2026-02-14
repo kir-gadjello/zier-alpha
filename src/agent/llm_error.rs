@@ -1,7 +1,12 @@
 use thiserror::Error;
 
+use crate::agent::providers::ToolCall;
+
 #[derive(Error, Debug)]
 pub enum LlmError {
+    #[error("Approval required for tool '{0}': {1:?}")]
+    ApprovalRequired(String, ToolCall),
+
     #[error("API request failed: {0}")]
     ApiRequestFailed(#[from] reqwest::Error),
 

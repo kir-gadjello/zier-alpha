@@ -1,5 +1,6 @@
 use crate::agent::{Agent, AgentConfig, ContextStrategy, ScriptTool, Session};
 use crate::agent::tools::registry::ToolRegistry;
+use crate::agent::DiskMonitor;
 use crate::config::Config;
 use crate::ingress::{IngressMessage, TelegramClient, TrustLevel};
 use crate::memory::{ArtifactWriter, MemoryManager};
@@ -64,10 +65,12 @@ pub async fn ingress_loop(
 
     // Pre-build tools and agent prototype
     let project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let disk_monitor = DiskMonitor::new(config.disk.clone());
 
     let base_tools = ToolRegistry::build(
         &config,
         Some(memory.clone()),
+        disk_monitor.clone(),
         (*script_tools).clone(),
         project_dir.clone(),
     ).unwrap_or_else(|e| {
@@ -119,6 +122,7 @@ pub async fn ingress_loop(
         let project_dir = project_dir.clone();
         let base_tools = base_tools.clone();
         let script_service = script_service.clone();
+        let disk_monitor = disk_monitor.clone();
 
         tokio::spawn(async move {
             // Determine Context Strategy based on source/trust
@@ -172,6 +176,7 @@ pub async fn ingress_loop(
                     match ToolRegistry::build(
                         &config,
                         Some(memory.clone()),
+                        disk_monitor.clone(),
                         current_script_tools,
                         project_dir.clone(),
                     ) {

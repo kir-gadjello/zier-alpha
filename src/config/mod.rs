@@ -77,7 +77,41 @@ pub struct Config {
 
     #[serde(default)]
     pub extensions: ExtensionsConfig,
+
+    #[serde(default)]
+    pub disk: DiskConfig,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskConfig {
+    #[serde(default = "default_monitor_interval")]
+    pub monitor_interval: String,
+
+    #[serde(default = "default_min_free_percent")]
+    pub min_free_percent: u8,
+
+    #[serde(default = "default_session_retention_days")]
+    pub session_retention_days: u32,
+
+    #[serde(default = "default_max_log_size_mb")]
+    pub max_log_size_mb: u32,
+}
+
+impl Default for DiskConfig {
+    fn default() -> Self {
+        Self {
+            monitor_interval: default_monitor_interval(),
+            min_free_percent: default_min_free_percent(),
+            session_retention_days: default_session_retention_days(),
+            max_log_size_mb: default_max_log_size_mb(),
+        }
+    }
+}
+
+fn default_monitor_interval() -> String { "10m".to_string() }
+fn default_min_free_percent() -> u8 { 5 }
+fn default_session_retention_days() -> u32 { 0 }
+fn default_max_log_size_mb() -> u32 { 0 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExtensionsConfig {
@@ -131,7 +165,11 @@ pub struct CompactionConfig {
     pub script_path: Option<String>,
     #[serde(default)]
     pub fallback_models: Vec<String>,
+    #[serde(default = "default_keep_last")]
+    pub keep_last: usize,
 }
+
+fn default_keep_last() -> usize { 10 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
@@ -516,6 +554,7 @@ impl Default for CompactionConfig {
             strategy: default_compaction_strategy(),
             script_path: None,
             fallback_models: Vec::new(),
+            keep_last: default_keep_last(),
         }
     }
 }
@@ -680,6 +719,20 @@ impl Config {
             if let Some(extends) = &model.extend {
                 if extends == name {
                     anyhow::bail!("Model '{}' cannot extend itself", name);
+                }
+            }
+
+            // Validate Fallback Glob Patterns
+            if let Some(fallback) = &model.fallback_settings {
+                for pattern in &fallback.allow {
+                    if let Err(e) = glob::Pattern::new(pattern) {
+                        anyhow::bail!("Invalid glob pattern in fallback allow list for model '{}': {}", name, e);
+                    }
+                }
+                for pattern in &fallback.deny {
+                    if let Err(e) = glob::Pattern::new(pattern) {
+                        anyhow::bail!("Invalid glob pattern in fallback deny list for model '{}': {}", name, e);
+                    }
                 }
             }
         }

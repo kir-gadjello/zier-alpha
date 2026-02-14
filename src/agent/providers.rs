@@ -1505,7 +1505,7 @@ fn load_cli_session_from_store(session_key: &str, provider: &str) -> Option<Stri
 }
 
 /// Save CLI session ID to session store
-fn save_cli_session_to_store(
+async fn save_cli_session_to_store(
     session_key: &str,
     session_id: &str,
     provider: &str,
@@ -1513,8 +1513,8 @@ fn save_cli_session_to_store(
 ) -> Result<()> {
     use super::session_store::SessionStore;
 
-    let mut store = SessionStore::load()?;
-    store.set_cli_session_id(session_key, session_id, provider, cli_session_id)?;
+    let store = tokio::task::spawn_blocking(move || SessionStore::load()).await??;
+    store.set_cli_session_id(session_key, session_id, provider, cli_session_id).await?;
     Ok(())
 }
 
@@ -1585,7 +1585,16 @@ impl LLMProvider for ClaudeCliProvider {
         let prompt = build_prompt_from_messages(messages);
         let system_prompt = extract_system_prompt(messages);
 
-        // Get current CLI session state
+        // Load latest session ID from store to handle races
+        let stored_session = load_cli_session_from_store(&self.session_key, CLAUDE_CLI_PROVIDER);
+
+        {
+            let mut guard = self.cli_session_id.lock().map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
+            if let Some(stored) = stored_session {
+                *guard = Some(stored);
+            }
+        }
+
         let current_cli_session = self
             .cli_session_id
             .lock()
@@ -1614,12 +1623,15 @@ impl LLMProvider for ClaudeCliProvider {
             *cli_session = Some(new_cli_sid.clone());
 
             // Persist to session store for cross-restart continuity
+            // Drop guard before await to avoid Send issues
+            drop(cli_session);
+
             if let Err(e) = save_cli_session_to_store(
                 &self.session_key,
                 &self.zier_alpha_session_id,
                 CLAUDE_CLI_PROVIDER,
                 new_cli_sid,
-            ) {
+            ).await {
                 debug!("Failed to persist CLI session: {}", e);
             }
 
@@ -1658,6 +1670,16 @@ impl LLMProvider for ClaudeCliProvider {
         // Build prompt from messages (last user message)
         let prompt = build_prompt_from_messages(messages);
         let system_prompt = extract_system_prompt(messages);
+
+        // Load latest session ID from store to handle races
+        let stored_session = load_cli_session_from_store(&self.session_key, CLAUDE_CLI_PROVIDER);
+
+        {
+            let mut guard = self.cli_session_id.lock().map_err(|e| anyhow::anyhow!("Session lock poisoned: {}", e))?;
+            if let Some(stored) = stored_session {
+                *guard = Some(stored);
+            }
+        }
 
         // Get current CLI session state
         let current_cli_session = self

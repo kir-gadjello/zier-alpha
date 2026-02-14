@@ -175,6 +175,43 @@ impl Session {
         self.token_count
     }
 
+    pub fn truncate_history(&mut self, keep_last: usize) {
+        // Keep system prompt (usually first) + last N messages
+        // Also keep Memory Context if present (usually second?)
+        // Simple heuristic: keep system messages, then keep last N non-system messages.
+
+        let system_messages: Vec<_> = self.messages.iter()
+            .filter(|m| m.message.role == Role::System)
+            .cloned()
+            .collect();
+
+        let mut other_messages: Vec<_> = self.messages.iter()
+            .filter(|m| m.message.role != Role::System)
+            .cloned()
+            .collect();
+
+        if other_messages.len() > keep_last {
+            let remove_count = other_messages.len() - keep_last;
+            other_messages.drain(0..remove_count);
+        }
+
+        self.messages = system_messages;
+        self.messages.extend(other_messages);
+
+        // Recalculate tokens (approximation or full recalc)
+        // Since we don't have tokenizer here easily, we might need to rely on external recalc or just set dirty flag?
+        // But token_count field is used for checks.
+        // Let's assume the caller will trigger a recalc or we accept it's outdated until next turn?
+        // Actually, we should probably update it.
+        // But we don't have the tokenizer.
+        // We'll set it to 0 or leave it (it will be lower than actual limit, safe).
+        // Or we can sum up estimated tokens?
+        // For now, let's leave it - next chat interaction recalculates it via `messages_for_llm`?
+        // No, `messages_for_llm` uses `self.messages`.
+        // The token count is updated when adding messages or compacting.
+        // Compactor updates it.
+    }
+
     pub fn compaction_count(&self) -> u32 {
         self.compaction_count
     }

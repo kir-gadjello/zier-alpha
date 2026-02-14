@@ -23,6 +23,21 @@ reserve_tokens = 8000
 # Maximum tokens for LLM response (passed to provider)
 max_tokens = 4096
 
+# Session compaction settings
+[agent.compaction]
+# Strategy when primary model compaction fails:
+# "models" = try fallback models
+# "truncate" = keep last N messages
+# "models_then_truncate" = try models, then truncate
+strategy = "models_then_truncate"
+
+# Models to try for compaction (in order)
+fallback_models = ["gpt-3.5-turbo"]
+
+# Number of messages to keep when truncating
+keep_last = 10
+
+
 # -----------------------------------------------------------------------------
 # [providers]
 # -----------------------------------------------------------------------------
@@ -159,6 +174,23 @@ telegram_poll_timeout = 30
 level = "info"               # trace, debug, info, warn, error
 file = "~/.zier-alpha/logs/agent.log"
 retention_days = 7           # 0 = keep forever (no auto‑delete)
+
+# -----------------------------------------------------------------------------
+# [disk]
+# -----------------------------------------------------------------------------
+# Disk usage monitoring and cleanup
+[disk]
+# How often to check disk space (e.g., "10m", "1h")
+monitor_interval = "10m"
+
+# Minimum free space percentage before entering degraded mode (read-only)
+min_free_percent = 5
+
+# Auto-cleanup: delete session files older than X days (0 = keep forever)
+session_retention_days = 30
+
+# Max log file size in MB before rotation (0 = unlimited)
+max_log_size_mb = 100
 
 # -----------------------------------------------------------------------------
 # [tools]

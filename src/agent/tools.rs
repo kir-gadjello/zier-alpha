@@ -11,10 +11,12 @@ pub mod runner;
 pub mod script;
 pub mod registry;
 pub mod mcp;
+pub mod system;
 
 use super::providers::ToolSchema;
 use crate::config::{Config, WorkdirStrategy};
 use crate::memory::MemoryManager;
+use crate::agent::DiskMonitor;
 pub use script::ScriptTool;
 
 #[derive(Debug, Clone)]
@@ -33,13 +35,15 @@ pub trait Tool: Send + Sync {
 pub fn create_default_tools(
     config: &Config,
     memory: Option<Arc<MemoryManager>>,
+    disk_monitor: Arc<DiskMonitor>,
 ) -> Result<Vec<Arc<dyn Tool>>> {
-    create_default_tools_with_project(config, memory, std::env::current_dir()?)
+    create_default_tools_with_project(config, memory, disk_monitor, std::env::current_dir()?)
 }
 
 pub fn create_default_tools_with_project(
     config: &Config,
     memory: Option<Arc<MemoryManager>>,
+    disk_monitor: Arc<DiskMonitor>,
     project_dir: PathBuf,
 ) -> Result<Vec<Arc<dyn Tool>>> {
     let workspace = config.workspace_path();
@@ -56,8 +60,8 @@ pub fn create_default_tools_with_project(
     Ok(vec![
         Arc::new(BashTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), config.tools.bash_timeout_ms)),
         Arc::new(ReadFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
-        Arc::new(WriteFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
-        Arc::new(EditFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone())),
+        Arc::new(WriteFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), disk_monitor.clone())),
+        Arc::new(EditFileTool::new(workspace.clone(), project_dir.clone(), strategy.clone(), disk_monitor.clone())),
         memory_search_tool,
         Arc::new(MemoryGetTool::new(workspace)),
         Arc::new(WebFetchTool::new(config.tools.web_fetch_max_bytes)),
@@ -297,11 +301,12 @@ pub struct WriteFileTool {
     workspace: PathBuf,
     project_dir: PathBuf,
     strategy: WorkdirStrategy,
+    disk_monitor: Arc<DiskMonitor>,
 }
 
 impl WriteFileTool {
-    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Self {
-        Self { workspace, project_dir, strategy }
+    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy, disk_monitor: Arc<DiskMonitor>) -> Self {
+        Self { workspace, project_dir, strategy, disk_monitor }
     }
 }
 
@@ -333,6 +338,10 @@ impl Tool for WriteFileTool {
     }
 
     async fn execute(&self, arguments: &str) -> Result<String> {
+        if self.disk_monitor.is_degraded() {
+            return Err(anyhow::anyhow!("Disk full - operation not permitted until space is freed."));
+        }
+
         let args: Value = serde_json::from_str(arguments)?;
         let path = args["path"]
             .as_str()
@@ -365,11 +374,12 @@ pub struct EditFileTool {
     workspace: PathBuf,
     project_dir: PathBuf,
     strategy: WorkdirStrategy,
+    disk_monitor: Arc<DiskMonitor>,
 }
 
 impl EditFileTool {
-    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Self {
-        Self { workspace, project_dir, strategy }
+    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy, disk_monitor: Arc<DiskMonitor>) -> Self {
+        Self { workspace, project_dir, strategy, disk_monitor }
     }
 }
 
@@ -409,6 +419,10 @@ impl Tool for EditFileTool {
     }
 
     async fn execute(&self, arguments: &str) -> Result<String> {
+        if self.disk_monitor.is_degraded() {
+            return Err(anyhow::anyhow!("Disk full - operation not permitted until space is freed."));
+        }
+
         let args: Value = serde_json::from_str(arguments)?;
         let path = args["path"]
             .as_str()
