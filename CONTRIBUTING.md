@@ -82,6 +82,55 @@ Control plane loop – per message spawn task:
 - Extensions are powerful – they can register tools, schedule cron jobs, and push ingress messages. This capability **must** be gated by user consent (e.g., a confirmation prompt on first load). Currently it’s implicit – fix this.
 - The `on_status` hook allows extensions to add lines to the system prompt (shown in desktop status). Keep these concise.
 
+### 9. Deno Runtime – Avoiding Deadlocks
+
+#### Async Ops
+All custom Deno operations that perform I/O **must** be defined with `#[op2(async)]` and use `tokio::fs` APIs. Never use `std::fs` inside an op, as it will block the V8 thread and cause hangs.
+
+#### Promise Resolution – Do Not Use `JsRuntime::resolve`
+**Critical:** When awaiting a promise from within an async op on a `current_thread` tokio runtime, **never call** `JsRuntime::resolve(promise).await`. This method internally may re‑enter the event loop and deadlock.
+
+Instead, use the **manual polling pattern**:
+
+```rust
+let promise_global = self.runtime.execute_script("<tool_exec>", code)?;
+
+loop {
+    let state = {
+        let scope = &mut self.runtime.handle_scope();
+        let promise_local = v8::Local::new(scope, &promise_global);
+        let promise = v8::Local::<v8::Promise>::try_from(promise_local)?;
+        match promise.state() {
+            v8::PromiseState::Pending => None,
+            v8::PromiseState::Fulfilled => {
+                let value = promise.result(scope);
+                Some(Ok(v8::Global::new(scope, value)))
+            }
+            v8::PromiseState::Rejected => {
+                let exception = promise.result(scope);
+                let msg = exception.to_rust_string_lossy(scope);
+                Some(Err(anyhow::anyhow!("Promise rejected: {}", msg)))
+            }
+        }
+    };
+
+    match state {
+        Some(Ok(global)) => break global,
+        Some(Err(e)) => return Err(e.into()),
+        None => self.runtime.run_event_loop(Default::default()).await?,
+    }
+}
+```
+
+This pattern drives the event loop only when the promise is pending, avoiding nested `run_event_loop` calls that cause deadlocks. See `src/scripting/deno.rs` (`execute_tool` and `get_status`) for working examples.
+
+#### Path Validation
+- **Never perform I/O** in `check_path` or similar sandbox checks.
+- Use pure path manipulation (`resolve_path`, prefix checks) **without** `exists()`, `canonicalize()`, or other syscalls.
+- Capability checks should operate on the *requested* path's prefix relationship to allowed roots regardless of file existence.
+
+Violating these rules will reintroduce blocking and/or deadlocks.
+
 ## Current Priorities (from Changelog & audit)
 - **Complete tool approval flow for HTTP/OpenAI proxy** – without this, remote clients cannot use tools requiring approval.
 - **Apply uniform safety checks** – make built‑in tools as safe as Deno scripts.
