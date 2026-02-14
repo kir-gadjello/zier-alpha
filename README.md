@@ -20,6 +20,9 @@
 **A local‑first cognitive kernel for your personal AI staffer.**  
 
 Zier Alpha is the foundation of **Vizier** — a silicon‑based assistant that works *for* you, not *as* you. It enforces a strict separation between reasoning and execution, runs entirely on your device, and persists knowledge across sessions using plain markdown files.
+For a detailed technical overview, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Core Philosophy
 
 - **Single binary** – no Node.js, Python, or Docker runtimes. Embedded Deno for extensions.
 - **Data sovereignty** – your memory never leaves localhost unless you explicitly allow it.
