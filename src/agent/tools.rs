@@ -11,6 +11,7 @@ pub mod runner;
 pub mod script;
 pub mod registry;
 pub mod mcp;
+pub mod system;
 
 use super::providers::ToolSchema;
 use crate::config::{Config, WorkdirStrategy};

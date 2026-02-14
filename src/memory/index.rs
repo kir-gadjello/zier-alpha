@@ -36,7 +36,7 @@ pub struct ReindexStats {
 
 impl MemoryIndex {
     /// Create a new memory index with database at the specified path
-    pub fn new_with_db_path(workspace: &Path, db_path: &Path) -> Result<Self> {
+    pub fn new_with_db_path(workspace: &Path, db_path: &Path, dimension: Option<usize>) -> Result<Self> {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent)?;
@@ -120,11 +120,20 @@ impl MemoryIndex {
         Self::ensure_fts_table(&conn)?;
 
         // Check if sqlite-vec is actually available
-        let has_vec_extension = Self::check_vec_extension(&conn);
+        let mut has_vec_extension = Self::check_vec_extension(&conn);
 
         if has_vec_extension {
             debug!("sqlite-vec extension loaded successfully");
-            Self::ensure_vec_table(&conn)?;
+            match Self::ensure_vec_table(&conn, dimension) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(
+                        "Vector table validation/creation failed: {}. Falling back to in-memory vector search.",
+                        e
+                    );
+                    has_vec_extension = false;
+                }
+            }
         } else {
             debug!("sqlite-vec extension not available, using in-memory vector search");
         }
@@ -189,15 +198,41 @@ impl MemoryIndex {
     }
 
     /// Create virtual table for vector search (requires sqlite-vec)
-    fn ensure_vec_table(conn: &Connection) -> Result<()> {
-        // Create chunks_vec virtual table if sqlite-vec is available
-        let result = conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding float[1536])",
-            [],
-        );
-        match result {
-            Ok(_) => debug!("chunks_vec table created/verified"),
-            Err(e) => debug!("chunks_vec table creation skipped: {}", e),
+    fn ensure_vec_table(conn: &Connection, dimension: Option<usize>) -> Result<()> {
+        let target_dim = dimension.unwrap_or(1536);
+
+        // Check if table exists
+        let sql: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='chunks_vec'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(sql) = sql {
+            // Table exists, check dimension
+            let pattern = format!("float[{}]", target_dim);
+            if !sql.contains(&pattern) {
+                if let Some(req_dim) = dimension {
+                    return Err(anyhow::anyhow!(
+                        "Existing vector table has different dimension than requested {}. SQL: {}",
+                        req_dim,
+                        sql
+                    ));
+                }
+            }
+        } else {
+            // Create chunks_vec virtual table if sqlite-vec is available
+            let sql = format!(
+                "CREATE VIRTUAL TABLE chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding float[{}])",
+                target_dim
+            );
+            let result = conn.execute(&sql, []);
+            match result {
+                Ok(_) => debug!("chunks_vec table created with dimension {}", target_dim),
+                Err(e) => return Err(anyhow::anyhow!("Failed to create chunks_vec table: {}", e)),
+            }
         }
         Ok(())
     }
@@ -205,7 +240,7 @@ impl MemoryIndex {
     /// Create a new memory index with database in workspace (legacy path)
     pub fn new(workspace: &Path) -> Result<Self> {
         let db_path = workspace.join("memory.sqlite");
-        Self::new_with_db_path(workspace, &db_path)
+        Self::new_with_db_path(workspace, &db_path, None)
     }
 
     /// Index a file, returning true if it was updated
@@ -308,6 +343,8 @@ impl MemoryIndex {
 
         for chunk_id in chunk_ids {
             let _ = conn.execute("DELETE FROM chunks_fts WHERE id = ?1", params![&chunk_id]);
+            // Also try to delete from vector table (might fail if table doesn't exist, which is fine)
+            let _ = conn.execute("DELETE FROM chunks_vec WHERE id = ?1", params![&chunk_id]);
         }
 
         // Delete chunks

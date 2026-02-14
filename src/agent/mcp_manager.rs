@@ -452,19 +452,37 @@ impl McpManager {
         let mut to_remove = Vec::new();
 
         for (name, handle) in servers.iter() {
+            // Check for idleness
             let last_used = *handle.last_used.read().await;
             if now.duration_since(last_used) > timeout {
-                to_remove.push(name.clone());
+                to_remove.push((name.clone(), "idle"));
+                continue;
+            }
+
+            // Check for dead process
+            match handle.process.write().await.try_wait() {
+                Ok(Some(status)) => {
+                    error!("MCP server '{}' exited unexpectedly with status: {}", name, status);
+                    to_remove.push((name.clone(), "dead"));
+                }
+                Ok(None) => {}, // Still running
+                Err(e) => {
+                    error!("Failed to check status of MCP server '{}': {}", name, e);
+                    // Assume dead if we can't check status? Or keep it?
+                    // Better to clean up if something is wrong.
+                    to_remove.push((name.clone(), "error"));
+                }
             }
         }
 
-        for name in to_remove {
-            info!("Reaping idle MCP server: {}", name);
+        for (name, reason) in to_remove {
+            info!("Reaping {} MCP server: {}", reason, name);
             if let Some(handle) = servers.remove(&name) {
                  let mut tx_lock = handle.shutdown_tx.write().await;
                  if let Some(tx) = tx_lock.take() {
                     let _ = tx.send(());
                  }
+                 // If process is already dead, kill/wait might be redundant but safe
                  let mut process = handle.process.write().await;
                  let _ = process.kill().await;
                  let _ = process.wait().await;

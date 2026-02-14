@@ -93,9 +93,6 @@ impl MemoryManager {
         std::fs::create_dir_all(&memory_dir)?; // Sync creation is fine during init
         let db_path = memory_dir.join(format!("{}.sqlite", agent_id));
 
-        let index = MemoryIndex::new_with_db_path(&workspace, &db_path)?
-            .with_chunk_config(memory_config.chunk_size, memory_config.chunk_overlap);
-
         // Create embedding provider based on config
         let embedding_provider: Option<Arc<dyn EmbeddingProvider>> = match memory_config
             .embedding_provider
@@ -193,6 +190,9 @@ impl MemoryManager {
                 None
             }
         };
+
+        let dimension = embedding_provider.as_ref().map(|p| p.dimensions());
+        let index = MemoryIndex::new_with_db_path(&workspace, &db_path, dimension)?;
 
         Ok(Self {
             workspace,

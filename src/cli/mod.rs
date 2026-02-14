@@ -34,6 +34,10 @@ pub struct Cli {
         env = "ZIER_ALPHA_AGENT"
     )]
     pub agent: String,
+
+    /// Run as supervisor (watches and restarts child process)
+    #[arg(long, global = true)]
+    pub supervised: bool,
 }
 
 #[derive(Subcommand)]

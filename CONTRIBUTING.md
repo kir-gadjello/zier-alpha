@@ -139,3 +139,9 @@ Violating these rules will reintroduce blocking and/or deadlocks.
 - **Secrets management** – store API keys in OS keychain, not plaintext config.
 
 When in doubt, consult the `CHANGELOG.md` for recent fixes and the audit report for deeper insights.
+
+### 10. Resilience & Extensions (v2)
+- **Extension Isolation**: Each extension runs in its own thread/runtime. Do not rely on shared global state between extensions.
+- **Degraded Mode**: Your extension tools should handle failures gracefully. If the disk is full, write operations will fail with a specific error. Catch this and report it to the user or retry later.
+- **Resource Cleanup**: Ensure your extension cleans up temporary files and subprocesses on shutdown/reload.
+- **Reloading**: Extensions can be reloaded via `system_introspect`. Ensure your extension's `load` logic is idempotent or handles re-initialization correctly (e.g. re-registering tools replaces old ones).

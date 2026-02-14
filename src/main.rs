@@ -8,6 +8,11 @@ use cli::{Cli, Commands};
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Supervisor mode: intercept before runtime start
+    if cli.supervised {
+        return run_supervised();
+    }
+
     // Handle daemon start/restart specially - must fork BEFORE starting Tokio runtime
     #[cfg(unix)]
     if let Commands::Daemon(ref args) = cli.command {
@@ -30,6 +35,59 @@ fn main() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(async_main(cli))
+}
+
+fn run_supervised() -> Result<()> {
+    use std::process::{Command, exit};
+    use std::time::Duration;
+    use std::thread::sleep;
+
+    let args: Vec<String> = std::env::args()
+        .filter(|a| a != "--supervised")
+        .collect();
+
+    if args.len() < 2 {
+        // If run with just `zier-alpha --supervised`, default to daemon start foreground?
+        // Or just fail if no subcommand.
+        // But args[0] is binary path.
+    }
+
+    let bin = &args[0];
+    let child_args = &args[1..];
+
+    println!("Starting supervisor for: {} {:?}", bin, child_args);
+
+    let mut crash_count = 0;
+    let mut last_start = std::time::Instant::now();
+
+    loop {
+        let mut child = Command::new(bin)
+            .args(child_args)
+            .spawn()
+            .expect("Failed to spawn child process");
+
+        let status = child.wait().expect("Failed to wait on child");
+
+        if status.success() {
+            println!("Child exited successfully.");
+            exit(0);
+        } else {
+            let code = status.code().unwrap_or(-1);
+            println!("Child exited with error code: {}", code);
+
+            // Reset crash count if it ran for a while
+            if last_start.elapsed() > Duration::from_secs(60) {
+                crash_count = 0;
+            } else {
+                crash_count += 1;
+            }
+            last_start = std::time::Instant::now();
+
+            let delay = std::cmp::min(crash_count * 2, 60);
+            println!("Restarting in {} seconds...", delay);
+            sleep(Duration::from_secs(delay as u64));
+        }
+    }
 }
 
 async fn async_main(cli: Cli) -> Result<()> {

@@ -129,6 +129,14 @@ impl ChatEngine {
         match response.response.content {
             LLMResponseContent::Text(text) => Ok((text, None)),
             LLMResponseContent::ToolCalls(calls) => {
+                self.session_manager.session().write().await.add_message(Message {
+                    role: Role::Assistant,
+                    content: String::new(),
+                    tool_calls: Some(calls.clone()),
+                    tool_call_id: None,
+                    images: Vec::new(),
+                });
+
                 let mut results = Vec::new();
 
                 for call in &calls {
@@ -138,19 +146,18 @@ impl ChatEngine {
                     );
 
                     let result = self.tool_executor.execute_tool(call).await;
+
+                    if let Err(ref e) = result {
+                        if let Some(approval_err) = e.downcast_ref::<crate::agent::tool_executor::ApprovalRequiredError>() {
+                            return Err(crate::agent::llm_error::LlmError::ApprovalRequired(approval_err.0.clone(), approval_err.1.clone()).into());
+                        }
+                    }
+
                     results.push(ToolResult {
                         call_id: call.id.clone(),
                         output: result.unwrap_or_else(|e| format!("Error: {}", e)),
                     });
                 }
-
-                self.session_manager.session().write().await.add_message(Message {
-                    role: Role::Assistant,
-                    content: String::new(),
-                    tool_calls: Some(calls),
-                    tool_call_id: None,
-                    images: Vec::new(),
-                });
 
                 for result in &results {
                     self.session_manager.session().write().await.add_message(Message {
@@ -442,5 +449,47 @@ impl ChatEngine {
             tool_call_id: Some(call_id),
             images: Vec::new(),
         });
+    }
+
+    pub async fn continue_chat(&self) -> Result<(String, Option<Usage>)> {
+        let messages = self.session_manager.session().read().await.messages_for_llm();
+        let last_msg = messages.last().ok_or_else(|| anyhow::anyhow!("No messages"))?;
+
+        if last_msg.role == Role::Assistant {
+            if let Some(calls) = &last_msg.tool_calls {
+                let mut results = Vec::new();
+                for call in calls {
+                    let result = self.tool_executor.execute_tool(call).await;
+
+                    if let Err(ref e) = result {
+                        if let Some(approval_err) = e.downcast_ref::<crate::agent::tool_executor::ApprovalRequiredError>() {
+                            return Err(crate::agent::llm_error::LlmError::ApprovalRequired(approval_err.0.clone(), approval_err.1.clone()).into());
+                        }
+                    }
+
+                    results.push(ToolResult {
+                        call_id: call.id.clone(),
+                        output: result.unwrap_or_else(|e| format!("Error: {}", e)),
+                    });
+                }
+
+                for result in &results {
+                    self.session_manager.session().write().await.add_message(Message {
+                        role: Role::Tool,
+                        content: result.output.clone(),
+                        tool_calls: None,
+                        tool_call_id: Some(result.call_id.clone()),
+                        images: Vec::new(),
+                    });
+                }
+
+                let messages = self.session_manager.session().read().await.messages_for_llm();
+                let tool_schemas = self.tool_executor.tool_schemas();
+                let response = self.client.chat(&messages, Some(&tool_schemas)).await?;
+
+                return self.handle_response(response).await;
+            }
+        }
+        anyhow::bail!("Nothing to continue")
     }
 }

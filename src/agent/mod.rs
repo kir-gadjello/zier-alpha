@@ -41,6 +41,8 @@ pub use memory_context::MemoryContextBuilder;
 pub use session_manager::SessionManager;
 pub use chat_engine::ChatEngine;
 pub use mcp_manager::McpManager;
+pub mod disk_monitor;
+pub use disk_monitor::DiskMonitor;
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -79,6 +81,7 @@ pub struct Agent {
 
     chat_engine: Arc<ChatEngine>,
     mcp_manager: Arc<McpManager>,
+    disk_monitor: Arc<DiskMonitor>,
 
     /// Project working directory (Worksite)
     project_dir: PathBuf,
@@ -175,9 +178,29 @@ impl Agent {
             tools.push(Arc::new(tool));
         }
 
+        // Register system introspect tool
+        // We need ScriptService to be passed in, or we can't fully initialize it here.
+        // Agent is created BEFORE ScriptService usually?
+        // Wait, main.rs creates ScriptService then Agent?
+        // Actually, main.rs:
+        // 1. Config::load()
+        // 2. MemoryManager
+        // 3. Agent::new_with_project -> creates tools
+        // 4. ScriptService::new
+        // So Agent doesn't have ScriptService yet.
+        // We might need to inject it later or rework initialization order.
+        // For now, let's skip ScriptService dependency or use a placeholder/Option.
+        // But SystemIntrospectTool needs it.
+        // Refactoring Agent creation is risky.
+        // Let's defer SystemIntrospectTool registration to after ScriptService is available?
+        // Agent::set_tools is available.
+        // So in main.rs, after creating ScriptService, we can create SystemIntrospectTool and add it to Agent.
+        // But Agent::new creates default tools.
+
         let session_manager = SessionManager::new(app_config.clone());
         let tool_executor = ToolExecutor::new(tools, app_config.clone());
         let memory_context = Arc::new(MemoryContextBuilder::new(memory.clone(), app_config.clone()));
+        let disk_monitor = Arc::new(DiskMonitor::new(app_config.disk.clone()));
 
         let chat_engine = ChatEngine::new(
             client,
@@ -196,6 +219,7 @@ impl Agent {
             memory_context,
             chat_engine: Arc::new(chat_engine),
             mcp_manager,
+            disk_monitor,
             project_dir,
             status_lines: Vec::new(),
             cumulative_usage: Usage::default(),
@@ -497,5 +521,11 @@ impl Agent {
 
     pub async fn auto_save_session(&self) -> Result<()> {
         self.session_manager.auto_save_session().await
+    }
+
+    pub async fn continue_chat(&mut self) -> Result<String> {
+        let (response, usage) = self.chat_engine.continue_chat().await?;
+        self.add_usage(usage);
+        Ok(response)
     }
 }
