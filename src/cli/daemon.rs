@@ -213,6 +213,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
         script_tools.push(ScriptTool::new(def, script_service.clone()));
     }
     println!("  Script Tools: {} loaded", script_tools.len());
+    crate::cli::diagnostics::log_bootup(agent_id, config, &config.agent.default_model).await;
 
     // Start Scheduler
     {
