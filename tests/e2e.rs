@@ -56,6 +56,7 @@ async fn test_e2e_flow() {
         None,
         None,
         None,
+        "test-agent".to_string(),
     )
     .unwrap();
 

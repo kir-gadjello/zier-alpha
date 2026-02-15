@@ -201,6 +201,7 @@ pub async fn chat_completions(
                 &state.config,
                 state.memory.clone(),
                 ContextStrategy::Full,
+                "openai",
             )
             .await
             {

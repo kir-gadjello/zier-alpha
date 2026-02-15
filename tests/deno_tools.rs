@@ -24,6 +24,7 @@ async fn test_deno_tool_registration_and_execution() {
         None,
         None,
         None,
+        "test-agent".to_string(),
     )
     .expect("Failed to create script service");
 
@@ -93,6 +94,7 @@ async fn test_deno_sandbox_fs_allowed() {
         None,
         None,
         None,
+        "test-agent".to_string(),
     )
     .unwrap();
 
@@ -155,6 +157,7 @@ async fn test_deno_sandbox_fs_denied() {
         None,
         None,
         None,
+        "test-agent".to_string(),
     )
     .unwrap();
 

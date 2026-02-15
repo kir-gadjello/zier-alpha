@@ -73,6 +73,7 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
         memory,
         ContextStrategy::Stateless,
         project_dir.clone(),
+        agent_id,
     )
     .await?;
 
@@ -130,10 +131,14 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                     None,
                     None,
                     Some(config.clone()),
+                    agent_id.to_string(),
                 );
 
                 match service {
                     Ok(svc) => {
+                        // Inject script service into agent for context propagation
+                        agent.set_script_service(svc.clone());
+
                         if let Err(e) = svc.load_script(path.to_str().unwrap()).await {
                             tracing::error!("Failed to load Hive extension: {}", e);
                         } else {
@@ -161,6 +166,7 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                                             Some(parent_model),
                                             Some(parent_tools),
                                             None,
+                                            Some(agent_id.to_string()),
                                         )
                                         .await
                                     {
@@ -210,7 +216,9 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
             }
             Err(e) => {
                 eprintln!("[CHILD DEBUG] Invalid ZIER_CHILD_TOOLS JSON: {}", e);
-                tracing::warn!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);
+                tracing::error!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);
+                // Fail hard to prevent security risks (unfiltered tools)
+                anyhow::bail!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);
             }
         }
     } else {

@@ -155,6 +155,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         memory,
         ContextStrategy::Full,
         project_dir.clone(),
+        agent_id,
     )
     .await?;
 
@@ -204,6 +205,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     None,
                     None,
                     Some(config.clone()),
+                    agent_id.to_string(),
                 ) {
                     Ok(s) => s,
                     Err(e) => {
@@ -211,6 +213,10 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                         return Err(e);
                     }
                 };
+
+                // Inject script service into agent
+                agent.set_script_service(service.clone());
+
                 if let Err(e) = service.load_script(path.to_str().unwrap()).await {
                     tracing::error!("Failed to load Hive extension: {}", e);
                 } else {
@@ -229,7 +235,12 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                             let parent_tools: Vec<String> =
                                 agent.tools().iter().map(|t| t.name().to_string()).collect();
                             if let Err(e) = service
-                                .set_parent_context(Some(parent_model), Some(parent_tools), None)
+                                .set_parent_context(
+                                    Some(parent_model),
+                                    Some(parent_tools),
+                                    None,
+                                    Some(agent_id.to_string()),
+                                )
                                 .await
                             {
                                 tracing::warn!("Failed to set parent context on Hive: {}", e);

@@ -92,10 +92,12 @@ pub async fn ingress_loop(
         (*memory).clone(),
         ContextStrategy::Stateless,
         project_dir.clone(),
+        &owner_agent_id,
     )
     .await
     {
         Ok(mut a) => {
+            a.set_script_service(script_service.clone());
             a.set_tools((*base_tools).clone());
             a
         }

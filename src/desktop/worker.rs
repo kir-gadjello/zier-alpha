@@ -85,7 +85,7 @@ async fn worker_loop(
         reserve_tokens: config.agent.reserve_tokens,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full).await?;
+    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full, &agent_id).await?;
     agent.new_session().await?;
 
     // Send ready message

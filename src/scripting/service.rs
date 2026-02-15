@@ -28,6 +28,7 @@ enum ScriptCommand {
         model: Option<String>,
         tools: Option<Vec<String>>,
         system_prompt_append: Option<String>,
+        agent_id: Option<String>,
     },
 }
 
@@ -57,6 +58,7 @@ pub struct ScriptService {
     config: Option<Config>, // Full application config for pi.config
 
     // Parent context propagation (for Hive inheritance)
+    agent_id: String,
     parent_model: Arc<RwLock<Option<String>>>,
     parent_tools: Arc<RwLock<Option<Vec<String>>>>,
     parent_system_prompt_append: Arc<RwLock<Option<String>>>,
@@ -71,6 +73,7 @@ impl ScriptService {
         ingress_bus: Option<Arc<IngressBus>>,
         scheduler: Option<Arc<Mutex<Scheduler>>>,
         config: Option<Config>,
+        agent_id: String,
     ) -> Result<Self> {
         let mcp_manager = Some(McpManager::new(600));
 
@@ -85,6 +88,7 @@ impl ScriptService {
             scheduler,
             mcp_manager,
             config,
+            agent_id,
             parent_model: Arc::new(RwLock::new(None)),
             parent_tools: Arc::new(RwLock::new(None)),
             parent_system_prompt_append: Arc::new(RwLock::new(None)),
@@ -158,8 +162,14 @@ impl ScriptService {
                                     model,
                                     tools,
                                     system_prompt_append,
+                                    agent_id,
                                 } => {
-                                    deno.set_parent_context(model, tools, system_prompt_append);
+                                    deno.set_parent_context(
+                                        model,
+                                        tools,
+                                        system_prompt_append,
+                                        agent_id,
+                                    );
                                 }
                             }
                         }
@@ -191,13 +201,21 @@ impl ScriptService {
             let parent_model = self.parent_model.read().await.clone();
             let parent_tools = self.parent_tools.read().await.clone();
             let parent_spa = self.parent_system_prompt_append.read().await.clone();
-            if parent_model.is_some() || parent_tools.is_some() || parent_spa.is_some() {
+            // Also send agent_id as part of parent context (it acts as parent_agent_id for the tool)
+            let agent_id = Some(self.agent_id.clone());
+
+            if parent_model.is_some()
+                || parent_tools.is_some()
+                || parent_spa.is_some()
+                || agent_id.is_some()
+            {
                 let _ = handle
                     .sender
                     .send(ScriptCommand::SetParentContext {
                         model: parent_model.clone(),
                         tools: parent_tools.clone(),
                         system_prompt_append: parent_spa,
+                        agent_id,
                     })
                     .await;
             }
@@ -328,6 +346,7 @@ impl ScriptService {
         model: Option<String>,
         tools: Option<Vec<String>>,
         system_prompt_append: Option<String>,
+        agent_id: Option<String>,
     ) -> Result<()> {
         // Update stored parent context
         *self.parent_model.write().await = model.clone();
@@ -343,6 +362,7 @@ impl ScriptService {
                     model: model.clone(),
                     tools: tools.clone(),
                     system_prompt_append: system_prompt_append.clone(),
+                    agent_id: agent_id.clone(),
                 })
                 .await;
         }
