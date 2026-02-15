@@ -26,3 +26,6 @@ target
 .*
 !.gitignore
 !.github/
+# Allow Cargo configuration to be versioned
+!.cargo/
+!.cargo/config.toml
