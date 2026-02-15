@@ -13,5 +13,10 @@ lto = true           # Full LTO – slower link, better size/performance
 codegen-units = 1    # Single codegen unit maximizes optimization
 incremental = false
 debug = false
-# Note: panic = "abort" would save space but loses backtraces; left as default "unwind" for debuggability.
-# For even smaller binaries, run `./scripts/strip-binary.sh` after build to strip symbols.
+# Note: panic = "abort" would save ~200-500KB but loses backtraces; left as default "unwind".
+
+# Release‑packed profile: ultra‑small for distribution, uses panic=abort + stripping + UPX
+[profile.release-packed]
+inherits = "release"
+panic = "abort"      # Abort on panic – saves space, acceptable for distribution builds
+# This profile is intended to be used with the `scripts/build_release_upx_packed.sh` script.
