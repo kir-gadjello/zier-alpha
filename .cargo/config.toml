@@ -1,11 +1,17 @@
-# Optimized test profile: behaves like --release by default
+# Test profile: optimized for fast development, no heavy size opts
 [profile.test]
-opt-level = 3      # Maximum optimization (like release)
-debug = false      # Strip debug symbols to save disk space
-lto = false        # LTO could slow builds; optional
-codegen-units = 1  # Better optimization, slower compile
+opt-level = 3        # Good performance without excessive compile time
+debug = false        # No debug info in test binaries (keeps them smaller)
+lto = false          # Avoid LTO for fast test builds
+# Use default codegen-units (Cargo default = 16) for quicker compilation
+# (Do not force 1; that slows compile for marginal gains)
 
-# Optional: make release even leaner
+# Release profile: maximum size reduction and cross‑crate optimization
 [profile.release]
-lto = "thin"       # Thin LTO for better runtime perf
-codegen-units = 1  # Maximize optimization
+opt-level = 3
+lto = true           # Full LTO – slower link, better size/performance
+codegen-units = 1    # Single codegen unit maximizes optimization
+incremental = false
+debug = false
+# Note: panic = "abort" would save space but loses backtraces; left as default "unwind" for debuggability.
+# For even smaller binaries, run `./scripts/strip-binary.sh` after build to strip symbols.
