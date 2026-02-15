@@ -173,12 +173,13 @@ if [[ "$SKIP_UPX" == "false" ]]; then
     fi
 
     # Try UPX compression with multiple fallback strategies
-    # Strategy order: primary (--best --lzma), then fallbacks
+    # Order: try LZMA first (best compression), then force, then ultra-brute, then fall back to NRV
     strategies=(
-      "${UPX_LEVEL} --lzma"
-      "--best --force"
-      "--best"
-      "--ultra-brute --lzma"
+      "--best --lzma"       # explicit LZMA (default for --best in recent UPX)
+      "--best --force"      # force overwrite, still LZMA
+      "--ultra-brute --lzma" # even more exhaustive LZMA
+      "--best"              # may fall back to NRV if LZMA unsupported
+      "--nrv -9"            # pure NRV at max level (lzma not available/unsupported)
     )
 
     success=false
@@ -187,12 +188,13 @@ if [[ "$SKIP_UPX" == "false" ]]; then
       info "Attempt $((i+1)): upx $strat"
       UPX_OUTPUT=$("$UPX_CMD" $strat -o "$BINARY_DST".tmp "$BINARY_DST" 2>&1)
       UPX_EXIT=$?
+      # Print UPX output for diagnosis
+      echo "$UPX_OUTPUT" | sed 's/^/    /'
       if [[ $UPX_EXIT -eq 0 ]] && ! echo "$UPX_OUTPUT" | grep -q "Packed 0 files"; then
         success=true
         break
       else
-        warn "Strategy $((i+1)) failed or packed 0 files."
-        echo "$UPX_OUTPUT" | sed 's/^/    /'
+        warn "Strategy $((i+1)) failed or packed 0 files. Trying next..."
       fi
     done
 
