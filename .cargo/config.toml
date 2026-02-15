@@ -4,7 +4,6 @@ opt-level = 3        # Good performance without excessive compile time
 debug = false        # No debug info in test binaries (keeps them smaller)
 lto = false          # Avoid LTO for fast test builds
 # Use default codegen-units (Cargo default = 16) for quicker compilation
-# (Do not force 1; that slows compile for marginal gains)
 
 # Release profile: maximum size reduction and cross‑crate optimization
 [profile.release]
@@ -19,4 +18,8 @@ debug = false
 [profile.release-packed]
 inherits = "release"
 panic = "abort"      # Abort on panic – saves space, acceptable for distribution builds
-# This profile is intended to be used with the `scripts/build_release_upx_packed.sh` script.
+
+# Target‑specific settings for static linking (Linux)
+[target.x86_64-unknown-linux-musl]
+# Build fully static binaries; ideal for distribution on any Linux distro.
+rustflags = ["-C", "target-feature=+crt-static"]

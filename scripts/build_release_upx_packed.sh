@@ -8,9 +8,22 @@
 #
 # The final binary is written to target/release-packed/zier-alpha
 #
-# Usage: ./scripts/build_release_upx_packed.sh [--no-upx] [--force]
+# Usage: ./scripts/build_release_upx_packed.sh [--no-upx] [--force] [--target <TRIPLE>]
 #   --no-upx: skip UPX compression (just strip)
 #   --force: rebuild even if binary appears up‑to‑date
+#   --target <TRIPLE>: cross‑compile target (e.g., x86_64-unknown-linux-musl for static Linux)
+#
+# Environment overrides:
+#   CARGO_BIN=cargo
+#   BINARY_NAME=zier-alpha
+#   UPX_CMD=upx
+#   UPX_LEVEL="--best"  (or "--ultra-brute")
+#
+# Examples:
+#   $0                          # host build, compress
+#   $0 --no-upx                # host build, strip only
+#   $0 --target x86_64-unknown-linux-musl   # static Linux build + UPX
+#   $0 --target aarch64-unknown-linux-musl  # ARM64 static Linux
 
 set -euo pipefail
 
@@ -27,40 +40,94 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 # Config
 CARGO_BIN="${CARGO_BIN:-cargo}"
 PROFILE="release-packed"
-BUILD_DIR="target/${PROFILE}"
 BINARY_NAME="${BINARY_NAME:-zier-alpha}"
-BINARY_SRC="${BUILD_DIR}/${BINARY_NAME}"
-BINARY_DST="${BUILD_DIR}/${BINARY_NAME}-upx"
-STRIP_CMD=""  # Determine per‑platform
-UPX_CMD="${UPX_CMD:-upx}"  # allow override
-UPX_LEVEL="${UPX_LEVEL:---best}"  # or --ultra-brute for even smaller but slower
+UPX_CMD="${UPX_CMD:-upx}"
+UPX_LEVEL="${UPX_LEVEL:---best}"
 
 # Parse flags
 SKIP_UPX=false
 FORCE_BUILD=false
+TARGET=""
+
+show_help() {
+  cat <<EOF
+Usage: $0 [options]
+
+Build a UPX‑packed ultra‑small release binary.
+
+Options:
+  --no-upx        Skip UPX compression (only strip)
+  --force         Rebuild even if binary appears up‑to‑date
+  --target <TRIPLE> Cross‑compile target (e.g., x86_64-unknown-linux-musl)
+  -h, --help      Show this help message
+
+Environment:
+  CARGO_BIN       Cargo command (default: cargo)
+  BINARY_NAME     Binary name (default: zier-alpha)
+  UPX_CMD         UPX executable (default: upx)
+  UPX_LEVEL       UPX compression level (default: --best)
+
+Output:
+  The final binary is written to target/release-packed/${BINARY_NAME}-upx
+  (or target/<target>/release-packed/ when using --target, then copied).
+
+Examples:
+  # Build for host, compress with UPX
+  $0
+
+  # Build fully static Linux binary (requires musl target)
+  $0 --target x86_64-unknown-linux-musl
+
+  # Only strip (no UPX)
+  $0 --no-upx
+EOF
+}
+
+cd "$(dirname "$0")/.."  # ensure repo root
+
+# Help?
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  show_help
+  exit 0
+fi
+
+# Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-upx) SKIP_UPX=true; shift ;;
     --force) FORCE_BUILD=true; shift ;;
+    --target) TARGET="$2"; shift 2 ;;
+    -h|--help) show_help; exit 0 ;;
     *) error "Unknown flag: $1" ;;
   esac
 done
 
-# Ensure we're in repo root
-cd "$(dirname "$0")/.."
+# Determine build directory (cargo uses target/<target-triple>/<profile> when cross‑compiling)
+if [[ -z "$TARGET" ]]; then
+  BUILD_DIR="target/${PROFILE}"
+else
+  BUILD_DIR="target/${TARGET}/${PROFILE}"
+fi
 
-# Check if we need to rebuild
+BINARY_SRC="${BUILD_DIR}/${BINARY_NAME}"
+BINARY_DST="${BUILD_DIR}/${BINARY_NAME}-upx"
+
+# Build if needed
 if [[ ! -f "$BINARY_SRC" || "$FORCE_BUILD" == "true" ]]; then
-  info "Building with profile: ${PROFILE} (panic=abort, LTO, no debug)"
-  ${CARGO_BIN} build --profile "${PROFILE}"
+  info "Building profile: ${PROFILE}"
+  if [[ -n "$TARGET" ]]; then
+    info "Target: ${TARGET}"
+    ${CARGO_BIN} build --profile "${PROFILE}" --target "${TARGET}"
+  else
+    ${CARGO_BIN} build --profile "${PROFILE}"
+  fi
 else
   info "Binary already exists at ${BINARY_SRC}; use --force to rebuild"
 fi
 
-# If binary doesn't exist after build, abort
 [[ -f "$BINARY_SRC" ]] || error "Build failed: ${BINARY_SRC} not found"
 
-# Copy to working path (we'll compress this copy)
+# Work on a copy
 cp -f "$BINARY_SRC" "$BINARY_DST"
 
 # Show original size
@@ -68,7 +135,7 @@ ORIG_SIZE=$(stat -c%s "$BINARY_DST" 2>/dev/null || stat -f%z "$BINARY_DST")
 ORIG_HUMAN=$(numfmt --to=iec-i --suffix=B "$ORIG_SIZE" 2>/dev/null || echo "${ORIG_SIZE} bytes")
 info "Original size: ${ORIG_HUMAN}"
 
-# Step 1: Strip symbols
+# Strip symbols
 info "Stripping symbols..."
 case "$(uname -s)" in
   Linux*)
@@ -86,25 +153,25 @@ STRIPPED_SIZE=$(stat -c%s "$BINARY_DST" 2>/dev/null || stat -f%z "$BINARY_DST")
 STRIPPED_HUMAN=$(numfmt --to=iec-i --suffix=B "$STRIPPED_SIZE" 2>/dev/null || echo "${STRIPPED_SIZE} bytes")
 info "After stripping: ${STRIPPED_HUMAN}"
 
-# Step 2: UPX compression (unless skipped)
+# Optional UPX compression
 if [[ "$SKIP_UPX" == "false" ]]; then
   if command -v "$UPX_CMD" &>/dev/null; then
-    info "Compressing with UPX (this may take a few seconds)..."
-    # Use --lzma for better compression; --best implies --lzma for UPX ≥ 3.96
+    info "Compressing with UPX (level=${UPX_LEVEL})..."
     "$UPX_CMD" ${UPX_LEVEL} --lzma -o "$BINARY_DST".tmp "$BINARY_DST" 2>/dev/null
     mv "$BINARY_DST".tmp "$BINARY_DST"
+
     COMPRESSED_SIZE=$(stat -c%s "$BINARY_DST" 2>/dev/null || stat -f%z "$BINARY_DST")
     COMPRESSED_HUMAN=$(numfmt --to=iec-i --suffix=B "$COMPRESSED_SIZE" 2>/dev/null || echo "${COMPRESSED_SIZE} bytes")
     info "After UPX: ${COMPRESSED_HUMAN}"
 
-    # Compute ratios
+    # Ratios
     ratio_strip=$(awk "BEGIN {printf \"%.1f%%\", ($STRIPPED_SIZE - $COMPRESSED_SIZE)/$STRIPPED_SIZE * 100}")
     ratio_orig=$(awk "BEGIN {printf \"%.1f%%\", ($ORIG_SIZE - $COMPRESSED_SIZE)/$ORIG_SIZE * 100}")
     info "Compression ratios:"
     echo "  vs original: ${ratio_orig} reduction"
     echo "  vs stripped: ${ratio_strip} reduction"
 
-    # Show UPX details if possible
+    # Show UPX version if available
     if "$UPX_CMD" --version &>/dev/null; then
       UPX_VER=$("$UPX_CMD" --version | head -n1)
       info "UPX: ${UPX_VER}"
@@ -112,7 +179,6 @@ if [[ "$SKIP_UPX" == "false" ]]; then
   else
     warn "UPX not found in PATH. Skipping compression."
     echo "To install UPX: brew install upx   (macOS)   or   apt install upx   (Ubuntu/Debian)"
-    echo "Alternatively, set UPX_CMD to point to your upx executable."
     echo "Final binary (stripped only): $BINARY_DST"
   fi
 else
@@ -122,3 +188,11 @@ fi
 
 info "Build complete!"
 echo "Binary: $BINARY_DST"
+
+# Suggest verification for static builds
+if [[ -n "$TARGET" ]]; then
+  echo
+  info "Verification (optional):"
+  echo "  file \"$BINARY_DST\"   # should say 'statically linked'"
+  echo "  ldd \"$BINARY_DST\"    # should say 'not a dynamic executable'"
+fi
