@@ -31,27 +31,35 @@ log_info "Binary total size:"
 ls -lh "$BINARY" | awk '{print "  " $5 " (" $6 ")"}'
 echo ""
 
-# Check for cargo-bloat (crate-level breakdown)
-if command -v "$CARGO_BLOAT_BIN" &>/dev/null; then
-    log_info "Crate size breakdown (top $TOP_N):"
-    # Run cargo-bloat; it may require '--release' flag as separate arg or within command
-    # Since CARGO_BLOAT_BIN is "cargo bloat", split into array
-    read -ra CMD <<< "$CARGO_BLOAT_BIN"
-    "${CMD[@]}" --release --bin zier-alpha --crates 2>/dev/null | head -"$TOP_N" || {
-        log_warn "cargo-bloat failed; trying without --crates flag..."
-        "${CMD[@]}" --release --bin zier-alpha 2>/dev/null | head -"$TOP_N" || log_error "cargo-bloat produced no output"
-    }
+# Try to run cargo-bloat (crate-level breakdown)
+log_info "Crate size breakdown (top $TOP_N):"
+
+# Function to execute cargo-bloat and capture output
+run_cargo_bloat() {
+    local CMD
+    # Build command from env or defaults
+    # Default to "cargo bloat" if not set
+    local cmd_str="${CARGO_BLOAT_BIN:-cargo bloat}"
+    read -ra CMD <<< "$cmd_str"
+    # Run and capture stdout; ignore stderr, but preserve exit status for debugging
+    # We capture output to check if non-empty later
+    "${CMD[@]}" --release --bin zier-alpha --crates 2>/dev/null | head -"$TOP_N"
+}
+
+output=$(run_cargo_bloat) || output=""
+
+if [[ -n "$output" ]]; then
+    echo "$output"
     echo ""
 else
-    log_warn "cargo-bloat not installed. To install: cargo install cargo-bloat"
-    log_info "Falling back to symbol-level analysis (largest symbols)..."
-    # Fallback: show largest symbols using nm
-    if command -v nm &>/dev/null; then
-        echo "  (top $TOP_N symbols by size in .text/.data/.bss)"
-        nm --size-sort --radix=d "$BINARY" 2>/dev/null | tail -"$TOP_N" | awk '{printf "  %8s %s\n", $1, $3}' || true
-    else
-        log_warn "nm not found; install binutils for symbol analysis"
+    log_warn "cargo-bloat not available or produced no output. To install: cargo install cargo-bloat"
+    log_info "Falling back to section breakdown (size) ..."
+    if command -v size &>/dev/null; then
+        echo "  Section sizes (bytes):"
+        size -B "$BINARY" 2>/dev/null || size "$BINARY"
+        echo ""
     fi
+    log_info "For per-symbol details, install bloaty or cargo-bloat and re‑run."
     echo ""
 fi
 
