@@ -1,0 +1,11 @@
+# Optimized test profile: behaves like --release by default
+[profile.test]
+opt-level = 3      # Maximum optimization (like release)
+debug = false      # Strip debug symbols to save disk space
+lto = false        # LTO could slow builds; optional
+codegen-units = 1  # Better optimization, slower compile
+
+# Optional: make release even leaner
+[profile.release]
+lto = "thin"       # Thin LTO for better runtime perf
+codegen-units = 1  # Maximize optimization
