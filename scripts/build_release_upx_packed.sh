@@ -28,8 +28,9 @@ error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 CARGO_BIN="${CARGO_BIN:-cargo}"
 PROFILE="release-packed"
 BUILD_DIR="target/${PROFILE}"
-BINARY_SRC="${BUILD_DIR}/zier-alpha"
-BINARY_DST="${BUILD_DIR}/zier-alpha-upx"
+BINARY_NAME="${BINARY_NAME:-zier-alpha}"
+BINARY_SRC="${BUILD_DIR}/${BINARY_NAME}"
+BINARY_DST="${BUILD_DIR}/${BINARY_NAME}-upx"
 STRIP_CMD=""  # Determine per‑platform
 UPX_CMD="${UPX_CMD:-upx}"  # allow override
 UPX_LEVEL="${UPX_LEVEL:---best}"  # or --ultra-brute for even smaller but slower
