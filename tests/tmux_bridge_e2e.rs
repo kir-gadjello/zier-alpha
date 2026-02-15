@@ -34,6 +34,7 @@ async fn test_tmux_bridge_lifecycle() {
         Some(bus.clone()),
         Some(scheduler.clone()),
         None,
+        "test".to_string(),
     )
     .unwrap();
 

@@ -404,6 +404,59 @@ Extensions are JavaScript files placed in `~/.zier-alpha/extensions/` (or loaded
 
 The Hive and tmux_bridge extensions are examples of what can be built.
 
+### Hive – Subagent Orchestration
+
+Hive enables the main agent to delegate tasks to specialized child agents running in isolated processes. It provides a powerful **fork‑and‑clone** model for multi‑agent workflows.
+
+#### Tool: `hive_fork_subagent`
+
+The primary interface. Parameters:
+
+- `agent_name` *(optional)* – Name of the agent to delegate to. If omitted or empty, a **clone** of the parent is created (see below).
+- `task` *(required)* – Instructions for the sub‑agent.
+- `context_mode` *(optional)* – `"fresh"` (default) for a clean slate, or `"fork"` to inherit the parent’s conversation prefix. Clone mode always uses fork.
+- `attachments` *(optional)* – Array of file paths to mount into the child’s workspace.
+
+#### Clone Mode
+
+When `agent_name` is omitted (or the special value `"."`), the child is a **temporal clone**: it receives an exact byte‑identical copy of the parent’s system prompt, toolset, and (optionally) extra instructions. This is implemented via **session hydration**, ensuring no drift in the base context.
+
+Cloning supports safety limits:
+
+- `extensions.hive.allow_clones` (default `true`) – enable/disable cloning entirely.
+- `extensions.hive.max_clone_fork_depth` (default `1`) – maximum clone‑chain length. The root has depth 0; a child with depth ≥ limit cannot spawn further clones.
+- `extensions.hive.clone_disable_tools` – list of tool names that clones may **not** use (e.g., to prevent recursive delegation).
+
+Customization:
+
+- `extensions.hive.clone_sysprompt_followup` – text appended to the child’s system prompt (after the workspace section) to give clones additional instructions.
+- `extensions.hive.clone_userprompt_prefix` – string prepended to the child’s task prompt, allowing subtle context shifts.
+
+All clone‑specific settings are **ignored** for named agents (those with a non‑empty `agent_name`).
+
+#### Named Agents
+
+Agents defined as Markdown files in `extensions.hive.agents_dir` can be delegated by name. They support model inheritance (`model: "."` inherits parent’s model) and tool inheritance (`tools: "."` inherits all parent tools, `tools: ".no_delegate"` inherits all except `hive_fork_subagent`). Named agents are subject to the general Hive recursion limit `extensions.hive.max_depth` (default 3).
+
+#### Metadata
+
+When a child agent finishes, the parent receives rich metadata in the tool result: `agent`, `model`, `provider`, `latency_ms`, and token usage (`input_tokens`/`output_tokens`). This aids monitoring and debugging.
+
+#### Configuration Reference
+
+```toml
+[extensions.hive]
+enabled = true
+agents_dir = "agents"
+max_depth = 3                # Named‑agent recursion limit
+timeout_seconds = 300
+allow_clones = true
+max_clone_fork_depth = 1    # Clone‑chain limit
+clone_sysprompt_followup = "You are a clone."   # Optional
+clone_userprompt_prefix = "[CLONE] "             # Optional
+clone_disable_tools = ["bash"]                   # Optional
+```
+
 ---
 
 ## Configuration

@@ -14,6 +14,7 @@ async fn test_extension_isolation_panic() {
         None,
         None,
         None,
+        "test".to_string(),
     )
     .unwrap();
 
@@ -100,6 +101,7 @@ async fn test_extension_isolation_separation() {
         None,
         None,
         None,
+        "test".to_string(),
     )
     .unwrap();
 

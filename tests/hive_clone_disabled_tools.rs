@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -70,8 +71,8 @@ fn test_hive_clone_disabled_tools() -> Result<()> {
     // 1. Setup
     let workspace_dir = root.join("workspace");
     fs::create_dir(&workspace_dir)?;
-    // Create a file for read_file to read
-    fs::write(workspace_dir.join("test.txt"), "Hello from test file")?;
+    // Create a file for read_file to read in the root workdir (shared with child)
+    fs::write(root.join("test.txt"), "Hello from test file")?;
 
     let ext_dir = root.join("extensions").join("hive");
     fs::create_dir_all(&ext_dir)?;
@@ -79,7 +80,10 @@ fn test_hive_clone_disabled_tools() -> Result<()> {
     if source_ext.exists() {
         copy_dir_recursive(&source_ext, &ext_dir)?;
     } else {
-        eprintln!("Hive extension source not found at {}", source_ext.display());
+        eprintln!(
+            "Hive extension source not found at {}",
+            source_ext.display()
+        );
         return Ok(());
     }
 
@@ -118,14 +122,38 @@ workspace = "{}"
     fs::create_dir_all(&dot_zier)?;
     fs::rename(&config_path, dot_zier.join("config.toml"))?;
 
+    // Create a mock session file for hydration
+    let session_id = "test-session";
+    let sessions_dir = dot_zier.join("agents").join("main").join("sessions");
+    fs::create_dir_all(&sessions_dir)?;
+    let timestamp = Utc::now().to_rfc3339();
+    let session_content = format!(
+        r#"{{"type":"session","version":1,"id":"{0}","timestamp":"{1}","cwd":"{2}"}}
+{{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"Start"}}]}}}}
+"#,
+        session_id,
+        timestamp,
+        root.display()
+    );
+    fs::write(
+        sessions_dir.join(format!("{}.jsonl", session_id)),
+        session_content,
+    )?;
+
     // 2. Test: Clone tries to use bash (should be disabled)
     // Use custom prefixes that avoid '|' to avoid shell chaining block
-    let parent_task = r#"test_tool_json:hive_fork_subagent|{"task":"RUN_BASH:{\"command\":\"echo hi\"}"}"#;
-    let (stdout1, stderr1) = run_zier_ask(&temp_dir, parent_task, vec![])?;
+    let parent_task =
+        r#"test_tool_json:hive_fork_subagent|{"task":"RUN_BASH:{\"command\":\"echo hi\"}"}"#;
+    let (stdout1, stderr1) = run_zier_ask(
+        &temp_dir,
+        parent_task,
+        vec![("ZIER_SESSION_ID", session_id.to_string())],
+    )?;
     let combined1 = format!("{}\n{}", stdout1, stderr1);
     // Expect the child's bash attempt to fail with "Unknown tool" or "Tool failed"
     assert!(
-        combined1.contains("bash") && (combined1.contains("Unknown tool") || combined1.contains("Tool failed")),
+        combined1.contains("bash")
+            && (combined1.contains("Unknown tool") || combined1.contains("Tool failed")),
         "Expected bash to be disabled in clone. Output: {}",
         combined1
     );
@@ -137,8 +165,13 @@ workspace = "{}"
     );
 
     // 3. Test: Clone uses read_file (should succeed)
-    let parent_task2 = r#"test_tool_json:hive_fork_subagent|{"task":"READ_FILE:{\"path\":\"test.txt\"}"}"#;
-    let (stdout2, stderr2) = run_zier_ask(&temp_dir, parent_task2, vec![])?;
+    let parent_task2 =
+        r#"test_tool_json:hive_fork_subagent|{"task":"READ_FILE:{\"path\":\"test.txt\"}"}"#;
+    let (stdout2, stderr2) = run_zier_ask(
+        &temp_dir,
+        parent_task2,
+        vec![("ZIER_SESSION_ID", session_id.to_string())],
+    )?;
     assert!(
         stdout2.contains("Hello from test file"),
         "Expected read_file to succeed in clone. stdout: {}",

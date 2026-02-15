@@ -107,6 +107,7 @@ workspace = "{}"
         memory,
         ContextStrategy::Stateless,
         root.clone(),
+        "test",
     )
     .await?;
     eprintln!("TEST: agent created");
@@ -143,6 +144,7 @@ workspace = "{}"
                     None,
                     None,
                     None,
+                    "test".to_string(),
                 )?;
                 eprintln!("TEST: ScriptService created, loading script");
                 service.load_script(hive_path.to_str().unwrap()).await?;

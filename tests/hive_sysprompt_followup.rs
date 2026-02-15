@@ -1,4 +1,6 @@
 use anyhow::Result;
+use chrono::Utc;
+use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -77,7 +79,10 @@ fn test_hive_sysprompt_followup() -> Result<()> {
     if source_ext.exists() {
         copy_dir_recursive(&source_ext, &ext_dir)?;
     } else {
-        eprintln!("Hive extension source not found at {}", source_ext.display());
+        eprintln!(
+            "Hive extension source not found at {}",
+            source_ext.display()
+        );
         return Ok(());
     }
 
@@ -116,12 +121,59 @@ workspace = "{}"
     fs::create_dir_all(&dot_zier)?;
     fs::rename(&config_path, dot_zier.join("config.toml"))?;
 
+    // Create a mock session file for hydration with a system message containing the follow-up
+    let session_id = "test-session";
+    let sessions_dir = dot_zier.join("agents").join("main").join("sessions");
+    fs::create_dir_all(&sessions_dir)?;
+    let timestamp = Utc::now().to_rfc3339();
+
+    // Build session JSON lines: header, system message, user message
+    let session_header = json!({
+        "type": "session",
+        "version": 1,
+        "id": session_id,
+        "timestamp": timestamp,
+        "cwd": root.to_string_lossy().to_string()
+    });
+    let system_text = "You are a clone.";
+    let system_msg = json!({
+        "type": "message",
+        "message": {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": system_text}
+            ]
+        }
+    });
+    let user_msg = json!({
+        "type": "message",
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Start"}
+            ]
+        }
+    });
+    let session_content = format!(
+        "{}\n{}\n{}\n",
+        serde_json::to_string(&session_header).unwrap(),
+        serde_json::to_string(&system_msg).unwrap(),
+        serde_json::to_string(&user_msg).unwrap()
+    );
+    fs::write(
+        sessions_dir.join(format!("{}.jsonl", session_id)),
+        session_content,
+    )?;
+
     // 2. Test: parent spawns a clone with a special task to introspect system prompt
     let task = "CHECK_SYSTEM_PROMPT";
     let (stdout, stderr) = run_zier_ask(
         &temp_dir,
-        &format!("test_tool_json:hive_fork_subagent|{{\"agent_name\":\"\",\"task\":\"{}\"}}", task),
-        vec![],
+        &format!(
+            "test_tool_json:hive_fork_subagent|{{\"agent_name\":\"\",\"task\":\"{}\"}}",
+            task
+        ),
+        vec![("ZIER_SESSION_ID", session_id.to_string())],
     )?;
 
     // The child should have responded with its system prompt prefixed by "SYSTEM_PROMPT:"

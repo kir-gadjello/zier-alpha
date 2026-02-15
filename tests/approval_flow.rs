@@ -45,7 +45,7 @@ async fn test_approval_flow_non_streaming() {
         reserve_tokens: 1000,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full)
+    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full, "test")
         .await
         .unwrap();
 

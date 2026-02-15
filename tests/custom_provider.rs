@@ -41,10 +41,7 @@ fn test_custom_provider_basic() {
     let any = provider.as_ref() as &dyn std::any::Any;
     let openai_provider = any.downcast_ref::<OpenAIProvider>().unwrap();
     assert_eq!(openai_provider.api_key(), "test-key");
-    assert_eq!(
-        openai_provider.base_url(),
-        "https://openrouter.ai/api/v1"
-    );
+    assert_eq!(openai_provider.base_url(), "https://openrouter.ai/api/v1");
     assert_eq!(openai_provider.model(), "stepfun/step-3.5-flash:free");
 }
 

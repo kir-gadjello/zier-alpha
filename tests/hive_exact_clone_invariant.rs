@@ -88,6 +88,7 @@ workspace = "{}"
         parent_memory,
         zier_alpha::agent::ContextStrategy::Full,
         root.clone(),
+        "test",
     )
     .await?;
 
@@ -111,6 +112,7 @@ workspace = "{}"
         child_memory,
         zier_alpha::agent::ContextStrategy::Full,
         root,
+        "test",
     )
     .await?;
 
@@ -132,8 +134,14 @@ workspace = "{}"
     //   \n\n---\n\n# Workspace Context\n\n<memory context>
     // We only care about the base part (before the delimiter)
     let delimiter = "\n\n---\n\n# Workspace Context\n\n";
-    let parent_base = parent_system.split(delimiter).next().unwrap_or(&parent_system);
-    let child_base = child_system.split(delimiter).next().unwrap_or(&child_system);
+    let parent_base = parent_system
+        .split(delimiter)
+        .next()
+        .unwrap_or(&parent_system);
+    let child_base = child_system
+        .split(delimiter)
+        .next()
+        .unwrap_or(&child_system);
 
     // Normalize by removing the "Current Time" section entirely, because timestamps differ.
     // Also strip any status lines which may differ between agents.
@@ -165,7 +173,8 @@ workspace = "{}"
 
     // The invariant: after normalizing time, the base prompts should be byte-identical.
     assert_eq!(
-        parent_norm, child_norm,
+        parent_norm,
+        child_norm,
         "System prompt base (with time stripped) differs between parent and child.\n\
          Parent normalized length: {}\n\
          Child normalized length: {}",

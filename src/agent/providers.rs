@@ -2224,8 +2224,15 @@ impl LLMProvider for MockProvider {
         // Test helper: if user says "CHECK_SYSTEM_PROMPT", return the full system prompt for verification.
         if let Some(user_msg) = messages.iter().filter(|m| m.role == Role::User).next_back() {
             if user_msg.content == "CHECK_SYSTEM_PROMPT" {
-                if let Some(sys_msg) = messages.iter().filter(|m| m.role == Role::System).next_back() {
-                    return Ok(LLMResponse::text(format!("SYSTEM_PROMPT:{}", sys_msg.content)));
+                if let Some(sys_msg) = messages
+                    .iter()
+                    .filter(|m| m.role == Role::System)
+                    .next_back()
+                {
+                    return Ok(LLMResponse::text(format!(
+                        "SYSTEM_PROMPT:{}",
+                        sys_msg.content
+                    )));
                 }
             }
         }

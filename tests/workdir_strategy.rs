@@ -37,6 +37,7 @@ async fn test_workdir_overlay_strategy() {
         memory,
         ContextStrategy::Full,
         project_dir.clone(),
+        "test",
     )
     .await
     .unwrap();
@@ -97,6 +98,7 @@ async fn test_workdir_mount_strategy() {
         memory,
         ContextStrategy::Full,
         project_dir.clone(),
+        "test",
     )
     .await
     .unwrap();
@@ -155,6 +157,7 @@ async fn test_deno_tool_routing() {
         None,
         None,
         None,
+        "test".to_string(),
     )
     .unwrap();
 
@@ -202,6 +205,7 @@ async fn test_deno_tool_routing() {
         memory,
         ContextStrategy::Full,
         project_dir.clone(),
+        "test",
     )
     .await
     .unwrap();

@@ -103,7 +103,10 @@ impl SmartClient {
         settings.default == "allow"
     }
 
-    pub fn create_provider_from_config(&self, config: &ModelConfig) -> Result<Box<dyn LLMProvider>> {
+    pub fn create_provider_from_config(
+        &self,
+        config: &ModelConfig,
+    ) -> Result<Box<dyn LLMProvider>> {
         let (provider_name, model_id) = if let Some(ref p) = config.provider {
             (p.to_lowercase(), config.model.clone())
         } else {
@@ -176,7 +179,10 @@ impl SmartClient {
             _ => {
                 // Check if it's a custom provider defined in providers.extra (case-insensitive)
                 let extra_cfg = self.config.providers.extra.get(&provider_name).or_else(|| {
-                    self.config.providers.extra.iter()
+                    self.config
+                        .providers
+                        .extra
+                        .iter()
                         .find(|(k, _)| k.eq_ignore_ascii_case(&provider_name))
                         .map(|(_, v)| v)
                 });

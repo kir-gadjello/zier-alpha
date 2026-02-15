@@ -205,7 +205,8 @@ mod tests {
 [disk]
 min_free_percent = 0.1
 "#;
-        let config: Config = toml::from_str(toml).expect("should parse fractional min_free_percent");
+        let config: Config =
+            toml::from_str(toml).expect("should parse fractional min_free_percent");
         assert_eq!(config.disk.min_free_percent, 0.1);
     }
 }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -82,7 +83,10 @@ fn test_hive_clone_depth_limit() -> Result<()> {
     if source_ext.exists() {
         copy_dir_recursive(&source_ext, &ext_dir)?;
     } else {
-        eprintln!("Hive extension source not found at {}", source_ext.display());
+        eprintln!(
+            "Hive extension source not found at {}",
+            source_ext.display()
+        );
         return Ok(());
     }
 
@@ -120,9 +124,31 @@ workspace = "{}"
     fs::create_dir_all(&dot_zier)?;
     fs::rename(&config_path, dot_zier.join("config.toml"))?;
 
+    // Create a mock session file for hydration
+    let session_id = "test-session";
+    let sessions_dir = dot_zier.join("agents").join("main").join("sessions");
+    fs::create_dir_all(&sessions_dir)?;
+    let timestamp = Utc::now().to_rfc3339();
+    let session_content = format!(
+        r#"{{"type":"session","version":1,"id":"{0}","timestamp":"{1}","cwd":"{2}"}}
+{{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"The secret code is 42"}}]}}}}
+"#,
+        session_id,
+        timestamp,
+        root.display()
+    );
+    fs::write(
+        sessions_dir.join(format!("{}.jsonl", session_id)),
+        session_content,
+    )?;
+
     // 2. Test: Depth 1 (parent not clone) -> spawn clone should succeed
     let task1 = r#"test_tool_json:hive_fork_subagent|{"agent_name":"","task":"hello"}"#;
-    let (stdout1, stderr1) = run_zier_ask(&temp_dir, task1, vec![])?;
+    let (stdout1, stderr1) = run_zier_ask(
+        &temp_dir,
+        task1,
+        vec![("ZIER_SESSION_ID", session_id.to_string())],
+    )?;
     let combined1 = format!("{}\n{}", stdout1, stderr1);
     assert!(
         stdout1.contains("Mock response"),
@@ -139,11 +165,15 @@ workspace = "{}"
     let (stdout2, stderr2) = run_zier_ask(
         &temp_dir,
         task1,
-        vec![("ZIER_HIVE_CLONE_DEPTH", "2".to_string())],
+        vec![
+            ("ZIER_SESSION_ID", session_id.to_string()),
+            ("ZIER_HIVE_CLONE_DEPTH", "2".to_string()),
+        ],
     )?;
-    let combined2 = format!("{}\n{}", stdout2, stderr2);
+    let _combined2 = format!("{}\n{}", stdout2, stderr2);
     assert!(
-        stdout2.contains("Max clone fork depth exceeded") || stderr2.contains("Max clone fork depth exceeded"),
+        stdout2.contains("Max clone fork depth exceeded")
+            || stderr2.contains("Max clone fork depth exceeded"),
         "Expected depth limit error in output. stdout: {}, stderr: {}",
         stdout2,
         stderr2

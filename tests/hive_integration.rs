@@ -138,7 +138,7 @@ You are EchoBot.
 
     let stdout_depth = String::from_utf8_lossy(&output_depth.stdout);
     assert!(
-        stdout_depth.contains("Max recursion depth exceeded"),
+        stdout_depth.contains("Max Hive recursion depth exceeded"),
         "Output did not contain recursion error"
     );
 

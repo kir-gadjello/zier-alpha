@@ -50,6 +50,7 @@ async fn test_architecture_concurrency() {
         Some(bus.clone()),
         None,
         None,
+        "test".to_string(),
     )
     .unwrap();
 

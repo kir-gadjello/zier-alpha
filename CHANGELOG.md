@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Hive extension overhaul**: Renamed `hive_delegate` to `hive_fork_subagent`, introduced true clone mode with byte‑identical session hydration, configurable clone depth limits (`max_clone_fork_depth`), custom system prompt follow‑up (`clone_sysprompt_followup`), user‑prompt prefix (`clone_userprompt_prefix`), and per‑clone tool restrictions (`clone_disable_tools`). Parent now receives rich execution metadata (model, provider, latency, token usage).
 - **Custom provider support**: Users can now define arbitrary OpenAI-compatible providers (e.g., `openrouter`, `together`) in config under `[providers.<name>]`. These providers are automatically recognized when referenced in a model's `provider` field. The provider config accepts `api_key` (optional if model provides `api_key_env`), `base_url`, and an optional `type` for documentation. This enables seamless integration with any OpenAI-compatible endpoint.
 
 ### Fixed

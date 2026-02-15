@@ -16,11 +16,9 @@ async fn test_hive_context_propagation() {
 
     // Initialize MemoryManager (requires creating some dirs)
     std::fs::create_dir_all(workspace_path.join("memory")).unwrap();
-    let memory = MemoryManager::new_with_full_config(
-        &config.memory,
-        Some(&config),
-        "test-agent-hive"
-    ).unwrap();
+    let memory =
+        MemoryManager::new_with_full_config(&config.memory, Some(&config), "test-agent-hive")
+            .unwrap();
 
     let agent_config = AgentConfig {
         model: "initial-model".to_string(),
@@ -39,7 +37,8 @@ async fn test_hive_context_propagation() {
         None,
         None,
         "test-agent-hive".to_string(),
-    ).unwrap();
+    )
+    .unwrap();
 
     // 3. Create Agent
     let mut agent = Agent::new_with_project(
@@ -49,7 +48,9 @@ async fn test_hive_context_propagation() {
         ContextStrategy::Stateless,
         workspace_path.clone(),
         "test-agent-hive",
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     // 4. Inject ScriptService
     agent.set_script_service(script_service.clone());
@@ -81,9 +82,15 @@ async fn test_hive_context_propagation() {
     use std::io::Write;
     script_file.write_all(script_content.as_bytes()).unwrap();
 
-    script_service.load_script(script_file.path().to_str().unwrap()).await.unwrap();
+    script_service
+        .load_script(script_file.path().to_str().unwrap())
+        .await
+        .unwrap();
 
-    let result = script_service.execute_tool("get_context", "{}").await.unwrap();
+    let result = script_service
+        .execute_tool("get_context", "{}")
+        .await
+        .unwrap();
 
     // Parse result
     // The tool returns JSON string of the context object
@@ -104,10 +111,15 @@ async fn test_hive_context_propagation() {
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    let result_tools = script_service.execute_tool("get_context", "{}").await.unwrap();
+    let result_tools = script_service
+        .execute_tool("get_context", "{}")
+        .await
+        .unwrap();
     let ctx_tools: serde_json::Value = serde_json::from_str(&result_tools).unwrap();
 
-    let tool_list = ctx_tools["tools"].as_array().expect("Tools should be an array");
+    let tool_list = ctx_tools["tools"]
+        .as_array()
+        .expect("Tools should be an array");
     assert!(!tool_list.is_empty());
 
     // Check for "bash" tool which is default

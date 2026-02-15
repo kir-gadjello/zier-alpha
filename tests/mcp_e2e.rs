@@ -40,6 +40,7 @@ async fn test_mcp_e2e() {
         None,
         None,
         None,
+        "test".to_string(),
     )
     .expect("Failed to create script service");
 

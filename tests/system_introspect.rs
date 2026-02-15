@@ -25,6 +25,7 @@ async fn test_system_introspect_tool() {
         None,
         None,
         None,
+        "test".to_string(),
     )
     .unwrap();
 

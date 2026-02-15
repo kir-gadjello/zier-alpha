@@ -23,7 +23,7 @@ async fn test_memory_write_integration() {
         reserve_tokens: 1000,
     };
 
-    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full)
+    let mut agent = Agent::new(agent_config, &config, memory, ContextStrategy::Full, "test")
         .await
         .unwrap();
     agent.new_session().await.unwrap();

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Utc;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -77,7 +78,10 @@ fn test_hive_userprompt_prefix() -> Result<()> {
     if source_ext.exists() {
         copy_dir_recursive(&source_ext, &ext_dir)?;
     } else {
-        eprintln!("Hive extension source not found at {}", source_ext.display());
+        eprintln!(
+            "Hive extension source not found at {}",
+            source_ext.display()
+        );
         return Ok(());
     }
 
@@ -116,12 +120,33 @@ workspace = "{}"
     fs::create_dir_all(&dot_zier)?;
     fs::rename(&config_path, dot_zier.join("config.toml"))?;
 
+    // Create a mock session file for hydration
+    let session_id = "test-session";
+    let sessions_dir = dot_zier.join("agents").join("main").join("sessions");
+    fs::create_dir_all(&sessions_dir)?;
+    let timestamp = Utc::now().to_rfc3339();
+    let session_content = format!(
+        r#"{{"type":"session","version":1,"id":"{0}","timestamp":"{1}","cwd":"{2}"}}
+{{"type":"message","message":{{"role":"user","content":[{{"type":"text","text":"Start"}}]}}}}
+"#,
+        session_id,
+        timestamp,
+        root.display()
+    );
+    fs::write(
+        sessions_dir.join(format!("{}.jsonl", session_id)),
+        session_content,
+    )?;
+
     // 2. Test: parent spawns a clone with task "list files"
     let task = "list files";
     let (stdout, stderr) = run_zier_ask(
         &temp_dir,
-        &format!("test_tool_json:hive_fork_subagent|{{\"agent_name\":\"\",\"task\":\"{}\"}}", task),
-        vec![],
+        &format!(
+            "test_tool_json:hive_fork_subagent|{{\"agent_name\":\"\",\"task\":\"{}\"}}",
+            task
+        ),
+        vec![("ZIER_SESSION_ID", session_id.to_string())],
     )?;
     let combined = format!("{}\n{}", stdout, stderr);
 
@@ -132,7 +157,11 @@ workspace = "{}"
         combined
     );
     // Also ensure the clone executed successfully
-    assert!(stdout.contains("Mock response"), "Expected success, got: {}", stdout);
+    assert!(
+        stdout.contains("Mock response"),
+        "Expected success, got: {}",
+        stdout
+    );
 
     Ok(())
 }

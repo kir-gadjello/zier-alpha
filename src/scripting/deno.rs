@@ -353,7 +353,10 @@ pub async fn op_zier_exec(
     #[serde] cmd: Vec<String>,
     #[serde] opts: ExecOpts,
 ) -> Result<ExecResult, std::io::Error> {
-    eprintln!("[DEBUG op_zier_exec] cmd: {:?}, opts.env: {:?}", cmd, opts.env);
+    eprintln!(
+        "[DEBUG op_zier_exec] cmd: {:?}, opts.env: {:?}",
+        cmd, opts.env
+    );
     let (policy, project_dir) = {
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
@@ -688,7 +691,11 @@ pub fn op_zier_get_parent_context(state: &mut OpState) -> Option<serde_json::Val
 pub fn op_pi_config_get(state: &mut OpState, #[string] key: String) -> Option<serde_json::Value> {
     let sandbox = state.borrow::<SandboxState>();
     let config_opt = sandbox.config.as_ref();
-    eprintln!("[DEBUG op_pi_config_get] key={}, config_is_some={:?}", key, config_opt.is_some());
+    eprintln!(
+        "[DEBUG op_pi_config_get] key={}, config_is_some={:?}",
+        key,
+        config_opt.is_some()
+    );
     let config = config_opt?;
     // Convert the Config into a serde_json::Value
     let config_value = serde_json::to_value(config).ok()?;

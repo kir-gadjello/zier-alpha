@@ -151,8 +151,7 @@ You are Child2. You inherit everything.
     fs::rename(&config_path, dot_zier.join("config.toml"))?;
 
     // Test 1: .no_delegate filters out hive_fork_subagent, model inherited
-    let task1 =
-        r#"test_tool_json:hive_fork_subagent|{"agent_name": "child", "task": "list files using bash"}"#;
+    let task1 = r#"test_tool_json:hive_fork_subagent|{"agent_name": "child", "task": "list files using bash"}"#;
     let (stdout1, stderr1) = run_zier_ask(&temp_dir, task1)?;
     // Combine both output streams for log search
     let combined1 = format!("{}\n{}", stdout1, stderr1);
@@ -177,7 +176,7 @@ You are Child2. You inherit everything.
         "Child did not inherit parent model:\n{}",
         clean1
     );
-    // Parent has builtins (7) + hive_delegate = 8 tools. With .no_delegate, child gets 7.
+    // Parent has builtins (7) + hive_fork_subagent = 8 tools. With .no_delegate, child gets 7.
     assert!(
         clean1.contains("(tools: 7)"),
         "Expected child tools=7 after .no_delegate, got:\n{}",
