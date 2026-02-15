@@ -118,6 +118,15 @@ This script:
 
 The resulting binary is written to `target/release-packed/zier-alpha-upx` (or override `BINARY_NAME` environment variable).
 
+To build a fully static Linux binary that runs on any distribution, install the MUSL target and use `--target`:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+./scripts/build_release_upx_packed.sh --target x86_64-unknown-linux-musl
+```
+
+For ARM64, use `aarch64-unknown-linux-musl`. The binary will be placed under `target/<target>/release-packed/`.
+
 **Prerequisites**: `upx` must be in `PATH` (e.g., `brew install upx` on macOS, `apt install upx` on Debian/Ubuntu).
 
 **Caveats**: The `release-packed` binary:
