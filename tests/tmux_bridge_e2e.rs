@@ -33,6 +33,7 @@ async fn test_tmux_bridge_lifecycle() {
         WorkdirStrategy::Overlay,
         Some(bus.clone()),
         Some(scheduler.clone()),
+        None,
     )
     .unwrap();
 

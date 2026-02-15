@@ -203,6 +203,7 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     config.workdir.strategy.clone(),
                     None,
                     None,
+                    Some(config.clone()),
                 ) {
                     Ok(s) => s,
                     Err(e) => {

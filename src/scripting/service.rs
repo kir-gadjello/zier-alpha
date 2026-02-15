@@ -1,5 +1,5 @@
 use crate::agent::mcp_manager::McpManager;
-use crate::config::{SandboxPolicy, WorkdirStrategy};
+use crate::config::{Config, SandboxPolicy, WorkdirStrategy};
 use crate::ingress::IngressBus;
 use crate::scheduler::Scheduler;
 use crate::scripting::deno::{DenoRuntime, DenoToolDefinition};
@@ -54,6 +54,7 @@ pub struct ScriptService {
     ingress_bus: Option<Arc<IngressBus>>,
     scheduler: Option<Arc<Mutex<Scheduler>>>,
     mcp_manager: Option<Arc<McpManager>>,
+    config: Option<Config>, // Full application config for pi.config
 
     // Parent context propagation (for Hive inheritance)
     parent_model: Arc<RwLock<Option<String>>>,
@@ -69,6 +70,7 @@ impl ScriptService {
         strategy: WorkdirStrategy,
         ingress_bus: Option<Arc<IngressBus>>,
         scheduler: Option<Arc<Mutex<Scheduler>>>,
+        config: Option<Config>,
     ) -> Result<Self> {
         let mcp_manager = Some(McpManager::new(600));
 
@@ -82,6 +84,7 @@ impl ScriptService {
             ingress_bus,
             scheduler,
             mcp_manager,
+            config,
             parent_model: Arc::new(RwLock::new(None)),
             parent_tools: Arc::new(RwLock::new(None)),
             parent_system_prompt_append: Arc::new(RwLock::new(None)),
@@ -98,6 +101,7 @@ impl ScriptService {
         let ingress_bus = self.ingress_bus.clone();
         let scheduler = self.scheduler.clone();
         let mcp_manager = self.mcp_manager.clone();
+        let config = self.config.clone();
         let script_path_clone = script_path.clone();
 
         let thread_handle = thread::spawn(move || {
@@ -116,6 +120,7 @@ impl ScriptService {
                             ingress_bus,
                             scheduler,
                             mcp_manager,
+                            config,
                         ) {
                             Ok(d) => d,
                             Err(e) => {

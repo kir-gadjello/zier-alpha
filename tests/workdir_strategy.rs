@@ -154,6 +154,7 @@ async fn test_deno_tool_routing() {
         WorkdirStrategy::Overlay,
         None,
         None,
+        None,
     )
     .unwrap();
 

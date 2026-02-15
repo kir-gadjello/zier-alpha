@@ -24,6 +24,7 @@ async fn test_system_introspect_tool() {
         zier_alpha::config::WorkdirStrategy::Overlay,
         None,
         None,
+        None,
     )
     .unwrap();
 

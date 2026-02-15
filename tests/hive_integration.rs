@@ -59,7 +59,7 @@ workspace = "{}"
         r#"---
 description: "Echo bot"
 model: "mock/gpt-4o"
-tools: ["hive_delegate"]
+tools: ["hive_fork_subagent"]
 context_mode: "fresh"
 ---
 You are EchoBot.
@@ -91,7 +91,7 @@ You are EchoBot.
 
     let output = Command::new(bin_path)
         .arg("ask")
-        .arg("test_tool_json:hive_delegate|{\"agent_name\": \"echo\", \"task\": \"hello\"}")
+        .arg("test_tool_json:hive_fork_subagent|{\"agent_name\": \"echo\", \"task\": \"hello\"}")
         .env("HOME", &home_dir) // Force Config::load to use our config
         .env("ZIER_ALPHA_WORKSPACE", &workspace_dir)
         // Add our temp bin dir to PATH so 'zier' is found
@@ -121,7 +121,7 @@ You are EchoBot.
     // 3. Test: hive_depth_limit
     let output_depth = Command::new(bin_path)
         .arg("ask")
-        .arg("test_tool_json:hive_delegate|{\"agent_name\": \"echo\", \"task\": \"hello\"}")
+        .arg("test_tool_json:hive_fork_subagent|{\"agent_name\": \"echo\", \"task\": \"hello\"}")
         .env("HOME", &home_dir)
         .env("ZIER_ALPHA_WORKSPACE", &workspace_dir)
         .env(
@@ -166,7 +166,7 @@ You are EchoBot.
     let output_fork = Command::new(bin_path)
         .arg("ask")
         // We instruct the subagent to recall the secret code
-        .arg("test_tool_json:hive_delegate|{\"agent_name\": \"echo\", \"task\": \"What is the secret code?\", \"context_mode\": \"fork\"}")
+        .arg("test_tool_json:hive_fork_subagent|{\"agent_name\": \"echo\", \"task\": \"What is the secret code?\", \"context_mode\": \"fork\"}")
         .env("HOME", &home_dir)
         .env("ZIER_ALPHA_WORKSPACE", &workspace_dir)
         .env("ZIER_SESSION_ID", session_id)
@@ -203,7 +203,7 @@ You are EchoBot.
     // Rerun fork test with logging
     let output_fork_log = Command::new(bin_path)
         .arg("ask")
-        .arg("test_tool_json:hive_delegate|{\"agent_name\": \"echo\", \"task\": \"Context check\", \"context_mode\": \"fork\"}")
+        .arg("test_tool_json:hive_fork_subagent|{\"agent_name\": \"echo\", \"task\": \"Context check\", \"context_mode\": \"fork\"}")
         .env("HOME", &home_dir)
         .env("ZIER_ALPHA_WORKSPACE", &workspace_dir)
         .env("ZIER_SESSION_ID", session_id)

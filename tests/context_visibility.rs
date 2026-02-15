@@ -53,7 +53,7 @@ async fn test_context_visibility() -> Result<()> {
         r#"---
 description: "Echo bot"
 model: "mock/gpt-4o"
-tools: ["hive_delegate"]
+tools: ["hive_fork_subagent"]
 context_mode: "fresh"
 ---
 You are EchoBot.
@@ -142,6 +142,7 @@ workspace = "{}"
                     config.workdir.strategy.clone(),
                     None,
                     None,
+                    None,
                 )?;
                 eprintln!("TEST: ScriptService created, loading script");
                 service.load_script(hive_path.to_str().unwrap()).await?;
@@ -170,24 +171,24 @@ workspace = "{}"
     agent.new_session().await?;
     eprintln!("TEST: session created");
 
-    // Assert that hive_delegate tool is registered
+    // Assert that hive_fork_subagent tool is registered
     let tool_names: Vec<String> = agent.tools().iter().map(|t| t.name().to_string()).collect();
     eprintln!("TEST: tools: {:?}", tool_names);
     assert!(
-        tool_names.contains(&"hive_delegate".to_string()),
-        "hive_delegate tool not found in agent tools. Available tools: {:?}",
+        tool_names.contains(&"hive_fork_subagent".to_string()),
+        "hive_fork_subagent tool not found in agent tools. Available tools: {:?}",
         tool_names
     );
 
-    // Assert that system prompt includes hive_delegate
+    // Assert that system prompt includes hive_fork_subagent
     let system_ctx = agent
         .system_prompt()
         .await
         .ok_or_else(|| anyhow::anyhow!("System context not set"))?;
     eprintln!("TEST: system prompt length: {}", system_ctx.len());
     assert!(
-        system_ctx.contains("hive_delegate"),
-        "System prompt does not mention hive_delegate. System prompt: {}",
+        system_ctx.contains("hive_fork_subagent"),
+        "System prompt does not mention hive_fork_subagent. System prompt: {}",
         system_ctx
     );
 

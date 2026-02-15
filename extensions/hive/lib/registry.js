@@ -1,5 +1,5 @@
 // extensions/hive/lib/registry.js
-import { registerHiveDelegate } from "./tool.js";
+import { registerHiveForkSubagent } from "./tool.js";
 
 const agents = new Map();
 
@@ -37,7 +37,7 @@ export async function init() {
 
     // Register tool
     if (loaded > 0) {
-        registerHiveDelegate(Array.from(agents.keys()));
+        registerHiveForkSubagent(Array.from(agents.keys()));
     } else {
         console.log("[Hive] No agents loaded, skipping tool registration.");
     }

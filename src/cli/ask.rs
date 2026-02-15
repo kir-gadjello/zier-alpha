@@ -10,6 +10,7 @@ use zier_alpha::scripting::ScriptService;
 use serde_json;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Args)]
 pub struct AskArgs {
@@ -42,6 +43,11 @@ pub struct AskArgs {
 }
 
 pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
+    // Debug: print received question in child mode
+    if args.child {
+        eprintln!("[CHILD] received question: {}", args.question);
+    }
+
     let config = Config::load()?;
 
     let project_dir = if let Some(w) = args.workdir {
@@ -123,6 +129,7 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                     config.workdir.strategy.clone(),
                     None,
                     None,
+                    Some(config.clone()),
                 );
 
                 match service {
@@ -148,6 +155,7 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                                         .iter()
                                         .map(|t| t.name().to_string())
                                         .collect();
+                                    tracing::info!("Hive parent_tools: {:?}", parent_tools);
                                     if let Err(e) = svc
                                         .set_parent_context(
                                             Some(parent_model),
@@ -179,8 +187,12 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
 
     // Apply child tool restrictions if ZIER_CHILD_TOOLS is set (Hive inheritance)
     if let Ok(child_tools_json) = std::env::var("ZIER_CHILD_TOOLS") {
+        eprintln!("[CHILD DEBUG] ZIER_CHILD_TOOLS: {}", child_tools_json);
         match serde_json::from_str::<Vec<String>>(&child_tools_json) {
             Ok(allowed_tools) => {
+                eprintln!("[CHILD DEBUG] allowed_tools: {:?}", allowed_tools);
+                let initial_tools: Vec<&str> = agent.tools().iter().map(|t| t.name()).collect();
+                eprintln!("[CHILD DEBUG] initial tools: {:?}", initial_tools);
                 let mut filtered = Vec::new();
                 for tool in agent.tools() {
                     if allowed_tools.contains(&tool.name().to_string()) {
@@ -189,15 +201,20 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                 }
                 let filtered_count = filtered.len();
                 agent.set_tools(filtered);
+                let final_tools: Vec<&str> = agent.tools().iter().map(|t| t.name()).collect();
+                eprintln!("[CHILD DEBUG] final tools: {:?}", final_tools);
                 tracing::info!(
                     "Child tool filtering applied: {} tools remaining",
                     filtered_count
                 );
             }
             Err(e) => {
+                eprintln!("[CHILD DEBUG] Invalid ZIER_CHILD_TOOLS JSON: {}", e);
                 tracing::warn!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);
             }
         }
+    } else {
+        eprintln!("[CHILD DEBUG] ZIER_CHILD_TOOLS not set");
     }
 
     agent.new_session().await?;
@@ -221,18 +238,38 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
         Some(tokio::task::spawn_blocking(move || lock_clone.acquire()).await??)
     };
 
+    // In child mode, capture timing and usage for metadata
+    let start = Instant::now();
     let response = agent.chat(&args.question).await?;
+    let latency_ms = start.elapsed().as_millis() as u64;
+    let usage = agent.usage().clone();
+    let model = agent.model().to_string();
+    let provider = agent.provider_name();
 
     if let Some(json_path) = &args.json_output {
         let status = agent.session_status().await;
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "version": "1.0",
             "session_id": status.id,
             "status": "success",
             "content": response,
             "artifacts": [], // TODO: capture artifacts
-            "usage": agent.usage(),
+            "usage": usage,
         });
+
+        // If running as a child (Hive), include metadata for parent
+        if args.child {
+            result["metadata"] = serde_json::json!({
+                "agent": std::env::var("ZIER_HIVE_AGENT_NAME").ok().unwrap_or_else(|| "clone".to_string()),
+                "model": model,
+                "provider": provider,
+                "latency_ms": latency_ms,
+                "usage": {
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                }
+            });
+        }
 
         let path = PathBuf::from(json_path);
         // Write to temp file first for atomicity

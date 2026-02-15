@@ -194,6 +194,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
         config.workdir.strategy.clone(),
         Some(bus.clone()),
         Some(scheduler.clone()),
+        Some(config.clone()),
     )?;
     let script_loader = ScriptLoader::new(script_service.clone());
 

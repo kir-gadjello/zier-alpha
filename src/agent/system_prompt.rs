@@ -135,6 +135,15 @@ pub fn build_system_prompt(params: SystemPromptParams) -> String {
     }
     lines.push(String::new());
 
+    // Hive clone follow‑up (if any)
+    if let Ok(followup) = std::env::var("ZIER_HIVE_SYSPROMPT_FOLLOWUP") {
+        if !followup.is_empty() {
+            lines.push("## Additional Instructions".to_string());
+            lines.push(followup);
+            lines.push(String::new());
+        }
+    }
+
     // Current time section
     if let Some(ref time) = params.current_time {
         lines.push("## Current Time".to_string());

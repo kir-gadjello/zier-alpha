@@ -247,6 +247,14 @@ impl Agent {
         &self.config.model
     }
 
+    /// Get the provider name for the current model (resolved from config)
+    pub fn provider_name(&self) -> String {
+        match self.chat_engine.client().resolve_config(&self.config.model) {
+            Ok(cfg) => cfg.provider.unwrap_or_else(|| "unknown".to_string()),
+            Err(_) => "unknown".to_string(),
+        }
+    }
+
     pub fn set_tools(&mut self, tools: Vec<Arc<dyn Tool>>) {
         self.tool_executor.set_tools(tools);
         self.update_chat_engine();

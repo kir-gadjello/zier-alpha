@@ -147,6 +147,17 @@ pub struct HiveExtensionConfig {
     pub timeout_seconds: u64,
     #[serde(default = "default_true")]
     pub cleanup_temp_files: bool,
+    // Clone control
+    #[serde(default = "default_true")]
+    pub allow_clones: bool,
+    #[serde(default = "default_max_clone_fork_depth")]
+    pub max_clone_fork_depth: usize,
+    #[serde(default)]
+    pub clone_sysprompt_followup: Option<String>,
+    #[serde(default)]
+    pub clone_userprompt_prefix: Option<String>,
+    #[serde(default)]
+    pub clone_disable_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -570,6 +581,9 @@ fn default_agents_dir() -> String {
 }
 fn default_max_depth() -> usize {
     3
+}
+fn default_max_clone_fork_depth() -> usize {
+    1
 }
 fn default_ipc_mode() -> String {
     "artifact".to_string()

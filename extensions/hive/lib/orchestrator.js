@@ -3,70 +3,121 @@ import { getAgent } from "./registry.js";
 import { readIpcResult } from "./ipc.js";
 
 export async function runAgent(agentName, task, contextMode, attachments) {
-    const agent = getAgent(agentName);
-    if (!agent) throw new Error(`Agent ${agentName} not found`);
-
-    // Check depth
-    const currentDepthStr = zier.os.env.get("ZIER_HIVE_DEPTH");
-    const currentDepth = currentDepthStr ? parseInt(currentDepthStr) : 0;
-    const maxDepth = 3; // TODO: read from config
-    if (currentDepth >= maxDepth) {
-        throw new Error(`Max recursion depth exceeded (${currentDepth} >= ${maxDepth})`);
-    }
-
     const parentCtx = zier.getParentContext();
-    console.log(`[Hive] Parent context:`, parentCtx);
+    console.log("[Hive] ParentCtx raw:", parentCtx);
 
-    // Compute effective model/tools using inheritance markers
-    let effectiveModel = agent.model;
-    if (agent.model === '.') {
-        effectiveModel = parentCtx?.model;
+    // Load Hive configuration
+    const hiveConfig = pi.config.get("extensions.hive") || {};
+
+    // Determine if this is a clone (empty agentName)
+    const isClone = agentName === "";
+
+    // Validate recursion limits
+    const currentDepth = parseInt(zier.os.env.get("ZIER_HIVE_DEPTH") || "0");
+    const maxHiveDepth = hiveConfig.max_depth ?? 3;
+    if (currentDepth >= maxHiveDepth) {
+        throw new Error(`Max Hive recursion depth exceeded (${currentDepth}/${maxHiveDepth})`);
     }
 
-    let effectiveTools = agent.tools;
-    if (agent.tools === '.') {
-        effectiveTools = parentCtx?.tools || [];
-    } else if (agent.tools === '.no_delegate') {
-        effectiveTools = (parentCtx?.tools || []).filter(t => t !== 'hive_delegate');
+    // Clone‑mode pre‑checks
+    if (isClone) {
+        if (!hiveConfig.allow_clones) {
+            throw new Error("Cloning is disabled (extensions.hive.allow_clones = false)");
+        }
+        const currentCloneDepth = parseInt(zier.os.env.get("ZIER_HIVE_CLONE_DEPTH") || "0");
+        const maxCloneDepth = hiveConfig.max_clone_fork_depth ?? 1;
+        if (currentCloneDepth >= maxCloneDepth) {
+            throw new Error(`Max clone fork depth exceeded (${currentCloneDepth}/${maxCloneDepth})`);
+        }
+        // userprompt prefix is applied by the tool handler before we get here.
+    }
+
+    // Resolve effective model and tool list
+    let effectiveModel;
+    let effectiveTools;
+
+    if (isClone) {
+        // Clone: inherit parent's model and tools (with clone‑specific filtering)
+        effectiveModel = parentCtx?.model;
+        if (!effectiveModel) {
+            throw new Error("Cannot clone: parent model not available");
+        }
+        let parentTools = parentCtx?.tools || [];
+        console.log("[Hive] Parent tools before filtering:", parentTools);
+        const disableList = hiveConfig.clone_disable_tools || [];
+        console.log("[Hive] Disable list:", disableList);
+        if (disableList.length > 0) {
+            parentTools = parentTools.filter(t => !disableList.includes(t));
+        }
+        console.log("[Hive] Parent tools after filtering:", parentTools);
+        effectiveTools = parentTools;
+    } else {
+        // Named agent
+        const agent = getAgent(agentName);
+        if (!agent) {
+            throw new Error(`Agent '${agentName}' not found`);
+        }
+
+        effectiveModel = agent.model;
+        if (effectiveModel === '.') {
+            effectiveModel = parentCtx?.model;
+        }
+
+        effectiveTools = agent.tools;
+        if (effectiveTools === '.') {
+            effectiveTools = parentCtx?.tools || [];
+        } else if (effectiveTools === '.no_delegate') {
+            // Remove the old delegate tool name; after rename it's 'hive_fork_subagent'
+            effectiveTools = (parentCtx?.tools || []).filter(t => t !== 'hive_fork_subagent');
+        }
     }
 
     const uuid = crypto.randomUUID();
     const parentSessionId = zier.os.env.get("ZIER_SESSION_ID") || "root";
     const tempDir = zier.os.tempDir();
-    const ipcPath = `${tempDir}/zier-hive-${parentSessionId}-${agentName}-${uuid}.json`;
+    const ipcPath = `${tempDir}/zier-hive-${parentSessionId}-${isClone ? "clone" : agentName}-${uuid}.json`;
     let hydrationPath = null;
     let hydrationArgs = [];
 
-    // Handle hydration (fork mode)
-    if (contextMode === "fork") {
+    // Clone mode forces hydration to preserve system prompt identity
+    const forkMode = isClone || contextMode === "fork";
+    if (forkMode) {
         try {
             const home = zier.os.homeDir() || zier.os.env.get("HOME");
             const agentId = zier.os.env.get("ZIER_ALPHA_AGENT") || "main";
-            // Check if ZIER_SESSION_ID is a full path or just ID. Assuming ID.
             const sessionPath = `${home}/.zier-alpha/agents/${agentId}/sessions/${parentSessionId}.jsonl`;
 
-            hydrationPath = `${tempDir}/zier-hive-${parentSessionId}-${agentName}-${uuid}.jsonl`;
+            hydrationPath = `${tempDir}/zier-hive-${parentSessionId}-${isClone ? "clone" : agentName}-${uuid}.jsonl`;
 
-            // Read session file and write to temp hydration file
             const sessionContent = await pi.readFile(sessionPath);
             await pi.fileSystem.writeFileExclusive(hydrationPath, sessionContent);
 
             hydrationArgs = ["--hydrate-from", hydrationPath];
         } catch (e) {
             console.log(`[Hive] Failed to hydrate session: ${e.message}`);
-            // Proceed without hydration if failed, but log it
             hydrationArgs = [];
             hydrationPath = null;
         }
     }
 
+    // Compute child environment
     const childEnv = {
         "ZIER_HIVE_DEPTH": (currentDepth + 1).toString(),
         "ZIER_PARENT_SESSION": parentSessionId,
         "ZIER_CHILD_TOOLS": JSON.stringify(effectiveTools),
+        // Clone depth handling
+        "ZIER_HIVE_CLONE_DEPTH": (isClone ? parseInt(zier.os.env.get("ZIER_HIVE_CLONE_DEPTH") || "0") + 1 : parseInt(zier.os.env.get("ZIER_HIVE_CLONE_DEPTH") || "0")).toString(),
+        "ZIER_HIVE_AGENT_NAME": isClone ? "clone" : agentName,
     };
 
-    // Build command dynamically
+    // Pass follow‑up for clones if configured
+    if (isClone && hiveConfig.clone_sysprompt_followup) {
+        childEnv["ZIER_HIVE_SYSPROMPT_FOLLOWUP"] = hiveConfig.clone_sysprompt_followup;
+    }
+
+    console.log("[Hive] Child environment:", childEnv);
+
+    // Build command
     const args = ["ask", "--child"];
     if (effectiveModel) {
         args.push("--model", effectiveModel);
@@ -75,21 +126,6 @@ export async function runAgent(agentName, task, contextMode, attachments) {
     if (hydrationArgs.length > 0) {
         args.push(...hydrationArgs);
     }
-    // Attachments? TODO: Mount attachments (copy to workspace or pass path)
-    // Task 2.4 says: "Prepare workspace (verify attachments exist, copy if needed)"
-    // For MVP, we ignore attachments or pass them as text context?
-    // The prompt says "File paths to explicitly mount".
-    // Since child runs in own process, it might not have access if paths are relative to parent workspace.
-    // Child workspace is separate?
-    // `zier ask` uses current directory as workspace unless `--workdir` is passed.
-    // Parent runs in `workspace_dir`.
-    // Child runs in `workspace_dir` too (inherited CWD).
-    // So files should be accessible if in workspace.
-    // If attachments are absolute paths, child can access them (if allowed by sandbox).
-    // We can append attachment info to task prompt?
-    // Or assume child can just read them.
-    // "Task 2.4: verify attachments exist".
-    // I'll skip deep attachment logic for now as it's not critical for recursion.
 
     args.push(task);
 
@@ -101,6 +137,11 @@ export async function runAgent(agentName, task, contextMode, attachments) {
         const result = await zier.os.exec(cmd, {
             env: childEnv
         });
+
+        // DEBUG: echo child stderr to parent logs
+        if (result.stderr && result.stderr.length > 0) {
+            console.log(`[Hive] CHILD STDERR:\n${result.stderr}`);
+        }
 
         if (result.code !== 0) {
             throw new Error(`Subagent failed with code ${result.code}: ${result.stderr}`);
@@ -116,16 +157,17 @@ export async function runAgent(agentName, task, contextMode, attachments) {
 
         // Cleanup hydration file (if it still exists)
         if (hydrationPath) {
-             try {
-                 await pi.fileSystem.remove(hydrationPath);
-             } catch (e) {}
+            try {
+                await pi.fileSystem.remove(hydrationPath);
+            } catch (e) {}
         }
 
         if (ipcData.status === "error") {
-             throw new Error(ipcData.error || "Unknown subagent error");
+            throw new Error(ipcData.error || "Unknown subagent error");
         }
 
-        return ipcData.content;
+        // Return full IPC data for parent to format
+        return ipcData;
 
     } catch (e) {
         // Cleanup on error
@@ -134,9 +176,9 @@ export async function runAgent(agentName, task, contextMode, attachments) {
         } catch (cleanupErr) {}
 
         if (hydrationPath) {
-             try {
-                 await pi.fileSystem.remove(hydrationPath);
-             } catch (cleanupErr) {}
+            try {
+                await pi.fileSystem.remove(hydrationPath);
+            } catch (cleanupErr) {}
         }
 
         throw e;

@@ -49,6 +49,7 @@ async fn test_architecture_concurrency() {
         zier_alpha::config::WorkdirStrategy::Overlay,
         Some(bus.clone()),
         None,
+        None,
     )
     .unwrap();
 

@@ -1,6 +1,6 @@
 use crate::agent::mcp_manager::{McpManager, ServerConfig};
 use crate::agent::tools::resolve_path;
-use crate::config::{SandboxPolicy, WorkdirStrategy};
+use crate::config::{Config, SandboxPolicy, WorkdirStrategy};
 use crate::ingress::{IngressBus, IngressMessage, TrustLevel};
 use crate::scheduler::Scheduler;
 use crate::scripting::safety::{CommandSafety, SafetyPolicy};
@@ -47,6 +47,8 @@ pub struct SandboxState {
     pub parent_model: Option<String>,
     pub parent_tools: Option<Vec<String>>,
     pub parent_system_prompt_append: Option<String>,
+    // Full application config for extension access via pi.config.get
+    pub config: Option<Config>,
 }
 
 fn check_path(
@@ -350,6 +352,7 @@ pub async fn op_zier_exec(
     #[serde] cmd: Vec<String>,
     #[serde] opts: ExecOpts,
 ) -> Result<ExecResult, std::io::Error> {
+    eprintln!("[DEBUG op_zier_exec] cmd: {:?}, opts.env: {:?}", cmd, opts.env);
     let (policy, project_dir) = {
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
@@ -675,6 +678,38 @@ pub fn op_zier_get_parent_context(state: &mut OpState) -> Option<serde_json::Val
     }
 }
 
+#[op2]
+#[serde]
+pub fn op_pi_config_get(state: &mut OpState, #[string] key: String) -> Option<serde_json::Value> {
+    let sandbox = state.borrow::<SandboxState>();
+    let config_opt = sandbox.config.as_ref();
+    eprintln!("[DEBUG op_pi_config_get] key={}, config_is_some={:?}", key, config_opt.is_some());
+    let config = config_opt?;
+    // Convert the Config into a serde_json::Value
+    let config_value = serde_json::to_value(config).ok()?;
+    // Traverse dot-separated key
+    let mut current = &config_value;
+    for part in key.split('.') {
+        if let Some(obj) = current.as_object() {
+            current = obj.get(part)?;
+        } else if let Some(arr) = current.as_array() {
+            // If part is a number, index into array
+            if let Ok(idx) = part.parse::<usize>() {
+                if idx < arr.len() {
+                    current = &arr[idx];
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    Some(current.clone())
+}
+
 // Needed to make SandboxState cloneable for above usage or just re-borrow
 impl Clone for SandboxState {
     fn clone(&self) -> Self {
@@ -697,6 +732,7 @@ impl Clone for SandboxState {
             parent_model: self.parent_model.clone(),
             parent_tools: self.parent_tools.clone(),
             parent_system_prompt_append: self.parent_system_prompt_append.clone(),
+            config: self.config.clone(),
         }
     }
 }
@@ -727,6 +763,7 @@ deno_core::extension!(
         op_zier_mcp_call,
         op_zier_mcp_shutdown,
         op_zier_get_parent_context,
+        op_pi_config_get,
     ],
 );
 
@@ -743,6 +780,7 @@ impl DenoRuntime {
         ingress_bus: Option<Arc<IngressBus>>,
         scheduler: Option<Arc<Mutex<Scheduler>>>,
         mcp_manager: Option<Arc<McpManager>>,
+        config: Option<Config>,
     ) -> Result<Self, AnyError> {
         let loader = std::rc::Rc::new(deno_core::FsModuleLoader);
         let mut runtime = JsRuntime::new(RuntimeOptions {
@@ -789,6 +827,7 @@ impl DenoRuntime {
             parent_model: None,
             parent_tools: None,
             parent_system_prompt_append: None,
+            config,
         };
         runtime.op_state().borrow_mut().put(state);
 
@@ -802,12 +841,16 @@ impl DenoRuntime {
                 randomUUID: () => Deno.core.ops.op_random_uuid()
             };
 
-            globalThis.toolRegistry = {};
-            globalThis.pi = {
+            var toolRegistry = {};
+            globalThis.toolRegistry = toolRegistry;
+            var pi = {
                 registerTool: (def) => {
-                    globalThis.toolRegistry[def.name] = def;
+                    toolRegistry[def.name] = def;
                     const meta = { ...def, execute: undefined };
                     Deno.core.ops.op_register_tool(meta);
+                },
+                config: {
+                    get: (key) => Deno.core.ops.op_pi_config_get(key)
                 },
                 readFile: (path) => Deno.core.ops.op_read_file(path),
                 writeFile: (path, content) => Deno.core.ops.op_write_file(path, content),
@@ -822,15 +865,16 @@ impl DenoRuntime {
 
                 internal: {
                     executeTool: (name, args) => {
-                        const tool = globalThis.toolRegistry[name];
+                        const tool = toolRegistry[name];
                         if (!tool) throw new Error(`Tool ${name} not found`);
                         return Promise.resolve(tool.execute(null, args, {}, () => {}, {}));
                     }
                 }
             };
+            globalThis.pi = pi;
 
             // Zier Alpha Namespace
-            globalThis.zier = {
+            var zier = {
                 os: {
                     exec: (cmd, opts) => Deno.core.ops.op_zier_exec(cmd, opts || {}),
                     env: {
@@ -858,6 +902,7 @@ impl DenoRuntime {
                 getParentContext: () => Deno.core.ops.op_zier_get_parent_context(),
                 workspace: null
             };
+            globalThis.zier = zier;
         "#;
         runtime.execute_script("<bootstrap>", bootstrap_code)?;
 

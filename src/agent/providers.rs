@@ -2096,12 +2096,32 @@ impl LLMProvider for MockProvider {
             .last()
             .ok_or_else(|| anyhow::anyhow!("No messages"))?;
 
+        // Debug: print last user message content for tracing
+        if last_msg.role == Role::User {
+            eprintln!("[MockProvider] last user content: {}", last_msg.content);
+        }
+
         // If last message is tool result with Error, return it.
         if last_msg.role == Role::Tool {
             println!(
                 "DEBUG: MockProvider saw tool output: '{}'",
                 last_msg.content
             );
+            // Test helper: if the tool call was for read_file, echo its content directly (even if error)
+            if messages.len() >= 2 {
+                if let Some(assistant_msg) = messages.get(messages.len() - 2) {
+                    if assistant_msg.role == Role::Assistant {
+                        if let Some(tool_calls) = &assistant_msg.tool_calls {
+                            if let Some(tool_call) = tool_calls.last() {
+                                println!("DEBUG: tool_call.name = {}", tool_call.name);
+                                if tool_call.name == "read_file" {
+                                    return Ok(LLMResponse::text(last_msg.content.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if last_msg.content.starts_with("Error:") {
                 return Ok(LLMResponse::text(format!(
                     "Tool failed: {}",
@@ -2198,6 +2218,52 @@ impl LLMProvider for MockProvider {
                         return Ok(LLMResponse::text("The secret code is 42".to_string()));
                     }
                 }
+            }
+        }
+
+        // Test helper: if user says "CHECK_SYSTEM_PROMPT", return the full system prompt for verification.
+        if let Some(user_msg) = messages.iter().filter(|m| m.role == Role::User).next_back() {
+            if user_msg.content == "CHECK_SYSTEM_PROMPT" {
+                if let Some(sys_msg) = messages.iter().filter(|m| m.role == Role::System).next_back() {
+                    return Ok(LLMResponse::text(format!("SYSTEM_PROMPT:{}", sys_msg.content)));
+                }
+            }
+        }
+
+        // Test helpers for Hive clone tests without using '|' character (which is blocked by shell chaining)
+        // Pattern: "RUN_BASH:<json args>"
+        if let Some(prefix) = messages
+            .iter()
+            .filter(|m| m.role == Role::User)
+            .next_back()
+            .and_then(|m| m.content.strip_prefix("RUN_BASH:"))
+        {
+            if let Ok(args) = serde_json::from_str::<Value>(prefix) {
+                return Ok(LLMResponse::tool_calls(vec![ToolCall {
+                    id: "test_call".to_string(),
+                    name: "bash".to_string(),
+                    arguments: args.to_string(),
+                }]));
+            }
+        }
+
+        // Pattern: "READ_FILE:<json args>"
+        if let Some(prefix) = messages
+            .iter()
+            .filter(|m| m.role == Role::User)
+            .next_back()
+            .and_then(|m| m.content.strip_prefix("READ_FILE:"))
+        {
+            eprintln!("[MockProvider] READ_FILE prefix: {}", prefix);
+            if let Ok(args) = serde_json::from_str::<Value>(prefix) {
+                eprintln!("[MockProvider] READ_FILE parsed ok, args: {}", args);
+                return Ok(LLMResponse::tool_calls(vec![ToolCall {
+                    id: "test_call".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: args.to_string(),
+                }]));
+            } else {
+                eprintln!("[MockProvider] READ_FILE JSON parse error");
             }
         }
 

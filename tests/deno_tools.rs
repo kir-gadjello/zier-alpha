@@ -23,6 +23,7 @@ async fn test_deno_tool_registration_and_execution() {
         WorkdirStrategy::Overlay,
         None,
         None,
+        None,
     )
     .expect("Failed to create script service");
 
@@ -91,6 +92,7 @@ async fn test_deno_sandbox_fs_allowed() {
         WorkdirStrategy::Overlay,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -150,6 +152,7 @@ async fn test_deno_sandbox_fs_denied() {
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
+        None,
         None,
         None,
     )

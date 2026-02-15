@@ -39,6 +39,7 @@ async fn test_mcp_e2e() {
         WorkdirStrategy::Overlay,
         None,
         None,
+        None,
     )
     .expect("Failed to create script service");
 
@@ -163,6 +164,7 @@ async fn test_simple_ping_no_mcp() {
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
+        None,
         None,
         None,
         None,

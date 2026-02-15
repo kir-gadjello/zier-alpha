@@ -13,6 +13,7 @@ async fn test_extension_isolation_panic() {
         WorkdirStrategy::Overlay,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -96,6 +97,7 @@ async fn test_extension_isolation_separation() {
         temp_dir.path().to_path_buf(),
         temp_dir.path().to_path_buf(),
         WorkdirStrategy::Overlay,
+        None,
         None,
         None,
     )

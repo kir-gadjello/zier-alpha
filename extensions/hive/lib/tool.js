@@ -2,17 +2,16 @@
 import { runAgent } from "./orchestrator.js";
 import { getAgent } from "./registry.js";
 
-export function registerHiveDelegate(agentNames) {
+export function registerHiveForkSubagent(agentNames) {
     pi.registerTool({
-        name: "hive_delegate",
-        description: "Delegate a complex sub-task to a specialized agent",
+        name: "hive_fork_subagent",
+        description: "Fork a subagent (Hive) – delegate a task to a specialized agent or create a clone",
         parameters: {
             type: "object",
             properties: {
                 agent_name: {
                     type: "string",
-                    enum: agentNames,
-                    description: "Name of the agent to delegate to"
+                    description: "Name of the agent to delegate to (omit for clone mode)"
                 },
                 task: {
                     type: "string",
@@ -21,7 +20,7 @@ export function registerHiveDelegate(agentNames) {
                 context_mode: {
                     type: "string",
                     enum: ["fresh", "fork"],
-                    description: "fresh=clean state; fork=inherits conversation prefix (cache optimized)"
+                    description: "fresh=clean state; fork=inherits conversation prefix (cache optimized). Clones always use fork."
                 },
                 attachments: {
                     type: "array",
@@ -29,17 +28,40 @@ export function registerHiveDelegate(agentNames) {
                     description: "File paths to explicitly mount into sub-agent context"
                 }
             },
-            required: ["agent_name", "task"]
+            required: ["task"]
         },
         execute: async (_ctx, args) => {
-            console.log(`[Hive] Delegating to ${args.agent_name}...`);
-            try {
-                // Validate agent name
-                if (!getAgent(args.agent_name)) {
-                    throw new Error(`Agent '${args.agent_name}' not found`);
-                }
+            console.log("[Hive] EXECUTE CALLED WITH ARGS: " + JSON.stringify(args));
+            const agentName = args.agent_name || "";
+            const isClone = agentName === "";
+            console.log(`[Hive] ${isClone ? 'Cloning' : 'Delegating to'} ${agentName || '(parent)'}...`);
 
-                return await runAgent(args.agent_name, args.task, args.context_mode || "fresh", args.attachments || []);
+            // Load Hive configuration
+            const hiveConfig = pi.config.get("extensions.hive") || {};
+            console.log("[Hive] Config loaded:", hiveConfig);
+
+            // Clone‑mode pre‑checks
+            if (isClone) {
+                if (!hiveConfig.allow_clones) {
+                    throw new Error("Cloning is disabled (extensions.hive.allow_clones = false)");
+                }
+                const currentCloneDepth = parseInt(zier.os.env.get("ZIER_HIVE_CLONE_DEPTH") || "0");
+                const maxCloneDepth = hiveConfig.max_clone_fork_depth ?? 1;
+                if (currentCloneDepth >= maxCloneDepth) {
+                    throw new Error(`Max clone fork depth exceeded (${currentCloneDepth}/${maxCloneDepth})`);
+                }
+                // Apply userprompt prefix if configured
+                if (hiveConfig.clone_userprompt_prefix) {
+                    args.task = hiveConfig.clone_userprompt_prefix + args.task;
+                }
+            }
+
+            try {
+                console.log("[Hive] inner task to child:", args.task);
+                const result = await runAgent(agentName, args.task, args.context_mode || "fresh", args.attachments || []);
+                // result is the full IPC JSON object
+                const meta = result.metadata;
+                return `${result.content}\n<metadata>\nAgent: ${meta.agent}\nModel: ${meta.model}\nProvider: ${meta.provider}\nLatency: ${meta.latency_ms}ms\nTokens: ${meta.usage.input_tokens}/${meta.usage.output_tokens}\n</metadata>`;
             } catch (e) {
                 return `Error: ${e.message}`;
             }

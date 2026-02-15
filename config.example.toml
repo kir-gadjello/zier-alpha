@@ -217,6 +217,13 @@ default_model = ""              # Empty = inherit parent's model
 timeout_seconds = 300
 cleanup_temp_files = true
 
+# Clone (fork) settings
+allow_clones = true             # Permit hive_fork_subagent with empty agent name
+max_clone_fork_depth = 1        # Maximum depth of clone‑forks (0 = root)
+# clone_sysprompt_followup = "Additional instructions for all clones."  # Appended to system prompt
+# clone_userprompt_prefix = "[CLONE] "                                 # Prepended to task
+# clone_disable_tools = ["hive_fork_subagent", "system_introspect"]   # Tools hidden from clones
+
 # MCP (Model Context Protocol) servers – optional integration points.
 [extensions.mcp]
 cache_dir = "~/.zier-alpha/cache/mcp"

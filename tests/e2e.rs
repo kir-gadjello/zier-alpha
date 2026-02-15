@@ -55,6 +55,7 @@ async fn test_e2e_flow() {
         WorkdirStrategy::Overlay,
         None,
         None,
+        None,
     )
     .unwrap();
 

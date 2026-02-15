@@ -104,10 +104,10 @@ workspace = "{}"
         r#"---
 description: "Parent agent"
 model: "mock/gpt-4o"
-tools: ["hive_delegate", "bash", "read_file"]
+tools: ["hive_fork_subagent", "bash", "read_file"]
 context_mode: "fresh"
 ---
-You are Parent. You can delegate to children using hive_delegate.
+You are Parent. You can delegate to children using hive_fork_subagent.
 "#,
     )?;
 
@@ -120,7 +120,7 @@ model: "."
 tools: ".no_delegate"
 context_mode: "fresh"
 ---
-You are Child. You inherit parent's model and tools except hive_delegate.
+You are Child. You inherit parent's model and tools except hive_fork_subagent.
 "#,
     )?;
 
@@ -150,9 +150,9 @@ You are Child2. You inherit everything.
     fs::create_dir_all(&dot_zier)?;
     fs::rename(&config_path, dot_zier.join("config.toml"))?;
 
-    // Test 1: .no_delegate filters out hive_delegate, model inherited
+    // Test 1: .no_delegate filters out hive_fork_subagent, model inherited
     let task1 =
-        r#"test_tool_json:hive_delegate|{"agent_name": "child", "task": "list files using bash"}"#;
+        r#"test_tool_json:hive_fork_subagent|{"agent_name": "child", "task": "list files using bash"}"#;
     let (stdout1, stderr1) = run_zier_ask(&temp_dir, task1)?;
     // Combine both output streams for log search
     let combined1 = format!("{}\n{}", stdout1, stderr1);
@@ -184,8 +184,8 @@ You are Child2. You inherit everything.
         clean1
     );
 
-    // Test 2: tools "." inherits all parent tools (including hive_delegate)
-    let task2 = r#"test_tool_json:hive_delegate|{"agent_name": "child2", "task": "delegate to grandchild: ping"}"#;
+    // Test 2: tools "." inherits all parent tools (including hive_fork_subagent)
+    let task2 = r#"test_tool_json:hive_fork_subagent|{"agent_name": "child2", "task": "delegate to grandchild: ping"}"#;
     let (stdout2, stderr2) = run_zier_ask(&temp_dir, task2)?;
     let combined2 = format!("{}\n{}", stdout2, stderr2);
     let clean2 = ansi.replace_all(&combined2, "").to_string();
