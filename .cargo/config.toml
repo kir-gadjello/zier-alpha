@@ -4,7 +4,6 @@ opt-level = 3        # Good performance without excessive compile time
 debug = false        # No debug info in test binaries (keeps them smaller)
 lto = false          # Avoid LTO for fast test builds
 # Use default codegen-units (Cargo default = 16) for quicker compilation
-# (Do not force 1; that slows compile for marginal gains)
 
 # Release profile: maximum size reduction and cross‑crate optimization
 [profile.release]
@@ -13,5 +12,14 @@ lto = true           # Full LTO – slower link, better size/performance
 codegen-units = 1    # Single codegen unit maximizes optimization
 incremental = false
 debug = false
-# Note: panic = "abort" would save space but loses backtraces; left as default "unwind" for debuggability.
-# For even smaller binaries, run `./scripts/strip-binary.sh` after build to strip symbols.
+# Note: panic = "abort" would save ~200-500KB but loses backtraces; left as default "unwind".
+
+# Release‑packed profile: ultra‑small for distribution, uses panic=abort + stripping + UPX
+[profile.release-packed]
+inherits = "release"
+panic = "abort"      # Abort on panic – saves space, acceptable for distribution builds
+
+# Target‑specific settings for static linking (Linux)
+[target.x86_64-unknown-linux-musl]
+# Build fully static binaries; ideal for distribution on any Linux distro.
+rustflags = ["-C", "target-feature=+crt-static"]

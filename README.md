@@ -76,6 +76,10 @@ zier-alpha daemon start
 
 ---
 
+For detailed build instructions, optimization techniques, static linking, and distribution packaging (including UPX compression), see **[BUILD_RELEASE.md](BUILD_RELEASE.md)**.
+
+---
+
 ## Key Concepts
 
 - **Kernel** – the core Rust process that manages cognition, memory, and tools.
