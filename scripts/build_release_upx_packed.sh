@@ -45,6 +45,8 @@ CARGO_BIN="${CARGO_BIN:-cargo}"
 PROFILE="release-packed"
 BINARY_NAME="${BINARY_NAME:-zier-alpha}"
 UPX_CMD="${UPX_CMD:-upx}"
+# Collect extra UPX arguments (passed through)
+PASSTHROUGH_ARGS=()
 
 # Parse script flags first
 SKIP_UPX=false
