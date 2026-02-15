@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Binary size profiling script for Zier Alpha
 # Usage: ./scripts/profile-binary-size.sh [--crates|--sections|--symbols|--bloaty]
-# Default: shows both total size and crate breakdown (if cargo-bloat available)
+# Default: shows total size, crate breakdown (if cargo-bloat available), and fallback to symbols
 
 set -euo pipefail
 
 # Configuration
 BINARY="target/release/zier-alpha"
-CARGO_BLIMP_BIN="${CARGO_BLIMP_BIN:-cargo-bloat}"
+CARGO_BLOAT_BIN="${CARGO_BLOAT_BIN:-cargo bloat}"  # command to run
 TOP_N="${TOP_N:-30}"
 
 # Colors for output
@@ -32,16 +32,26 @@ ls -lh "$BINARY" | awk '{print "  " $5 " (" $6 ")"}'
 echo ""
 
 # Check for cargo-bloat (crate-level breakdown)
-if command -v "$CARGO_BLIMP_BIN" &>/dev/null; then
+if command -v "$CARGO_BLOAT_BIN" &>/dev/null; then
     log_info "Crate size breakdown (top $TOP_N):"
-    "$CARGO_BLIMP_BIN" --release --bin zier-alpha --crates 2>/dev/null | head -"$TOP_N" || {
+    # Run cargo-bloat; it may require '--release' flag as separate arg or within command
+    # Since CARGO_BLOAT_BIN is "cargo bloat", split into array
+    read -ra CMD <<< "$CARGO_BLOAT_BIN"
+    "${CMD[@]}" --release --bin zier-alpha --crates 2>/dev/null | head -"$TOP_N" || {
         log_warn "cargo-bloat failed; trying without --crates flag..."
-        "$CARGO_BLIMP_BIN" --release --bin zier-alpha 2>/dev/null | head -"$TOP_N" || log_error "cargo-bloat produced no output"
+        "${CMD[@]}" --release --bin zier-alpha 2>/dev/null | head -"$TOP_N" || log_error "cargo-bloat produced no output"
     }
     echo ""
 else
     log_warn "cargo-bloat not installed. To install: cargo install cargo-bloat"
-    log_info "Falling back to basic size analysis..."
+    log_info "Falling back to symbol-level analysis (largest symbols)..."
+    # Fallback: show largest symbols using nm
+    if command -v nm &>/dev/null; then
+        echo "  (top $TOP_N symbols by size in .text/.data/.bss)"
+        nm --size-sort --radix=d "$BINARY" 2>/dev/null | tail -"$TOP_N" | awk '{printf "  %8s %s\n", $1, $3}' || true
+    else
+        log_warn "nm not found; install binutils for symbol analysis"
+    fi
     echo ""
 fi
 
