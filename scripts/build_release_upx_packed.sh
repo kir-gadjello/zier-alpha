@@ -172,20 +172,32 @@ if [[ "$SKIP_UPX" == "false" ]]; then
       info "File type: $(file "$BINARY_DST" | head -n1)"
     fi
 
-    # Try UPX compression; capture output
-    UPX_OUTPUT=$("$UPX_CMD" ${UPX_LEVEL} --lzma -o "$BINARY_DST".tmp "$BINARY_DST" 2>&1)
-    UPX_EXIT=$?
+    # Try UPX compression with multiple fallback strategies
+    # Strategy order: primary (--best --lzma), then fallbacks
+    strategies=(
+      "${UPX_LEVEL} --lzma"
+      "--best --force"
+      "--best"
+      "--ultra-brute --lzma"
+    )
 
-    if [[ $UPX_EXIT -ne 0 ]] || echo "$UPX_OUTPUT" | grep -q "Packed 0 files"; then
-      warn "UPX failed to compress or reported no files packed."
-      echo "$UPX_OUTPUT" | sed 's/^/  /'
-      echo "Possible reasons:"
-      echo "  - Binary already packed (run with --force to rebuild clean)"
-      echo "  - UPX does not support this binary format (e.g., macOS universal, exotic arch)"
-      echo "  - Binary is already using LZMA and cannot be compressed further"
-      echo "Final binary (stripped only): $BINARY_DST"
-    else
-      # Success – replace original
+    success=false
+    for i in "${!strategies[@]}"; do
+      strat="${strategies[$i]}"
+      info "Attempt $((i+1)): upx $strat"
+      UPX_OUTPUT=$("$UPX_CMD" $strat -o "$BINARY_DST".tmp "$BINARY_DST" 2>&1)
+      UPX_EXIT=$?
+      if [[ $UPX_EXIT -eq 0 ]] && ! echo "$UPX_OUTPUT" | grep -q "Packed 0 files"; then
+        success=true
+        break
+      else
+        warn "Strategy $((i+1)) failed or packed 0 files."
+        echo "$UPX_OUTPUT" | sed 's/^/    /'
+      fi
+    done
+
+    if [[ "$success" == "true" ]]; then
+      # Replace original with compressed version
       mv "$BINARY_DST".tmp "$BINARY_DST"
       COMPRESSED_SIZE=$(stat -c%s "$BINARY_DST" 2>/dev/null || stat -f%z "$BINARY_DST")
       COMPRESSED_HUMAN=$(numfmt --to=iec-i --suffix=B "$COMPRESSED_SIZE" 2>/dev/null || echo "${COMPRESSED_SIZE} bytes")
@@ -203,6 +215,14 @@ if [[ "$SKIP_UPX" == "false" ]]; then
         UPX_VER=$("$UPX_CMD" --version | head -n1)
         info "UPX: ${UPX_VER}"
       fi
+    else
+      warn "All UPX compression attempts failed or produced no compression."
+      echo "Final binary (stripped only): $BINARY_DST"
+      echo "Possible reasons:"
+      echo "  - Binary already packed or maximally compressed by LTO"
+      echo "  - UPX does not support this binary format/architecture"
+      echo "  - Binary uses features UPX cannot handle (e.g., full PIE, certain segments)"
+      echo "Consider using --no-upx to skip compression or try a different UPX version."
     fi
   else
     warn "UPX not found in PATH. Skipping compression."
