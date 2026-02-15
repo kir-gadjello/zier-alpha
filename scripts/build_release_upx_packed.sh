@@ -8,22 +8,25 @@
 #
 # The final binary is written to target/release-packed/zier-alpha
 #
-# Usage: ./scripts/build_release_upx_packed.sh [--no-upx] [--force] [--target <TRIPLE>]
-#   --no-upx: skip UPX compression (just strip)
-#   --force: rebuild even if binary appears up‑to‑date
-#   --target <TRIPLE>: cross‑compile target (e.g., x86_64-unknown-linux-musl for static Linux)
+# Usage: ./scripts/build_release_upx_packed.sh [options] [upx-args...]
+#   --no-upx        Skip UPX compression (just strip)
+#   --force         Rebuild even if binary appears up‑to‑date
+#   --target <TRIPLE> Cross‑compile target (e.g., x86_64-unknown-linux-musl)
+#   -h, --help      Show this help message
+#
+# Any additional arguments (e.g., --no-lzma, --ultra-brute) are passed directly to UPX.
 #
 # Environment overrides:
 #   CARGO_BIN=cargo
 #   BINARY_NAME=zier-alpha
 #   UPX_CMD=upx
-#   UPX_LEVEL="--best"  (or "--ultra-brute")
 #
 # Examples:
-#   $0                          # host build, compress
+#   $0                          # host build, compress with defaults
 #   $0 --no-upx                # host build, strip only
 #   $0 --target x86_64-unknown-linux-musl   # static Linux build + UPX
-#   $0 --target aarch64-unknown-linux-musl  # ARM64 static Linux
+#   $0 --no-lzma               # Use NRV compression (macOS ARM64 workaround)
+#   $0 --ultra-brute --lzma    # Extra time for max compression
 
 set -euo pipefail
 
@@ -42,67 +45,61 @@ CARGO_BIN="${CARGO_BIN:-cargo}"
 PROFILE="release-packed"
 BINARY_NAME="${BINARY_NAME:-zier-alpha}"
 UPX_CMD="${UPX_CMD:-upx}"
-UPX_LEVEL="${UPX_LEVEL:---best}"
 
-# Parse flags
+# Parse script flags first
 SKIP_UPX=false
 FORCE_BUILD=false
 TARGET=""
-
-show_help() {
-  cat <<EOF
-Usage: $0 [options]
-
-Build a UPX‑packed ultra‑small release binary.
-
-Options:
-  --no-upx        Skip UPX compression (only strip)
-  --force         Rebuild even if binary appears up‑to‑date
-  --target <TRIPLE> Cross‑compile target (e.g., x86_64-unknown-linux-musl)
-  -h, --help      Show this help message
-
-Environment:
-  CARGO_BIN       Cargo command (default: cargo)
-  BINARY_NAME     Binary name (default: zier-alpha)
-  UPX_CMD         UPX executable (default: upx)
-  UPX_LEVEL       UPX compression level (default: --best)
-
-Output:
-  The final binary is written to target/release-packed/${BINARY_NAME}-upx
-  (or target/<target>/release-packed/ when using --target, then copied).
-
-Examples:
-  # Build for host, compress with UPX
-  $0
-
-  # Build fully static Linux binary (requires musl target)
-  $0 --target x86_64-unknown-linux-musl
-
-  # Only strip (no UPX)
-  $0 --no-upx
-EOF
-}
+PASSTHROUGH_ARGS=()
 
 cd "$(dirname "$0")/.."  # ensure repo root
 
 # Help?
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  show_help
+  cat <<EOF
+Usage: $0 [script-options] [upx-args...]
+
+Build a UPX‑packed ultra‑small release binary.
+
+Script options:
+  --no-upx        Skip UPX compression (only strip)
+  --force         Rebuild even if binary appears up‑to‑date
+  --target <TRIPLE> Cross‑compile target (e.g., x86_64-unknown-linux-musl)
+  -h, --help      Show this help message
+
+UPX arguments (passed through):
+  --no-lzma       Disable LZMA (use NRV); useful on macOS ARM64
+  --ultra-brute   More exhaustive compression (slower)
+  --best          Maximum compression (default)
+  See 'upx --help' for all options.
+
+Examples:
+  $0                              # default build + UPX (LZMA if supported)
+  $0 --no-upx                     # only strip
+  $0 --target x86_64-unknown-linux-musl
+  $0 --no-lzma                    # force NRV (macOS ARM64)
+  $0 --ultra-brute --lzma         # max effort LZMA
+
+Environment:
+  CARGO_BIN   cargo command (default: cargo)
+  BINARY_NAME  binary name (default: zier-alpha)
+  UPX_CMD     upx executable (default: upx)
+EOF
   exit 0
 fi
 
-# Parse arguments
+# Parse arguments: script flags vs passthrough to UPX
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-upx) SKIP_UPX=true; shift ;;
     --force) FORCE_BUILD=true; shift ;;
     --target) TARGET="$2"; shift 2 ;;
-    -h|--help) show_help; exit 0 ;;
-    *) error "Unknown flag: $1" ;;
+    # End of script flags; everything else goes to UPX
+    *) PASSTHROUGH_ARGS+=("$1"); shift ;;
   esac
 done
 
-# Warn about static builds
+# Warn about static builds on Linux
 if [[ -z "$TARGET" ]] && [[ "$(uname -s)" == "Linux" ]]; then
   warn "No --target specified on Linux: building for native glibc (dynamically linked)."
   warn "For a fully static, self-contained binary, install and use:"
@@ -111,7 +108,7 @@ if [[ -z "$TARGET" ]] && [[ "$(uname -s)" == "Linux" ]]; then
   echo
 fi
 
-# Determine build directory (cargo uses target/<target-triple>/<profile> when cross‑compiling)
+# Determine build directory
 if [[ -z "$TARGET" ]]; then
   BUILD_DIR="target/${PROFILE}"
 else
@@ -165,22 +162,42 @@ info "After stripping: ${STRIPPED_HUMAN}"
 # Optional UPX compression
 if [[ "$SKIP_UPX" == "false" ]]; then
   if command -v "$UPX_CMD" &>/dev/null; then
-    info "Compressing with UPX (level=${UPX_LEVEL})..."
+    info "Compressing with UPX..."
 
     # Show file type for diagnosis
     if command -v file &>/dev/null; then
       info "File type: $(file "$BINARY_DST" | head -n1)"
     fi
 
-    # Try UPX compression with multiple fallback strategies
-    # Order: try LZMA first (best compression), then force, then ultra-brute, then fall back to NRV
-    strategies=(
-      "--best --lzma"       # explicit LZMA (default for --best in recent UPX)
-      "--best --force"      # force overwrite, still LZMA
-      "--ultra-brute --lzma" # even more exhaustive LZMA
-      "--best"              # may fall back to NRV if LZMA unsupported
-      "--nrv -9"            # pure NRV at max level (lzma not available/unsupported)
-    )
+    # Build UPX command line
+    # Base options: ${PASSTHROUGH_ARGS[@]}
+    # If no passthrough args provided, use a sensible default strategy based on platform
+    UPX_ARGS=("${PASSTHROUGH_ARGS[@]:---best --lzma}")
+
+    # Auto-detect macOS ARM64: LZMA often fails; advise user to use --no-lzma if they haven't
+    if [[ "$(uname -s)" == "Darwin" ]] && [[ "$(uname -m)" == "arm64" ]]; then
+      if [[ "${PASSTHROUGH_ARGS[@]}" != *"--no-lzma"* ]]; then
+        warn "Detected macOS on ARM64. LZMA compression may fail on this platform."
+        warn "If UPX reports 'Packed 0 files', retry with: $0 --no-lzma"
+        # We still try with LZMA first; if it fails we'll fallback to NRV below.
+      fi
+    fi
+
+    # We'll try a series of fallback strategies if the primary fails
+    # Order: primary (from args or default), then alternatives
+    declare -a strategies
+    primary="${UPX_ARGS[*]}"
+    strategies=("$primary")
+
+    # If primary contains --lzma, add NRV fallback
+    if [[ "$primary" == *"--lzma"* ]]; then
+      strategies+=("--best --force")  # sometimes helps
+      strategies+=("--best")           # may drop to NRV automatically
+      strategies+=("--nrv -9")         # pure NRV max
+    else
+      # If no --lzma, we can still try force and plain best
+      strategies+=("--best --force")
+    fi
 
     success=false
     for i in "${!strategies[@]}"; do
@@ -188,7 +205,6 @@ if [[ "$SKIP_UPX" == "false" ]]; then
       info "Attempt $((i+1)): upx $strat"
       UPX_OUTPUT=$("$UPX_CMD" $strat -o "$BINARY_DST".tmp "$BINARY_DST" 2>&1)
       UPX_EXIT=$?
-      # Print UPX output for diagnosis
       echo "$UPX_OUTPUT" | sed 's/^/    /'
       if [[ $UPX_EXIT -eq 0 ]] && ! echo "$UPX_OUTPUT" | grep -q "Packed 0 files"; then
         success=true
@@ -199,7 +215,6 @@ if [[ "$SKIP_UPX" == "false" ]]; then
     done
 
     if [[ "$success" == "true" ]]; then
-      # Replace original with compressed version
       mv "$BINARY_DST".tmp "$BINARY_DST"
       COMPRESSED_SIZE=$(stat -c%s "$BINARY_DST" 2>/dev/null || stat -f%z "$BINARY_DST")
       COMPRESSED_HUMAN=$(numfmt --to=iec-i --suffix=B "$COMPRESSED_SIZE" 2>/dev/null || echo "${COMPRESSED_SIZE} bytes")
@@ -224,7 +239,7 @@ if [[ "$SKIP_UPX" == "false" ]]; then
       echo "  - Binary already packed or maximally compressed by LTO"
       echo "  - UPX does not support this binary format/architecture"
       echo "  - Binary uses features UPX cannot handle (e.g., full PIE, certain segments)"
-      echo "Consider using --no-upx to skip compression or try a different UPX version."
+      echo "Consider using --no-lzma or a different UPX version."
     fi
   else
     warn "UPX not found in PATH. Skipping compression."
@@ -239,7 +254,7 @@ fi
 info "Build complete!"
 echo "Binary: $BINARY_DST"
 
-# Print detailed statistics if tools available
+# Stats
 echo
 info "Binary statistics:"
 if command -v size &>/dev/null; then
@@ -247,16 +262,9 @@ if command -v size &>/dev/null; then
   size -B "$BINARY_DST" 2>/dev/null || size "$BINARY_DST" | awk '{print "    " $0}'
 fi
 if command -v nm &>/dev/null; then
-  # Count symbols by type
   SYM_COUNT=$(nm -g "$BINARY_DST" 2>/dev/null | wc -l)
   echo "  Global symbols: $SYM_COUNT"
 fi
 if command -v file &>/dev/null; then
   echo "  Type: $(file "$BINARY_DST" | head -n1)"
-fi
-if [[ -n "$TARGET" ]]; then
-  echo
-  info "Verification (optional):"
-  echo "  file \"$BINARY_DST\"   # should say 'statically linked'"
-  echo "  ldd \"$BINARY_DST\"    # should say 'not a dynamic executable'"
 fi
