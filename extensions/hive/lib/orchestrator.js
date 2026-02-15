@@ -82,19 +82,23 @@ export async function runAgent(agentName, task, contextMode, attachments) {
     // Clone mode forces hydration to preserve system prompt identity
     const forkMode = isClone || contextMode === "fork";
     if (forkMode) {
+        const home = zier.os.homeDir() || zier.os.env.get("HOME");
+        const agentId = parentCtx?.agentId || zier.os.env.get("ZIER_ALPHA_AGENT") || "main";
+        const sessionPath = `${home}/.zier-alpha/agents/${agentId}/sessions/${parentSessionId}.jsonl`;
+
+        hydrationPath = `${tempDir}/zier-hive-${parentSessionId}-${isClone ? "clone" : agentName}-${uuid}.jsonl`;
+
         try {
-            const home = zier.os.homeDir() || zier.os.env.get("HOME");
-            const agentId = zier.os.env.get("ZIER_ALPHA_AGENT") || "main";
-            const sessionPath = `${home}/.zier-alpha/agents/${agentId}/sessions/${parentSessionId}.jsonl`;
-
-            hydrationPath = `${tempDir}/zier-hive-${parentSessionId}-${isClone ? "clone" : agentName}-${uuid}.jsonl`;
-
             const sessionContent = await pi.readFile(sessionPath);
             await pi.fileSystem.writeFileExclusive(hydrationPath, sessionContent);
-
             hydrationArgs = ["--hydrate-from", hydrationPath];
         } catch (e) {
-            console.log(`[Hive] Failed to hydrate session: ${e.message}`);
+            // For clones, hydration is critical. Fail if it fails.
+            if (isClone) {
+                throw new Error(`Failed to hydrate session for clone: ${e.message}`);
+            }
+            // For named agents (fork mode), log warning but proceed (fresh start fallback)
+            console.log(`[Hive] Failed to hydrate session for fork: ${e.message}`);
             hydrationArgs = [];
             hydrationPath = null;
         }
@@ -119,6 +123,9 @@ export async function runAgent(agentName, task, contextMode, attachments) {
 
     // Build command
     const args = ["ask", "--child"];
+    if (parentCtx?.projectDir) {
+        args.push("--workdir", parentCtx.projectDir);
+    }
     if (effectiveModel) {
         args.push("--model", effectiveModel);
     }

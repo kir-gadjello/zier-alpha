@@ -52,6 +52,7 @@ use tracing::{debug, error, info};
 
 use crate::config::Config;
 use crate::memory::{MemoryChunk, MemoryManager};
+use crate::scripting::ScriptService;
 pub use client::{SmartClient, SmartResponse};
 pub use compaction::{CompactionStrategy, NativeCompactor, ScriptCompactor};
 
@@ -71,6 +72,7 @@ pub struct AgentConfig {
 
 #[derive(Clone)]
 pub struct Agent {
+    pub agent_id: String,
     config: AgentConfig,
     app_config: Config,
     memory: Arc<MemoryManager>,
@@ -78,6 +80,7 @@ pub struct Agent {
     session_manager: SessionManager,
     tool_executor: ToolExecutor,
     memory_context: Arc<MemoryContextBuilder>,
+    script_service: Option<ScriptService>,
 
     chat_engine: Arc<ChatEngine>,
     #[allow(dead_code)]
@@ -98,6 +101,7 @@ impl Agent {
         app_config: &Config,
         memory: MemoryManager,
         context_strategy: ContextStrategy,
+        agent_id: &str,
     ) -> Result<Self> {
         Self::new_with_project(
             config,
@@ -105,6 +109,7 @@ impl Agent {
             memory,
             context_strategy,
             std::env::current_dir()?,
+            agent_id,
         )
         .await
     }
@@ -115,6 +120,7 @@ impl Agent {
         memory: MemoryManager,
         _context_strategy: ContextStrategy,
         project_dir: PathBuf,
+        agent_id: &str,
     ) -> Result<Self> {
         let client = SmartClient::new(app_config.clone(), config.model.clone());
 
@@ -224,12 +230,14 @@ impl Agent {
         );
 
         Ok(Self {
+            agent_id: agent_id.to_string(),
             config,
             app_config: app_config.clone(),
             memory,
             session_manager,
             tool_executor,
             memory_context,
+            script_service: None,
             chat_engine: Arc::new(chat_engine),
             mcp_manager,
             disk_monitor,
@@ -237,6 +245,10 @@ impl Agent {
             status_lines: Vec::new(),
             cumulative_usage: Usage::default(),
         })
+    }
+
+    pub fn set_script_service(&mut self, service: ScriptService) {
+        self.script_service = Some(service);
     }
 
     pub fn set_status_lines(&mut self, status: Vec<String>) {
@@ -258,6 +270,31 @@ impl Agent {
     pub fn set_tools(&mut self, tools: Vec<Arc<dyn Tool>>) {
         self.tool_executor.set_tools(tools);
         self.update_chat_engine();
+
+        if let Some(service) = &self.script_service {
+            let tool_names: Vec<String> = self
+                .tool_executor
+                .tools()
+                .iter()
+                .map(|t| t.name().to_string())
+                .collect();
+
+            // We update parent context asynchronously/fire-and-forget logic (sort of)
+            // But since set_parent_context is async, we need to spawn it or block?
+            // Agent methods are synchronous (except async ones). set_tools is NOT async.
+            // Wait, ScriptService::set_parent_context is async.
+            // I should use block_on or spawn?
+            // set_tools is synchronous here.
+            // I can use `tokio::task::spawn`.
+            let service = service.clone();
+            let model = self.config.model.clone();
+            let agent_id = self.agent_id.clone();
+            tokio::spawn(async move {
+                let _ = service
+                    .set_parent_context(Some(model), Some(tool_names), None, Some(agent_id))
+                    .await;
+            });
+        }
     }
 
     fn update_chat_engine(&mut self) {
@@ -283,6 +320,24 @@ impl Agent {
         self.config.model = model.to_string();
         self.update_chat_engine();
         info!("Switched to model: {}", model);
+
+        if let Some(service) = &self.script_service {
+            let tool_names: Vec<String> = self
+                .tool_executor
+                .tools()
+                .iter()
+                .map(|t| t.name().to_string())
+                .collect();
+            let service = service.clone();
+            let model = self.config.model.clone();
+            let agent_id = self.agent_id.clone();
+            tokio::spawn(async move {
+                let _ = service
+                    .set_parent_context(Some(model), Some(tool_names), None, Some(agent_id))
+                    .await;
+            });
+        }
+
         Ok(())
     }
 

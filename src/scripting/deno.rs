@@ -47,6 +47,7 @@ pub struct SandboxState {
     pub parent_model: Option<String>,
     pub parent_tools: Option<Vec<String>>,
     pub parent_system_prompt_append: Option<String>,
+    pub parent_agent_id: Option<String>,
     // Full application config for extension access via pi.config.get
     pub config: Option<Config>,
 }
@@ -662,18 +663,22 @@ pub async fn op_zier_mcp_shutdown(
 #[serde]
 pub fn op_zier_get_parent_context(state: &mut OpState) -> Option<serde_json::Value> {
     let sandbox = state.borrow::<SandboxState>();
-    let (model, tools, spa) = (
+    let (model, tools, spa, agent_id, project_dir) = (
         &sandbox.parent_model,
         &sandbox.parent_tools,
         &sandbox.parent_system_prompt_append,
+        &sandbox.parent_agent_id,
+        &sandbox.project_dir,
     );
-    if model.is_none() && tools.is_none() && spa.is_none() {
+    if model.is_none() && tools.is_none() && spa.is_none() && agent_id.is_none() {
         None
     } else {
         Some(serde_json::json!({
             "model": model,
             "tools": tools,
             "systemPromptAppend": spa,
+            "agentId": agent_id,
+            "projectDir": project_dir,
         }))
     }
 }
@@ -732,6 +737,7 @@ impl Clone for SandboxState {
             parent_model: self.parent_model.clone(),
             parent_tools: self.parent_tools.clone(),
             parent_system_prompt_append: self.parent_system_prompt_append.clone(),
+            parent_agent_id: self.parent_agent_id.clone(),
             config: self.config.clone(),
         }
     }
@@ -827,6 +833,7 @@ impl DenoRuntime {
             parent_model: None,
             parent_tools: None,
             parent_system_prompt_append: None,
+            parent_agent_id: None,
             config,
         };
         runtime.op_state().borrow_mut().put(state);
@@ -1019,6 +1026,7 @@ impl DenoRuntime {
         model: Option<String>,
         tools: Option<Vec<String>>,
         system_prompt_append: Option<String>,
+        agent_id: Option<String>,
     ) {
         let op_state = self.runtime.op_state();
         let mut state = op_state.borrow_mut();
@@ -1026,6 +1034,7 @@ impl DenoRuntime {
         sandbox.parent_model = model;
         sandbox.parent_tools = tools;
         sandbox.parent_system_prompt_append = system_prompt_append;
+        sandbox.parent_agent_id = agent_id;
     }
 
     pub async fn execute_tool(&mut self, name: &str, args: &str) -> Result<String, AnyError> {

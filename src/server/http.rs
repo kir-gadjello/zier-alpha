@@ -272,6 +272,7 @@ async fn load_persisted_sessions(state: &Arc<AppState>) -> Result<(), anyhow::Er
             &state.config,
             state.memory.clone(),
             crate::agent::ContextStrategy::Full,
+            HTTP_AGENT_ID,
         )
         .await?;
 
@@ -364,6 +365,7 @@ async fn get_or_create_session(
         &state.config,
         state.memory.clone(),
         crate::agent::ContextStrategy::Full,
+        HTTP_AGENT_ID,
     )
     .await
     .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

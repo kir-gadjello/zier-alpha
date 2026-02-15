@@ -245,6 +245,7 @@ impl HeartbeatRunner {
             &self.config,
             self.memory.clone(),
             crate::agent::ContextStrategy::Full,
+            &self.agent_id,
         )
         .await?;
         agent.new_session().await?;
