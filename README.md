@@ -108,6 +108,97 @@ You can also use environment variables:
 
 See [`config.example.toml`](./config.example.toml) for a complete reference with comments.
 
+## Telegram Advanced Features
+
+Zier Alpha includes several enhancements to provide a polished Telegram experience:
+
+### Message Debounce
+
+Long messages split by Telegram are automatically aggregated into a single coherent unit. Configure via `[ingress]`:
+
+```toml
+[ingress]
+debounce_seconds = 3         # Minimum quiet period before flushing
+max_debounce_messages = 50   # Force flush if this many messages accumulate
+max_debounce_chars = 100000  # Force flush if total characters exceed this
+```
+
+### File Attachments
+
+Documents (PDF, TXT, etc.) sent to the bot are downloaded and made available to the agent via XML context blocks:
+
+```toml
+[server.attachments]
+enabled = true
+max_file_size_bytes = 10485760  # 10 MB
+base_dir = "attachments"         # Relative to project directory
+```
+
+The agent receives a message containing:
+
+```xml
+<context>
+<attached-file filename="contract.pdf" mime="application/pdf" size="456789" path="attachments/telegram/123_contract.pdf"/>
+</context>
+```
+
+Use `read_file` to access the content.
+
+### Audio Transcription
+
+Voice notes and audio files can be transcribed to text using a configurable backend:
+
+```toml
+[server.audio]
+enabled = true
+backend = "local"          # "local", "openai", or "gemini"
+local_command = "whisper-cpp -m {} -f {}"  # {} = input file path
+openai_model = "whisper-1"
+timeout_seconds = 60
+```
+
+If transcription fails or is disabled, audio falls back to file attachment behavior.
+
+### Button‑Based Tool Approvals
+
+Tools that require approval (e.g., `bash`, `write_file`) can be confirmed via inline Telegram buttons:
+
+```toml
+[server.telegram_approval]
+enabled = true
+timeout_seconds = 300   # 5 minutes
+auto_deny = false       # Set true to auto‑deny on timeout
+```
+
+When an approval‑required tool is invoked, the bot sends a message with ✅ Approve and ❌ Deny buttons. The agent pauses until a decision is received.
+
+### Custom System Prompt Generator
+
+For full control over the system prompt, provide a JavaScript generator:
+
+```toml
+[agent]
+system_prompt_script = "path/to/generator.js"
+```
+
+The script exports `generateSystemPrompt(ctx)` where `ctx` includes:
+
+```json
+{
+  "workspace_dir": "/path/to/workspace",
+  "project_dir": "/path/to/project",
+  "model": "openai/gpt-4o",
+  "tool_names": ["bash", "read_file", ...],
+  "hostname": "my-laptop",
+  "current_time": "2026-02-17 09:30:00",
+  "timezone": "EST",
+  "skills_prompt": "...",
+  "status_lines": ["..."]
+}
+```
+
+The generator must return the complete system prompt string, including any safety instructions. See `docs/system_prompt_generator.md` for details.
+
 ---
 
 ## Modes of Operation

@@ -10,5 +10,9 @@ pub use approval::{ApprovalCoordinator, ApprovalDecision, ApprovalUIRequest};
 pub use bus::{IngressBus, IngressProvider};
 pub use debounce::{DebounceManager, DebounceSession};
 pub use handler::process_ingress_message;
-pub use telegram_client::{TelegramCallbackQuery, TelegramClient, TelegramMessage, TelegramUpdate};
+pub use telegram_client::{
+    RealTelegramClient, TelegramApi, TelegramAudio, TelegramCallbackQuery, TelegramClient,
+    TelegramDocument, TelegramMessage, TelegramPhotoSize, TelegramUpdate, TelegramUser,
+    TelegramVoice,
+};
 pub use types::{IngressMessage, TrustLevel};

@@ -1,7 +1,8 @@
 use crate::agent::ImageAttachment;
 use crate::config::Config;
 use crate::ingress::{
-    ApprovalCoordinator, ApprovalUIRequest, IngressBus, IngressMessage, TelegramClient, TrustLevel,
+    ApprovalCoordinator, ApprovalUIRequest, IngressBus, IngressMessage, RealTelegramClient,
+    TelegramApi, TelegramClient, TrustLevel,
 };
 use crate::server::audio::AudioTranscriber;
 use anyhow;
@@ -20,7 +21,7 @@ use tracing::{debug, error, info, warn};
 pub struct TelegramPollingService {
     config: Config,
     bus: Arc<IngressBus>,
-    client: TelegramClient,
+    client: Arc<dyn TelegramApi>,
     project_dir: PathBuf,
     transcriber: Option<Box<dyn AudioTranscriber>>,
     approval_coord: Arc<ApprovalCoordinator>,
@@ -28,15 +29,23 @@ pub struct TelegramPollingService {
 }
 
 impl TelegramPollingService {
+    /// Create a new instance.
+    /// `client` can be provided for testing; if None, a client is built from config's bot token.
     pub fn new(
         config: Config,
         bus: Arc<IngressBus>,
         project_dir: PathBuf,
         approval_coord: Arc<ApprovalCoordinator>,
         approval_ui_rx: mpsc::Receiver<ApprovalUIRequest>,
+        client: Option<Arc<dyn TelegramApi>>,
     ) -> Option<Self> {
-        let token = config.server.telegram_bot_token.as_ref()?.clone();
-        let client = TelegramClient::new(token);
+        let client = match client {
+            Some(c) => c,
+            None => {
+                let token = config.server.telegram_bot_token.as_ref()?.clone();
+                Arc::new(RealTelegramClient::new(token))
+            }
+        };
         let transcriber = match crate::server::audio::create_transcriber(&config) {
             Ok(t) => t,
             Err(e) => {
@@ -191,8 +200,7 @@ impl TelegramPollingService {
 
         // Download file
         let download_url = self.client.get_file_download_url(file_id).await?;
-        let response = self.client.get(&download_url).await?;
-        let bytes = response.bytes().await?;
+        let bytes = self.client.download_file(&download_url).await?;
 
         // Write file to disk
         let mut file = fs::File::create(&file_path).await?;
@@ -270,17 +278,10 @@ impl TelegramPollingService {
                         return Ok(());
                     }
                 };
-                let response = match self.client.get(&download_url).await {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        error!("Failed to download audio: {}", e);
-                        return Ok(());
-                    }
-                };
-                let bytes = match response.bytes().await {
+                let bytes = match self.client.download_file(&download_url).await {
                     Ok(b) => b,
                     Err(e) => {
-                        error!("Failed to read audio bytes: {}", e);
+                        error!("Failed to download audio: {}", e);
                         return Ok(());
                     }
                 };
@@ -361,17 +362,10 @@ impl TelegramPollingService {
                         return Ok(());
                     }
                 };
-                let response = match self.client.get(&download_url).await {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        error!("Failed to download voice: {}", e);
-                        return Ok(());
-                    }
-                };
-                let bytes = match response.bytes().await {
+                let bytes = match self.client.download_file(&download_url).await {
                     Ok(b) => b,
                     Err(e) => {
-                        error!("Failed to read voice bytes: {}", e);
+                        error!("Failed to download voice: {}", e);
                         return Ok(());
                     }
                 };
@@ -442,28 +436,22 @@ impl TelegramPollingService {
         let (payload, images) = if let Some(photos) = &message.photo {
             if let Some(largest) = photos.last() {
                 match self.client.get_file_download_url(&largest.file_id).await {
-                    Ok(url) => match self.client.get(&url).await {
-                        Ok(resp) => match resp.bytes().await {
-                            Ok(bytes) => {
-                                let b64 = general_purpose::STANDARD.encode(&bytes);
-                                let img = ImageAttachment {
-                                    data: b64,
-                                    media_type: "image/jpeg".to_string(),
-                                };
-                                // Use caption if present, else default text
-                                let text = message
-                                    .caption
-                                    .clone()
-                                    .unwrap_or_else(|| "User sent an image".to_string());
-                                (Some(text), vec![img])
-                            }
-                            Err(e) => {
-                                warn!("Failed to download image bytes: {}", e);
-                                (None, Vec::new())
-                            }
-                        },
+                    Ok(url) => match self.client.download_file(&url).await {
+                        Ok(bytes) => {
+                            let b64 = general_purpose::STANDARD.encode(&bytes);
+                            let img = ImageAttachment {
+                                data: b64,
+                                media_type: "image/jpeg".to_string(),
+                            };
+                            // Use caption if present, else default text
+                            let text = message
+                                .caption
+                                .clone()
+                                .unwrap_or_else(|| "User sent an image".to_string());
+                            (Some(text), vec![img])
+                        }
                         Err(e) => {
-                            warn!("Failed to download image: {}", e);
+                            warn!("Failed to download image bytes: {}", e);
                             (None, Vec::new())
                         }
                     },
@@ -554,5 +542,18 @@ impl TelegramPollingService {
             error!("Failed to answer callback query: {}", e);
         }
         Ok(())
+    }
+
+    /// Helper used in tests to process a single Telegram message.
+    pub async fn process_message_for_test(
+        &self,
+        message: crate::ingress::TelegramMessage,
+    ) -> anyhow::Result<()> {
+        self.handle_message(message).await
+    }
+
+    /// Test‑only helper to simulate handling an ApprovalUIRequest.
+    pub async fn process_approval_ui(&self, req: ApprovalUIRequest) -> anyhow::Result<()> {
+        self.handle_approval_ui_request(req).await
     }
 }

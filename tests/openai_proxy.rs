@@ -19,7 +19,8 @@ async fn test_openai_proxy_chat() {
     config.server.openai_proxy.port = 37779;
     config.server.openai_proxy.bind = "127.0.0.1".to_string();
     // Prevent disk monitor from entering degraded mode in test environments
-    config.disk.min_free_percent = 1.0;
+    // Set to 0.0 to effectively disable the threshold (since our environment may have <1% free)
+    config.disk.min_free_percent = 0.0;
 
     let server = Server::new(&config).unwrap();
 

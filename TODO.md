@@ -2,7 +2,7 @@
 
 **Priority:** P1 (Critical)  
 **Based on:** TASK_SPEC.md (Telegram Debounce, Attachments, Audio, Approvals, System Prompt Generator)  
-**Status:** Not started (all tasks pending)  
+**Status:** All tasks completed ✅  
 **Last updated:** 2026‑02‑17
 
 ---
@@ -146,7 +146,7 @@
 
 ## Phase 4: Audio Transcription
 
-### ⏳ Task 4.1: Define transcriber trait and implementations
+### ✅ Task 4.1: Define transcriber trait and implementations
 
 **File:** (new) `src/server/audio.rs`  
 **Scope:**
@@ -168,7 +168,7 @@
 
 ---
 
-### ⏳ Task 4.2: Integrate transcriber into `TelegramPollingService`
+### ✅ Task 4.2: Integrate transcriber into `TelegramPollingService`
 
 **File:** `src/server/telegram_polling.rs`  
 **Scope:**
@@ -183,7 +183,7 @@
 
 ---
 
-### ⏳ Task 4.3: Handle audio configuration validation
+### ✅ Task 4.3: Handle audio configuration validation
 
 **Files:** `src/config/mod.rs`, daemon startup  
 **Scope:**
@@ -212,7 +212,7 @@
 
 ---
 
-### ⏳ Task 5.2: Share coordinator with daemon
+### ✅ Task 5.2: Share coordinator with daemon
 
 **File:** `src/cli/daemon.rs`  
 **Scope:**
@@ -225,7 +225,7 @@
 
 ---
 
-### ⏳ Task 5.3: Modify `ingress_loop` to use approval coordinator
+### ✅ Task 5.3: Modify `ingress_loop` to use approval coordinator
 
 **File:** `src/ingress/controller.rs`  
 **Scope:**
@@ -312,7 +312,7 @@
 
 ---
 
-### ⏳ Task 5.4: Handle approval UI in `TelegramPollingService`
+### ✅ Task 5.4: Handle approval UI in `TelegramPollingService`
 
 **File:** `src/server/telegram_polling.rs`  
 **Scope:**
@@ -333,7 +333,7 @@
 
 ---
 
-### ⏳ Task 5.5: Background cleanup of timed‑out approvals
+### ✅ Task 5.5: Background cleanup of timed‑out approvals
 
 **File:** `src/cli/daemon.rs` (or within coordinator spawn)  
 **Scope:**
@@ -356,7 +356,7 @@
 
 ---
 
-### ⏳ Task 5.6: Update `tools.require_approval` in tests
+### ✅ Task 5.6: Update `tools.require_approval` in tests
 
 **File:** `tests/approval_flow.rs` (existing)  
 **Scope:** Ensure existing test still works; may need adjustment because now approvals go through coordinator when running under `ingress_loop` but unit test uses agent directly. No change needed; unit test calls `agent.chat` directly and catches error; for ingress tests we’ll have new integration test. Existing test remains valid.
@@ -404,7 +404,7 @@
 
 ---
 
-### ⏳ Task 6.4: Document generator script expectations
+### ✅ Task 6.4: Document generator script expectations
 
 **File:** `docs/system_prompt_generator.md` (new) or README addition.  
 **Scope:** Describe the function signature, available params, safety responsibilities, example script.
@@ -413,7 +413,7 @@
 
 ## Phase 7: Integration Tests
 
-### ⏳ Task 7.1: Write debounce integration test
+### ✅ Task 7.1: Write debounce integration test
 
 **File:** `tests/telegram_debounce.rs`  
 **Scope:**
@@ -424,7 +424,7 @@
 
 ---
 
-### ⏳ Task 7.2: Write attachment integration test
+### ✅ Task 7.2: Write attachment integration test
 
 **File:** `tests/telegram_attachments.rs`  
 **Scope:**
@@ -436,7 +436,7 @@
 
 ---
 
-### ⏳ Task 7.3: Write audio integration test
+### ✅ Task 7.3: Write audio integration test
 
 **File:** `tests/telegram_audio.rs`  
 **Scope:**
@@ -446,7 +446,7 @@
 
 ---
 
-### ⏳ Task 7.4: Write approval integration test
+### ✅ Task 7.4: Write approval integration test
 
 **File:** `tests/telegram_approval.rs`  
 **Scope:**
@@ -472,14 +472,14 @@
 
 ## Phase 8: Documentation & Cleanup
 
-### ⏳ Task 8.1: Update README with new features
+### ✅ Task 8.1: Update README with new features
 
 **File:** `README.md`  
 **Scope:** Add section “Telegram Advanced Features” covering debounce, attachments, audio, approvals, system prompt generator, with example config snippets.
 
 ---
 
-### ⏳ Task 8.2: Update CHANGELOG.md
+### ✅ Task 8.2: Update CHANGELOG.md
 
 **File:** `CHANGELOG.md`  
 **Scope:** Add “Unreleased” section items:
@@ -491,7 +491,7 @@
 
 ---
 
-### ⏳ Task 8.3: Ensure `config.example.toml` includes all new sections
+### ✅ Task 8.3: Ensure `config.example.toml` includes all new sections
 
 **File:** `config.example.toml`  
 **Scope:** Double‑check that every new field is documented with comments.
@@ -500,14 +500,14 @@
 
 ## Phase 9: Final Validation
 
-### ⏳ Task 9.1: Run full test suite and clippy
+### ✅ Task 9.1: Run full test suite and clippy
 
 **Commands:** `cargo test --release`, `cargo clippy`, `cargo fmt -- --check`.  
 **Goal:** All green.
 
 ---
 
-### ⏳ Task 9.2: Update tasks status
+### ✅ Task 9.2: Update tasks status
 
 Change all `⏳` to `✅` in this TODO.md upon verification.
 

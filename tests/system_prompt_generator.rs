@@ -1,8 +1,8 @@
 use tempfile::TempDir;
+use zier_alpha::agent::providers::Role;
 use zier_alpha::agent::Agent;
 use zier_alpha::agent::AgentConfig;
 use zier_alpha::agent::ContextStrategy;
-use zier_alpha::agent::providers::Role;
 use zier_alpha::config::{Config, SandboxPolicy, WorkdirStrategy};
 use zier_alpha::memory::MemoryManager;
 use zier_alpha::scripting::ScriptService;

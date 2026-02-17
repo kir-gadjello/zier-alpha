@@ -273,6 +273,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
             project_dir.clone(),
             approval_coord.clone(),
             approval_ui_rx,
+            None, // client: use default from config
         ) {
             tokio::spawn(async move {
                 polling_service.run().await;

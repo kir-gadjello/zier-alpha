@@ -13,6 +13,8 @@ async fn test_memory_write_integration() {
     let mut config = Config::default();
     config.memory.workspace = workspace_path.to_string_lossy().to_string();
     config.agent.default_model = "mock/test".to_string();
+    // Disable disk monitor degraded mode to avoid test failures in low-disk environments
+    config.disk.min_free_percent = 0.0;
 
     let memory =
         MemoryManager::new_with_full_config(&config.memory, Some(&config), "test-agent").unwrap();

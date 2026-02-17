@@ -3,9 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- **Telegram Debounce Queue**: Aggregates fragmented Telegram messages into coherent units using a configurable debounce period (default 3s), message count limit (50), and character limit (100k). Prevents the agent from being overwhelmed by partial thoughts.
+- **File Attachment Support**: Downloads Telegram documents and injects them as context via XML armor blocks. Files are saved to `<project_dir>/attachments/telegram/` with size limits enforced (default 10MB). Agent can then `read_file` to access content.
+- **Audio Transcription**: Configurable STT backends (local command, OpenAI Whisper, or Gemini) to transcribe Telegram voice and audio messages into text. Falls back to attachment if transcription fails or is disabled.
+- **Button-Based Tool Approvals**: Interactive inline keyboards for Telegram require user confirmation before executing approved‑required tools (`bash`, `write_file`, etc.). Uses `ApprovalCoordinator` to manage pending approvals with timeout and auto‑deny options.
+- **User‑Configurable System Prompt Generator**: JavaScript/Deno script hook (`agent.system_prompt_script`) allows complete customization of the system prompt. The script receives context (workspace, tools, skills, status) and returns a tailored prompt string.
 - **Hive extension overhaul**: Renamed `hive_delegate` to `hive_fork_subagent`, introduced true clone mode with byte‑identical session hydration, configurable clone depth limits (`max_clone_fork_depth`), custom system prompt follow‑up (`clone_sysprompt_followup`), user‑prompt prefix (`clone_userprompt_prefix`), and per‑clone tool restrictions (`clone_disable_tools`). Parent now receives rich execution metadata (model, provider, latency, token usage).
 - **Custom provider support**: Users can now define arbitrary OpenAI-compatible providers (e.g., `openrouter`, `together`) in config under `[providers.<name>]`. These providers are automatically recognized when referenced in a model's `provider` field. The provider config accepts `api_key` (optional if model provides `api_key_env`), `base_url`, and an optional `type` for documentation. This enables seamless integration with any OpenAI-compatible endpoint.
-- **Configuration foundation for Telegram enhancements**: Added new top-level `[ingress]` section (debounce settings), and extended `[server]` with `[server.attachments]`, `[server.audio]`, and `[server.telegram_approval]` subsections. Also added `system_prompt_script` option to `[agent]`. These provide the foundation for upcoming debounce queue, file attachment support, audio transcription, and button-based tool approvals.
 
 ### Fixed
 
