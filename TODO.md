@@ -49,7 +49,7 @@
 
 ## Phase 2: Debounce Queue Implementation
 
-### ⏳ Task 2.1: Create Debounce data structures
+### ✅ Task 2.1: Create Debounce data structures
 
 **Files:** (new) `src/ingress/debounce.rs`  
 **Scope:**
