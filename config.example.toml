@@ -31,6 +31,10 @@ reserve_tokens = 8000
 # Maximum tokens for LLM response (passed to provider)
 max_tokens = 4096
 
+# Path to a JavaScript generator script for custom system prompts.
+# If set, this script will be evaluated to generate the system prompt instead of the default Rust builder.
+# system_prompt_script = "path/to/generator.js"
+
 # Session compaction strategy – what to do when a session grows too large.
 [agent.compaction]
 # Strategy: "models" = try fallback models, "truncate" = keep last N messages,
@@ -153,6 +157,67 @@ telegram_poll_timeout = 30
 # telegram_mode = "webhook"
 # telegram_secret_token = "random-secret"
 # public_url = "https://your.domain"
+
+# -----------------------------------------------------------------------------
+# [server.attachments]
+# -----------------------------------------------------------------------------
+[server.attachments]
+# Enable attachment downloads and injection
+enabled = true
+
+# Maximum file size in bytes (default: 10MB = 10_485_760)
+max_file_size_bytes = 10485760
+
+# Base directory for saved attachments, relative to project dir
+base_dir = "attachments"
+
+# -----------------------------------------------------------------------------
+# [server.audio]
+# -----------------------------------------------------------------------------
+[server.audio]
+# Enable audio transcription
+enabled = true
+
+# Backend: "local", "openai", or "gemini"
+backend = "local"
+
+# Command template for local backend (e.g., "whisper-cpp -m {} -f {}")
+# local_command = "whisper-cpp -m {} -f {}"
+
+# Model for OpenAI backend
+openai_model = "whisper-1"
+
+# Model for Gemini backend (optional)
+# gemini_model = "gemini-2.0-flash-exp"
+
+# Timeout in seconds for transcription
+timeout_seconds = 60
+
+# -----------------------------------------------------------------------------
+# [server.telegram_approval]
+# -----------------------------------------------------------------------------
+[server.telegram_approval]
+# Enable button-based tool approvals
+enabled = true
+
+# Timeout in seconds for approval requests (default: 300 = 5 minutes)
+timeout_seconds = 300
+
+# Auto-deny if approval times out
+auto_deny = false
+
+# -----------------------------------------------------------------------------
+# [ingress]
+# -----------------------------------------------------------------------------
+[ingress]
+# Debounce period in seconds (default: 3)
+debounce_seconds = 3
+
+# Maximum number of messages to buffer per source before flushing (default: 50)
+max_debounce_messages = 50
+
+# Maximum total characters to buffer per source before flushing (default: 100000)
+max_debounce_chars = 100000
 
 # -----------------------------------------------------------------------------
 # [logging]

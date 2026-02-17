@@ -18,7 +18,7 @@
 
 ## Phase 1: Configuration Foundation
 
-### ⏳ Task 1.1: Extend Config structs with new fields
+### ✅ Task 1.1: Extend Config structs with new fields
 
 **Files:** `src/config/mod.rs`  
 **Scope:**
@@ -34,12 +34,12 @@
 
 ---
 
-### ⏳ Task 1.2: Update `config.example.toml` with documentation
+### ✅ Task 1.2: Update `config.example.toml` with documentation
 
 **File:** `config.example.toml`  
 **Scope:**
 - Add `[ingress]` section with debounce settings.
-- Extend `[server]` with `[server.attachments]`, `[server.audio]`, `[server.telegram.approval]` subsections.
+- Extend `[server]` with `[server.attachments]`, `[server.audio]`, `[server.telegram_approval]` subsections.
 - Add `system_prompt_script` to `[agent]`.
 - Include helpful comments explaining each option.
 

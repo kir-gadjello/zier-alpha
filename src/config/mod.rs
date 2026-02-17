@@ -81,6 +81,10 @@ pub struct Config {
 
     #[serde(default)]
     pub disk: DiskConfig,
+
+    /// Ingress debounce configuration (applies to all ingress sources)
+    #[serde(default)]
+    pub ingress: IngressDebounceConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +181,11 @@ pub struct AgentConfig {
 
     #[serde(default)]
     pub compaction: CompactionConfig,
+
+    /// Path to a JavaScript generator script for custom system prompts.
+    /// If set, this script will be evaluated to generate the system prompt instead of the default Rust builder.
+    #[serde(default)]
+    pub system_prompt_script: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,6 +400,122 @@ pub enum TelegramMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngressDebounceConfig {
+    /// Debounce period in seconds (default: 3)
+    #[serde(default = "default_debounce_seconds")]
+    pub debounce_seconds: u64,
+
+    /// Maximum number of messages to buffer per source before flushing (default: 50)
+    #[serde(default = "default_max_debounce_messages")]
+    pub max_debounce_messages: usize,
+
+    /// Maximum total characters to buffer per source before flushing (default: 100000)
+    #[serde(default = "default_max_debounce_chars")]
+    pub max_debounce_chars: usize,
+}
+
+impl Default for IngressDebounceConfig {
+    fn default() -> Self {
+        Self {
+            debounce_seconds: default_debounce_seconds(),
+            max_debounce_messages: default_max_debounce_messages(),
+            max_debounce_chars: default_max_debounce_chars(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentsConfig {
+    /// Enable attachment downloads and injection (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Maximum file size in bytes (default: 10MB = 10_485_760)
+    #[serde(default = "default_max_file_size_bytes")]
+    pub max_file_size_bytes: u64,
+
+    /// Base directory for saved attachments, relative to project dir (default: "attachments")
+    #[serde(default = "default_attachments_base_dir")]
+    pub base_dir: String,
+}
+
+impl Default for AttachmentsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            max_file_size_bytes: default_max_file_size_bytes(),
+            base_dir: "attachments".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioConfig {
+    /// Enable audio transcription (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Backend: "local", "openai", or "gemini" (default: "local")
+    #[serde(default = "default_audio_backend")]
+    pub backend: String,
+
+    /// Command template for local backend (e.g., "whisper-cpp -m {} -f {}")
+    /// `{}` placeholder will be replaced with the input file path.
+    #[serde(default)]
+    pub local_command: Option<String>,
+
+    /// Model for OpenAI backend (default: "whisper-1")
+    #[serde(default = "default_openai_audio_model")]
+    pub openai_model: Option<String>,
+
+    /// Model for Gemini backend (optional)
+    #[serde(default)]
+    pub gemini_model: Option<String>,
+
+    /// Timeout in seconds for transcription (default: 60)
+    #[serde(default = "default_audio_timeout_seconds")]
+    pub timeout_seconds: u64,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            backend: default_audio_backend(),
+            local_command: None,
+            openai_model: default_openai_audio_model(),
+            gemini_model: None,
+            timeout_seconds: default_audio_timeout_seconds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramApprovalConfig {
+    /// Enable button-based tool approvals (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Timeout in seconds for approval requests (default: 300 = 5 minutes)
+    #[serde(default = "default_approval_timeout_seconds")]
+    pub timeout_seconds: u64,
+
+    /// Auto-deny if approval times out (default: false)
+    #[serde(default = "default_false")]
+    pub auto_deny: bool,
+}
+
+impl Default for TelegramApprovalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            timeout_seconds: default_approval_timeout_seconds(),
+            auto_deny: default_false(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -421,6 +546,22 @@ pub struct ServerConfig {
     /// Long polling timeout in seconds (default 30)
     #[serde(default = "default_poll_timeout")]
     pub telegram_poll_timeout: u64,
+
+    /// Ingress debounce configuration
+    #[serde(default)]
+    pub ingress: IngressDebounceConfig,
+
+    /// Attachment handling configuration
+    #[serde(default)]
+    pub attachments: AttachmentsConfig,
+
+    /// Audio transcription configuration
+    #[serde(default)]
+    pub audio: AudioConfig,
+
+    /// Telegram button-based approval configuration
+    #[serde(default)]
+    pub telegram_approval: TelegramApprovalConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -531,6 +672,9 @@ fn default_claude_cli_model() -> String {
 fn default_true() -> bool {
     true
 }
+fn default_false() -> bool {
+    false
+}
 fn default_interval() -> String {
     "30m".to_string()
 }
@@ -596,6 +740,41 @@ fn default_compaction_strategy() -> String {
     "native".to_string()
 }
 
+// Ingress debounce defaults
+fn default_debounce_seconds() -> u64 {
+    3
+}
+fn default_max_debounce_messages() -> usize {
+    50
+}
+fn default_max_debounce_chars() -> usize {
+    100_000
+}
+
+// Attachments defaults
+fn default_max_file_size_bytes() -> u64 {
+    10_485_760 // 10 MB
+}
+fn default_attachments_base_dir() -> String {
+    "attachments".to_string()
+}
+
+// Audio defaults
+fn default_audio_backend() -> String {
+    "local".to_string()
+}
+fn default_audio_timeout_seconds() -> u64 {
+    60
+}
+fn default_openai_audio_model() -> Option<String> {
+    Some("whisper-1".to_string())
+}
+
+// Telegram approval defaults
+fn default_approval_timeout_seconds() -> u64 {
+    300
+}
+
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
@@ -604,6 +783,7 @@ impl Default for AgentConfig {
             reserve_tokens: default_reserve_tokens(),
             max_tokens: default_max_tokens(),
             compaction: CompactionConfig::default(),
+            system_prompt_script: None,
         }
     }
 }
@@ -673,6 +853,10 @@ impl Default for ServerConfig {
             telegram_secret_token: None,
             telegram_bot_token: None,
             telegram_poll_timeout: default_poll_timeout(),
+            ingress: IngressDebounceConfig::default(),
+            attachments: AttachmentsConfig::default(),
+            audio: AudioConfig::default(),
+            telegram_approval: TelegramApprovalConfig::default(),
         }
     }
 }
