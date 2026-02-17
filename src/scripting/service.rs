@@ -3,9 +3,10 @@ use crate::config::{Config, SandboxPolicy, WorkdirStrategy};
 use crate::ingress::IngressBus;
 use crate::scheduler::Scheduler;
 use crate::scripting::deno::{DenoRuntime, DenoToolDefinition};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
@@ -22,6 +23,10 @@ enum ScriptCommand {
     },
     GetStatus {
         resp: oneshot::Sender<Result<Vec<String>>>,
+    },
+    EvaluateGenerator {
+        args: Value,
+        resp: oneshot::Sender<Result<String>>,
     },
     Shutdown,
     SetParentContext {
@@ -155,6 +160,11 @@ impl ScriptService {
                                 }
                                 ScriptCommand::GetStatus { resp } => {
                                     let res = deno.get_status().await;
+                                    let _ = resp.send(res.map_err(|e| anyhow::anyhow!(e)));
+                                }
+                                ScriptCommand::EvaluateGenerator { args, resp } => {
+                                    let res =
+                                        deno.evaluate_generator("generateSystemPrompt", args).await;
                                     let _ = resp.send(res.map_err(|e| anyhow::anyhow!(e)));
                                 }
                                 ScriptCommand::Shutdown => break,
@@ -367,5 +377,46 @@ impl ScriptService {
                 .await;
         }
         Ok(())
+    }
+
+    pub async fn evaluate_generator(
+        &self,
+        script_path: &Path,
+        args: serde_json::Value,
+    ) -> Result<String> {
+        let path_str = script_path.to_string_lossy().into_owned();
+
+        // Ensure the script is loaded as an extension
+        {
+            let exts = self.extensions.read().await;
+            if !exts.contains_key(&path_str) {
+                // Drop the read lock and load
+                drop(exts);
+                self.load_script(&path_str).await?;
+            }
+        }
+
+        let (tx, rx) = oneshot::channel();
+        // Send EvaluateGenerator command to the extension
+        {
+            let exts = self.extensions.read().await;
+            if let Some(handle) = exts.get(&path_str) {
+                handle
+                    .sender
+                    .send(ScriptCommand::EvaluateGenerator { args, resp: tx })
+                    .await?;
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Extension not found after loading: {}",
+                    path_str
+                ));
+            }
+        }
+
+        match rx.await {
+            Ok(Ok(prompt)) => Ok(prompt),
+            Ok(Err(e)) => Err(anyhow::anyhow!("Generator evaluation error: {}", e)),
+            Err(_) => Err(anyhow::anyhow!("Generator evaluation channel closed")),
+        }
     }
 }

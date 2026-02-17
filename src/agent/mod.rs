@@ -36,8 +36,8 @@ pub use session_manager::SessionManager;
 pub use session_store::{SessionEntry, SessionStore};
 pub use skills::{get_skills_summary, load_skills, parse_skill_command, Skill, SkillInvocation};
 pub use system_prompt::{
-    build_heartbeat_prompt, is_heartbeat_ok, is_silent_reply, HEARTBEAT_OK_TOKEN,
-    SILENT_REPLY_TOKEN,
+    build_heartbeat_prompt, is_heartbeat_ok, is_silent_reply, SystemPromptContext,
+    HEARTBEAT_OK_TOKEN, SILENT_REPLY_TOKEN,
 };
 pub use tool_executor::ToolExecutor;
 pub use tools::{create_default_tools, extract_tool_detail, ScriptTool, Tool, ToolResult};
@@ -45,6 +45,9 @@ pub mod disk_monitor;
 pub use disk_monitor::DiskMonitor;
 
 use anyhow::Result;
+use chrono::Local;
+use serde_json;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -420,19 +423,73 @@ impl Agent {
         let skills_prompt = skills::build_skills_prompt(&workspace_skills);
         debug!("Loaded {} skills from workspace", workspace_skills.len());
 
-        let tool_names: Vec<&str> = self
-            .tool_executor
-            .tools()
-            .iter()
-            .map(|t| t.name())
-            .collect();
-        let system_prompt_params =
+        let tools = self.tool_executor.tools();
+        let tool_names_str: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
+        let tool_names_slice: Vec<&str> = tool_names_str.iter().map(|s| s.as_str()).collect();
+
+        // Build fallback system prompt using default builder
+        let fallback_params =
             system_prompt::SystemPromptParams::new(self.memory.workspace(), &self.config.model)
                 .with_project(&self.project_dir, self.app_config.workdir.clone())
-                .with_tools(tool_names)
-                .with_skills_prompt(skills_prompt)
+                .with_tools(tool_names_slice)
+                .with_skills_prompt(skills_prompt.clone())
                 .with_status_lines(self.status_lines.clone());
-        let system_prompt = system_prompt::build_system_prompt(system_prompt_params);
+        let fallback_prompt = system_prompt::build_system_prompt(fallback_params);
+
+        // Determine if we should use a generator script
+        let system_prompt = if let (Some(service), Some(script_path_str)) = (
+            &self.script_service,
+            &self.app_config.agent.system_prompt_script,
+        ) {
+            // Build context for generator
+            let hostname = std::env::var("HOSTNAME")
+                .or_else(|_| std::env::var("HOST"))
+                .ok();
+            let now = Local::now();
+            let current_time = now.format("%Y-%m-%d %H:%M:%S").to_string();
+            let timezone = now.format("%Z").to_string();
+            let timezone = if timezone.is_empty() {
+                None
+            } else {
+                Some(timezone)
+            };
+            let context = SystemPromptContext {
+                workspace_dir: self.memory.workspace().to_string_lossy().into_owned(),
+                project_dir: self.project_dir.to_str().map(|s| s.to_string()),
+                model: self.config.model.clone(),
+                tool_names: tool_names_str.clone(),
+                hostname,
+                current_time,
+                timezone,
+                skills_prompt: Some(skills_prompt),
+                status_lines: if self.status_lines.is_empty() {
+                    None
+                } else {
+                    Some(self.status_lines.clone())
+                },
+            };
+
+            match serde_json::to_value(&context) {
+                Ok(value) => {
+                    match service
+                        .evaluate_generator(Path::new(script_path_str), value)
+                        .await
+                    {
+                        Ok(prompt) => prompt,
+                        Err(e) => {
+                            error!("System prompt generator failed: {}", e);
+                            fallback_prompt
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to serialize generator context: {}", e);
+                    fallback_prompt
+                }
+            }
+        } else {
+            fallback_prompt
+        };
 
         let memory_context = self.memory_context.build_memory_context().await?;
 

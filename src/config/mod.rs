@@ -262,6 +262,9 @@ pub struct ProvidersConfig {
     #[serde(default)]
     pub claude_cli: Option<ClaudeCliConfig>,
 
+    #[serde(default)]
+    pub gemini: Option<GeminiConfig>,
+
     /// Additional custom providers (e.g., openrouter, together, etc.)
     /// These are OpenAI-compatible and use the same schema as OpenAI.
     #[serde(default)]
@@ -301,6 +304,13 @@ pub struct ClaudeCliConfig {
 
     #[serde(default = "default_claude_cli_model")]
     pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiConfig {
+    pub api_key: String,
+    #[serde(default = "default_gemini_base_url")]
+    pub base_url: String,
 }
 
 /// Configuration for custom OpenAI-compatible providers (e.g., openrouter, together, etc.)
@@ -669,6 +679,9 @@ fn default_claude_cli_command() -> String {
 fn default_claude_cli_model() -> String {
     "opus".to_string()
 }
+fn default_gemini_base_url() -> String {
+    "https://generativelanguage.googleapis.com/v1beta".to_string()
+}
 fn default_true() -> bool {
     true
 }
@@ -970,6 +983,30 @@ impl Config {
                 "disk.min_free_percent must be between 0.0 and 100.0 (got {})",
                 self.disk.min_free_percent
             );
+        }
+
+        // Validate Audio Configuration if enabled (warnings only)
+        if self.server.audio.enabled {
+            match self.server.audio.backend.as_str() {
+                "local" => {
+                    if self.server.audio.local_command.is_none() {
+                        eprintln!("Warning: Audio backend 'local' enabled but no local_command configured; audio transcription will be disabled.");
+                    }
+                }
+                "openai" => {
+                    if self.providers.openai.is_none() {
+                        eprintln!("Warning: Audio backend 'openai' enabled but OpenAI provider not configured; audio transcription will be disabled.");
+                    }
+                }
+                "gemini" => {
+                    if self.providers.gemini.is_none() {
+                        eprintln!("Warning: Audio backend 'gemini' enabled but Gemini provider not configured; audio transcription will be disabled.");
+                    }
+                }
+                _ => {
+                    eprintln!("Warning: Unknown audio backend '{}'; audio transcription will be disabled.", self.server.audio.backend);
+                }
+            }
         }
 
         // Validate Model Inheritance Cycles (Simple check)

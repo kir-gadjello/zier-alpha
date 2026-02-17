@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod http;
 pub mod openai;
 pub mod telegram;

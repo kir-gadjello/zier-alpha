@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::sync::mpsc;
 use zier_alpha::config::{
     AgentConfig, Config, MemoryConfig, SandboxPolicy, ServerConfig, WorkdirStrategy,
 };
+use zier_alpha::ingress::approval::ApprovalCoordinator;
 use zier_alpha::ingress::controller::ingress_loop;
 use zier_alpha::ingress::{IngressBus, IngressMessage, TrustLevel};
 use zier_alpha::prompts::PromptRegistry;
@@ -72,6 +74,10 @@ async fn test_e2e_flow() {
     let config_clone = config.clone();
     let prompts_clone = prompts.clone();
 
+    // Create dummy approval coordinator
+    let (approval_ui_tx, _approval_ui_rx) = mpsc::channel(100);
+    let approval_coord = Arc::new(ApprovalCoordinator::new(approval_ui_tx));
+
     // We need to mock the LLM provider or ensure it works.
     // Since we can't easily mock LLMProvider inside Agent without DI (Agent::new is hardcoded),
     // we might have trouble unless we use a provider that works without networking or credentials.
@@ -97,6 +103,7 @@ async fn test_e2e_flow() {
             prompts_clone,
             script_service,
             jobs,
+            approval_coord,
         )
         .await;
     });

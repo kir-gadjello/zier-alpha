@@ -15,6 +15,44 @@ pub struct TelegramClient {
 pub struct TelegramUpdate {
     pub update_id: i64,
     pub message: Option<TelegramMessage>,
+    #[serde(rename = "callback_query")]
+    pub callback_query: Option<TelegramCallbackQuery>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TelegramDocument {
+    pub file_id: String,
+    #[serde(rename = "file_name")]
+    pub file_name: Option<String>,
+    #[serde(rename = "mime_type")]
+    pub mime_type: Option<String>,
+    #[serde(rename = "file_size")]
+    pub file_size: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TelegramAudio {
+    pub file_id: String,
+    #[serde(rename = "file_name")]
+    pub file_name: Option<String>,
+    #[serde(rename = "mime_type")]
+    pub mime_type: Option<String>,
+    #[serde(rename = "file_size")]
+    pub file_size: Option<i64>,
+    // duration in seconds, optional
+    #[serde(rename = "duration")]
+    pub duration: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TelegramVoice {
+    pub file_id: String,
+    #[serde(rename = "mime_type")]
+    pub mime_type: Option<String>,
+    #[serde(rename = "file_size")]
+    pub file_size: Option<i64>,
+    #[serde(rename = "duration")]
+    pub duration: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -23,11 +61,25 @@ pub struct TelegramMessage {
     pub from: Option<TelegramUser>,
     pub text: Option<String>,
     pub photo: Option<Vec<TelegramPhotoSize>>,
+    pub document: Option<TelegramDocument>,
+    pub audio: Option<TelegramAudio>,
+    pub voice: Option<TelegramVoice>,
+    pub caption: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TelegramUser {
     pub id: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TelegramCallbackQuery {
+    pub id: String,
+    pub from: TelegramUser,
+    #[serde(rename = "message")]
+    pub message: Option<TelegramMessage>,
+    #[serde(rename = "data")]
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -141,6 +193,85 @@ impl TelegramClient {
         } else {
             anyhow::bail!("Failed to get file path from Telegram: {:?}", json);
         }
+    }
+
+    /// Send a message with inline buttons for tool approval.
+    /// Returns the message_id of the sent message.
+    pub async fn send_approval_message(
+        &self,
+        chat_id: i64,
+        text: &str,
+        call_id: &str,
+    ) -> Result<i64> {
+        let url = format!("{}/bot{}/sendMessage", self.api_base, self.bot_token);
+        let reply_markup = json!({
+            "inline_keyboard": [
+                [
+                    { "text": "✅ Approve", "callback_data": format!("approve:{}", call_id) },
+                    { "text": "❌ Deny", "callback_data": format!("deny:{}", call_id) }
+                ]
+            ]
+        });
+        let body = json!({
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": reply_markup,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram sendMessage error: {}", err);
+        }
+        let json: serde_json::Value = resp.json().await?;
+        let message_id = json["result"]["message_id"]
+            .as_i64()
+            .ok_or_else(|| anyhow::anyhow!("No message_id in response"))?;
+        Ok(message_id)
+    }
+
+    /// Edit a message's text ( Telegram editMessageText )
+    pub async fn edit_message_text(&self, chat_id: i64, message_id: i64, text: &str) -> Result<()> {
+        let url = format!("{}/bot{}/editMessageText", self.api_base, self.bot_token);
+        let body = json!({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+        });
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram editMessageText error: {}", err);
+        }
+        Ok(())
+    }
+
+    /// Answer a callback query (to dismiss the loading indicator)
+    pub async fn answer_callback_query(
+        &self,
+        callback_query_id: &str,
+        text: Option<&str>,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/bot{}/answerCallbackQuery",
+            self.api_base, self.bot_token
+        );
+        let mut body = json!({
+            "callback_query_id": callback_query_id,
+        });
+        if let Some(t) = text {
+            body["text"] = json!(t);
+        }
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            let err = resp.text().await?;
+            anyhow::bail!("Telegram answerCallbackQuery error: {}", err);
+        }
+        Ok(())
+    }
+
+    /// Perform a GET request using the client with configured timeout.
+    pub async fn get(&self, url: &str) -> Result<reqwest::Response> {
+        self.client.get(url).send().await.map_err(Into::into)
     }
 }
 

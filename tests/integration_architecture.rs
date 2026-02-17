@@ -2,7 +2,9 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::sync::mpsc;
 use zier_alpha::config::{AgentConfig, Config, MemoryConfig, ServerConfig};
+use zier_alpha::ingress::approval::ApprovalCoordinator;
 use zier_alpha::ingress::controller::ingress_loop;
 use zier_alpha::ingress::{IngressBus, IngressMessage, TrustLevel};
 use zier_alpha::prompts::PromptRegistry;
@@ -54,6 +56,10 @@ async fn test_architecture_concurrency() {
     )
     .unwrap();
 
+    // Create dummy approval coordinator
+    let (approval_ui_tx, _approval_ui_rx) = mpsc::channel(100);
+    let approval_coord = Arc::new(ApprovalCoordinator::new(approval_ui_tx));
+
     tokio::spawn(async move {
         ingress_loop(
             receiver,
@@ -62,6 +68,7 @@ async fn test_architecture_concurrency() {
             prompts_clone,
             script_service,
             vec![],
+            approval_coord,
         )
         .await;
     });

@@ -62,7 +62,7 @@
 
 ---
 
-### ⏳ Task 2.2: Integrate Debounce into `ingress_loop`
+### ✅ Task 2.2: Integrate Debounce into `ingress_loop`
 
 **File:** `src/ingress/controller.rs`  
 **Scope:**
@@ -75,7 +75,7 @@
 
 ---
 
-### ⏳ Task 2.3: Write integration test for debounce
+### ✅ Task 2.3: Write integration test for debounce
 
 **File:** `tests/telegram_debounce.rs`  
 **Scope:**
@@ -89,7 +89,7 @@
 
 ## Phase 3: File Attachment Support
 
-### ⏳ Task 3.1: Extend Telegram client structs
+### ✅ Task 3.1: Extend Telegram client structs
 
 **File:** `src/ingress/telegram_client.rs`  
 **Scope:**
@@ -114,7 +114,7 @@
 
 ---
 
-### ⏳ Task 3.2: Implement download and XML injection in polling service
+### ✅ Task 3.2: Implement download and XML injection in polling service
 
 **File:** `src/server/telegram_polling.rs`  
 **Scope:**
@@ -195,7 +195,7 @@
 
 ## Phase 5: Tool Approval via Telegram Buttons
 
-### ⏳ Task 5.1: Implement `ApprovalCoordinator`
+### ✅ Task 5.1: Implement `ApprovalCoordinator`
 
 **File:** (new) `src/ingress/approval.rs`  
 **Scope:**
@@ -365,7 +365,7 @@
 
 ## Phase 6: System Prompt Generator
 
-### ⏳ Task 6.1: Create owned context struct
+### ✅ Task 6.1: Create owned context struct
 
 **File:** `src/agent/system_prompt.rs`  
 **Scope:**
@@ -375,7 +375,7 @@
 
 ---
 
-### ⏳ Task 6.2: Extend `ScriptService` with generator support
+### ✅ Task 6.2: Extend `ScriptService` with generator support
 
 **File:** `src/scripting/service.rs`  
 **Scope:**
@@ -390,7 +390,7 @@
 
 ---
 
-### ⏳ Task 6.3: Modify `Agent::new_session` to use generator
+### ✅ Task 6.3: Modify `Agent::new_session` to use generator
 
 **File:** `src/agent/mod.rs`  
 **Scope:**
@@ -459,7 +459,7 @@
 
 ---
 
-### ⏳ Task 7.5: Write system prompt generator test
+### ✅ Task 7.5: Write system prompt generator test
 
 **File:** `tests/system_prompt_generator.rs`  
 **Scope:**

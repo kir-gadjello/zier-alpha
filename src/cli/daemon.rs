@@ -6,11 +6,13 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use daemonize::Daemonize;
 
+use tokio::sync::mpsc;
 use zier_alpha::agent::ScriptTool;
 use zier_alpha::concurrency::TurnGate;
 use zier_alpha::config::Config;
 use zier_alpha::config::TelegramMode;
 use zier_alpha::heartbeat::HeartbeatRunner;
+use zier_alpha::ingress::approval::ApprovalCoordinator;
 use zier_alpha::ingress::controller::ingress_loop;
 use zier_alpha::ingress::IngressBus;
 use zier_alpha::memory::MemoryManager;
@@ -237,12 +239,17 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
     }
     let prompt_registry = std::sync::Arc::new(prompt_registry);
 
+    // Create channel for approval UI requests from coordinator to Telegram service.
+    let (approval_ui_tx, approval_ui_rx) = mpsc::channel(100);
+    let approval_coord = std::sync::Arc::new(ApprovalCoordinator::new(approval_ui_tx));
+
     // VIZIER: Start Ingress Consumer Loop
     let bus_receiver = bus.receiver();
     let config_clone = config.clone();
     let agent_id_clone = agent_id.to_string();
     let prompts_clone = prompt_registry.clone();
     let script_service_clone = script_service.clone();
+    let approval_coord_for_ingress = approval_coord.clone();
 
     tokio::spawn(async move {
         ingress_loop(
@@ -252,6 +259,7 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
             prompts_clone,
             script_service_clone,
             scheduler_jobs,
+            approval_coord_for_ingress,
         )
         .await;
     });
@@ -259,7 +267,13 @@ async fn run_daemon_services(config: &Config, agent_id: &str) -> Result<()> {
 
     // Start Telegram polling if enabled
     if config.server.enabled && config.server.telegram_mode == TelegramMode::Polling {
-        if let Some(polling_service) = TelegramPollingService::new(config.clone(), bus.clone()) {
+        if let Some(polling_service) = TelegramPollingService::new(
+            config.clone(),
+            bus.clone(),
+            project_dir.clone(),
+            approval_coord.clone(),
+            approval_ui_rx,
+        ) {
             tokio::spawn(async move {
                 polling_service.run().await;
             });

@@ -4,6 +4,7 @@
 //! and special token handling (NO_REPLY, HEARTBEAT_OK).
 
 use crate::config::{WorkdirConfig, WorkdirStrategy};
+use serde::Serialize;
 use std::path::Path;
 
 /// Special tokens for silent replies
@@ -319,6 +320,23 @@ impl<'a> SystemPromptParams<'a> {
         self.status_lines = Some(status);
         self
     }
+}
+
+/// Context object for system prompt generator scripts.
+/// This is serialized to JSON and passed to the generator function.
+#[derive(Serialize)]
+pub struct SystemPromptContext {
+    pub workspace_dir: String,
+    pub project_dir: Option<String>,
+    pub model: String,
+    pub tool_names: Vec<String>,
+    pub hostname: Option<String>,
+    pub current_time: String,
+    pub timezone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skills_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_lines: Option<Vec<String>>,
 }
 
 /// Get a brief summary for each tool

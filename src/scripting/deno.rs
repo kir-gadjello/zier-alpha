@@ -4,9 +4,11 @@ use crate::config::{Config, SandboxPolicy, WorkdirStrategy};
 use crate::ingress::{IngressBus, IngressMessage, TrustLevel};
 use crate::scheduler::Scheduler;
 use crate::scripting::safety::{CommandSafety, SafetyPolicy};
+use anyhow::anyhow;
 use deno_core::error::AnyError;
 use deno_core::{op2, v8, JsRuntime, ModuleSpecifier, OpState, RuntimeOptions};
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1088,6 +1090,54 @@ impl DenoRuntime {
             Ok(s)
         } else {
             Ok(json.to_string())
+        }
+    }
+
+    pub async fn evaluate_generator(
+        &mut self,
+        func_name: &str,
+        args: serde_json::Value,
+    ) -> Result<String, AnyError> {
+        // Serialize args to JSON string for embedding in JS
+        let args_json = serde_json::to_string(&args)?;
+        // Escape for single-quoted JS string
+        let escaped = args_json.replace("\\", "\\\\").replace("'", "\\'");
+        // Build JS code to call globalThis[funcName] with args, handling promises
+        let code = format!("(function() {{ const args = JSON.parse('{}'); const result = globalThis[\"{}\"](args); return result instanceof Promise ? result : Promise.resolve(result); }})()", escaped, func_name);
+        // Execute the code
+        let promise_global = self.runtime.execute_script("<generator_eval>", code)?;
+        // Poll for result (same as execute_tool)
+        let result_global = loop {
+            let state = {
+                let scope = &mut self.runtime.handle_scope();
+                let promise_local = v8::Local::new(scope, &promise_global);
+                let promise = v8::Local::<v8::Promise>::try_from(promise_local)?;
+                match promise.state() {
+                    v8::PromiseState::Pending => None,
+                    v8::PromiseState::Fulfilled => {
+                        let value = promise.result(scope);
+                        Some(Ok(v8::Global::new(scope, value)))
+                    }
+                    v8::PromiseState::Rejected => {
+                        let exception = promise.result(scope);
+                        let msg = exception.to_rust_string_lossy(scope);
+                        Some(Err(anyhow::anyhow!("Promise rejected: {}", msg)))
+                    }
+                }
+            };
+            match state {
+                Some(Ok(global)) => break global,
+                Some(Err(e)) => return Err(e.into()),
+                None => self.runtime.run_event_loop(Default::default()).await?,
+            }
+        };
+        // Convert result to String
+        let scope = &mut self.runtime.handle_scope();
+        let value = v8::Local::new(scope, result_global);
+        let json = deno_core::serde_v8::from_v8::<serde_json::Value>(scope, value)?;
+        match json {
+            serde_json::Value::String(s) => Ok(s),
+            other => Ok(other.to_string()),
         }
     }
 

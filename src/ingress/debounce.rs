@@ -2,7 +2,7 @@ use super::types::IngressMessage;
 use crate::config::IngressDebounceConfig;
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::time::{Instant, Interval};
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct DebounceSession {
@@ -28,18 +28,14 @@ impl DebounceSession {
 pub struct DebounceManager {
     sessions: HashMap<String, DebounceSession>,
     config: IngressDebounceConfig,
-    ticker: Interval,
 }
 
 impl DebounceManager {
     /// Create a new DebounceManager with the given configuration.
-    /// The ticker runs at approximately 500ms intervals to check for ready sessions.
     pub fn new(config: IngressDebounceConfig) -> Self {
-        let ticker = tokio::time::interval(Duration::from_millis(500));
         Self {
             sessions: HashMap::new(),
             config,
-            ticker,
         }
     }
 
@@ -48,7 +44,10 @@ impl DebounceManager {
     /// the session is immediately marked as ready for flushing.
     pub fn ingest(&mut self, msg: IngressMessage) {
         let source = msg.source.clone();
-        let session = self.sessions.entry(source).or_insert_with(DebounceSession::new);
+        let session = self
+            .sessions
+            .entry(source)
+            .or_insert_with(DebounceSession::new);
         session.buffer.push(msg);
         session.last_update = Instant::now();
 
@@ -96,14 +95,6 @@ impl DebounceManager {
             }
         }
         all
-    }
-
-    /// Advances the internal ticker and returns any messages that are ready to be flushed.
-    /// This should be called in a loop from a background task.
-    pub async fn tick(&mut self) -> Vec<IngressMessage> {
-        self.ticker.tick().await;
-        let now = Instant::now();
-        self.flush_ready(now)
     }
 }
 
@@ -168,7 +159,11 @@ mod tests {
             max_debounce_chars: 100_000,
         };
         let mut manager = DebounceManager::new(config);
-        let msg = IngressMessage::new("source1".to_string(), "hello".to_string(), TrustLevel::OwnerCommand);
+        let msg = IngressMessage::new(
+            "source1".to_string(),
+            "hello".to_string(),
+            TrustLevel::OwnerCommand,
+        );
         manager.ingest(msg);
         // Not enough time passed; flush_ready should return empty
         let now = Instant::now();
@@ -189,9 +184,21 @@ mod tests {
         };
         let mut manager = DebounceManager::new(config);
         // Ingest three messages quickly
-        manager.ingest(IngressMessage::new("src".to_string(), "first".to_string(), TrustLevel::OwnerCommand));
-        manager.ingest(IngressMessage::new("src".to_string(), "second".to_string(), TrustLevel::OwnerCommand));
-        manager.ingest(IngressMessage::new("src".to_string(), "third".to_string(), TrustLevel::OwnerCommand));
+        manager.ingest(IngressMessage::new(
+            "src".to_string(),
+            "first".to_string(),
+            TrustLevel::OwnerCommand,
+        ));
+        manager.ingest(IngressMessage::new(
+            "src".to_string(),
+            "second".to_string(),
+            TrustLevel::OwnerCommand,
+        ));
+        manager.ingest(IngressMessage::new(
+            "src".to_string(),
+            "third".to_string(),
+            TrustLevel::OwnerCommand,
+        ));
 
         // Still within debounce period
         let now = Instant::now();
@@ -215,14 +222,26 @@ mod tests {
             max_debounce_chars: 100_000,
         };
         let mut manager = DebounceManager::new(config);
-        manager.ingest(IngressMessage::new("src".to_string(), "a".to_string(), TrustLevel::OwnerCommand));
-        manager.ingest(IngressMessage::new("src".to_string(), "b".to_string(), TrustLevel::OwnerCommand));
+        manager.ingest(IngressMessage::new(
+            "src".to_string(),
+            "a".to_string(),
+            TrustLevel::OwnerCommand,
+        ));
+        manager.ingest(IngressMessage::new(
+            "src".to_string(),
+            "b".to_string(),
+            TrustLevel::OwnerCommand,
+        ));
         // At this, buffer len = 2, not >2 yet.
         let now = Instant::now();
         let ready = manager.flush_ready(now);
         assert_eq!(ready.len(), 0);
         // Third message should trigger limit exceed
-        manager.ingest(IngressMessage::new("src".to_string(), "c".to_string(), TrustLevel::OwnerCommand));
+        manager.ingest(IngressMessage::new(
+            "src".to_string(),
+            "c".to_string(),
+            TrustLevel::OwnerCommand,
+        ));
         // Now buffer has 3 > limit 2, so session should be marked ready immediately
         let ready = manager.flush_ready(Instant::now());
         // Since we marked last_update in past, flush_ready should flush it now
