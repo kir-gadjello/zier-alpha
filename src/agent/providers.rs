@@ -2098,13 +2098,13 @@ impl LLMProvider for MockProvider {
 
         // Debug: print last user message content for tracing
         if last_msg.role == Role::User {
-            eprintln!("[MockProvider] last user content: {}", last_msg.content);
+            tracing::debug!("[MockProvider] last user content: {}", last_msg.content);
         }
 
         // If last message is tool result with Error, return it.
         if last_msg.role == Role::Tool {
-            println!(
-                "DEBUG: MockProvider saw tool output: '{}'",
+            tracing::debug!(
+                "[MockProvider] saw tool output: '{}'",
                 last_msg.content
             );
             // Test helper: if the tool call was for read_file, echo its content directly (even if error)
@@ -2113,7 +2113,7 @@ impl LLMProvider for MockProvider {
                     if assistant_msg.role == Role::Assistant {
                         if let Some(tool_calls) = &assistant_msg.tool_calls {
                             if let Some(tool_call) = tool_calls.last() {
-                                println!("DEBUG: tool_call.name = {}", tool_call.name);
+                                tracing::debug!("[MockProvider] tool_call.name = {}", tool_call.name);
                                 if tool_call.name == "read_file" {
                                     return Ok(LLMResponse::text(last_msg.content.clone()));
                                 }
@@ -2261,16 +2261,16 @@ impl LLMProvider for MockProvider {
             .next_back()
             .and_then(|m| m.content.strip_prefix("READ_FILE:"))
         {
-            eprintln!("[MockProvider] READ_FILE prefix: {}", prefix);
+            tracing::debug!("[MockProvider] READ_FILE prefix: {}", prefix);
             if let Ok(args) = serde_json::from_str::<Value>(prefix) {
-                eprintln!("[MockProvider] READ_FILE parsed ok, args: {}", args);
+                tracing::debug!("[MockProvider] READ_FILE parsed ok, args: {}", args);
                 return Ok(LLMResponse::tool_calls(vec![ToolCall {
                     id: "test_call".to_string(),
                     name: "read_file".to_string(),
                     arguments: args.to_string(),
                 }]));
             } else {
-                eprintln!("[MockProvider] READ_FILE JSON parse error");
+                tracing::debug!("[MockProvider] READ_FILE JSON parse error");
             }
         }
 

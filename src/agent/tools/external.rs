@@ -1,5 +1,6 @@
 use crate::agent::providers::ToolSchema;
-use crate::agent::tools::Tool;
+use crate::agent::tools::{resolve_path, Tool};
+use crate::config::{SandboxPolicy, WorkdirStrategy};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -16,9 +17,14 @@ pub struct ExternalTool {
     args: Vec<String>,
     working_dir: Option<PathBuf>,
     sandbox: bool,
+    policy: Option<SandboxPolicy>,
+    path_args: Vec<String>,
+    workspace: Option<PathBuf>,
+    strategy: Option<WorkdirStrategy>,
 }
 
 impl ExternalTool {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         description: String,
@@ -26,6 +32,10 @@ impl ExternalTool {
         args: Vec<String>,
         working_dir: Option<PathBuf>,
         sandbox: bool,
+        policy: Option<SandboxPolicy>,
+        path_args: Vec<String>,
+        workspace: Option<PathBuf>,
+        strategy: Option<WorkdirStrategy>,
     ) -> Self {
         Self {
             name,
@@ -34,12 +44,19 @@ impl ExternalTool {
             args,
             working_dir,
             sandbox,
+            policy,
+            path_args,
+            workspace,
+            strategy,
         }
     }
 
     async fn run_sandboxed(&self, extra_args: &[String]) -> Result<String> {
-        // Use shared runner for sandboxing
-        // We need to construct full args list
+        let policy = self
+            .policy
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Sandbox policy required for sandboxed execution"))?;
+
         let mut full_args = self.args.clone();
         full_args.extend_from_slice(extra_args);
 
@@ -58,6 +75,7 @@ impl ExternalTool {
             &full_args,
             &cwd,
             None,
+            policy,
         )
         .await?;
 
@@ -78,6 +96,7 @@ impl ExternalTool {
         let mut cmd = Command::new(&self.command);
         cmd.args(&self.args);
         cmd.args(extra_args);
+        cmd.kill_on_drop(true);
 
         if let Some(dir) = &self.working_dir {
             cmd.current_dir(dir);
@@ -117,25 +136,44 @@ impl Tool for ExternalTool {
     }
 
     fn schema(&self) -> ToolSchema {
+        let mut properties = serde_json::Map::new();
+
+        // Always include 'args' for backward compatibility and general usage
+        properties.insert(
+            "args".to_string(),
+            json!({
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Additional arguments to append to the command"
+            }),
+        );
+
+        // Add path_args
+        for arg_name in &self.path_args {
+            properties.insert(
+                arg_name.clone(),
+                json!({
+                    "type": "string",
+                    "description": format!("Path argument: {}", arg_name)
+                }),
+            );
+        }
+
         ToolSchema {
             name: self.name.clone(),
             description: self.description.clone(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "args": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Additional arguments to append to the command"
-                    }
-                }
-            }),
+            parameters: Value::Object(serde_json::Map::from_iter(vec![
+                ("type".to_string(), Value::String("object".to_string())),
+                ("properties".to_string(), Value::Object(properties)),
+            ])),
         }
     }
 
     async fn execute(&self, arguments: &str) -> Result<String> {
         let args_val: Value = serde_json::from_str(arguments)?;
-        let extra_args = args_val
+
+        // 1. Collect standard 'args'
+        let mut extra_args = args_val
             .get("args")
             .and_then(|v| v.as_array())
             .map(|arr| {
@@ -144,6 +182,29 @@ impl Tool for ExternalTool {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+
+        // 2. Collect and resolve 'path_args'
+        for arg_name in &self.path_args {
+            if let Some(val) = args_val.get(arg_name) {
+                if let Some(path_str) = val.as_str() {
+                    // Resolve path
+                    let resolved = if let (Some(ws), Some(strategy), Some(pd)) = (&self.workspace, &self.strategy, &self.working_dir) {
+                        resolve_path(path_str, ws, pd, strategy)
+                    } else {
+                        // Fallback if context missing
+                        PathBuf::from(path_str)
+                    };
+
+                    // Add resolved path to args.
+                    // Note: We just append the path string.
+                    // If the tool expects `--arg value`, the user should have configured `args` to include `--arg` or handle it.
+                    // But typically `path_args` might be positional or implicit.
+                    // To be safe and useful, we append it.
+                    // A more advanced implementation would allow templating in `self.args`.
+                    extra_args.push(resolved.to_string_lossy().to_string());
+                }
+            }
+        }
 
         if self.sandbox {
             self.run_sandboxed(&extra_args).await

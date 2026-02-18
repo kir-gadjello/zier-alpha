@@ -280,19 +280,38 @@ impl ScriptService {
         };
 
         if let Some(path) = extension_path {
-            let exts = self.extensions.read().await;
-            if let Some(handle) = exts.get(&path) {
+            let sender = {
+                let exts = self.extensions.read().await;
+                exts.get(&path).map(|h| h.sender.clone())
+            };
+
+            if let Some(sender) = sender {
                 let (tx, rx) = oneshot::channel();
-                handle
-                    .sender
+                if let Err(_e) = sender
                     .send(ScriptCommand::ExecuteTool {
                         name: name.to_string(),
                         args: args.to_string(),
                         resp: tx,
                     })
-                    .await?;
-                let result = rx.await??;
-                return Ok(result);
+                    .await
+                {
+                    self.remove_extension(&path).await;
+                    return Err(anyhow::anyhow!(
+                        "Extension crashed and was removed: {}",
+                        path
+                    ));
+                }
+
+                match rx.await {
+                    Ok(res) => return Ok(res?),
+                    Err(_) => {
+                        self.remove_extension(&path).await;
+                        return Err(anyhow::anyhow!(
+                            "Extension crashed during execution: {}",
+                            path
+                        ));
+                    }
+                }
             }
         }
 
@@ -418,5 +437,21 @@ impl ScriptService {
             Ok(Err(e)) => Err(anyhow::anyhow!("Generator evaluation error: {}", e)),
             Err(_) => Err(anyhow::anyhow!("Generator evaluation channel closed")),
         }
+    }
+
+    async fn remove_extension(&self, path: &str) {
+        // Remove from extensions map
+        {
+            let mut exts = self.extensions.write().await;
+            exts.remove(path);
+        }
+
+        // Remove from tool_map
+        {
+            let mut tool_map = self.tool_map.write().await;
+            tool_map.retain(|_, v| v != path);
+        }
+
+        tracing::info!("Removed dead extension: {}", path);
     }
 }

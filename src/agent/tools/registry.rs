@@ -45,6 +45,10 @@ impl ToolRegistry {
                 conf.args.clone(),
                 Some(project_dir.clone()),
                 conf.sandbox,
+                Some(config.sandbox.clone()),
+                conf.path_args.clone(),
+                Some(config.workspace_path()),
+                Some(config.workdir.strategy.clone()),
             );
             tools_map.insert(name.clone(), Arc::new(tool));
         }

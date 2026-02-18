@@ -45,7 +45,7 @@ pub struct AskArgs {
 pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
     // Debug: print received question in child mode
     if args.child {
-        eprintln!("[CHILD] received question: {}", args.question);
+        tracing::debug!("[CHILD] received question: {}", args.question);
     }
 
     let config = Config::load()?;
@@ -193,12 +193,12 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
 
     // Apply child tool restrictions if ZIER_CHILD_TOOLS is set (Hive inheritance)
     if let Ok(child_tools_json) = std::env::var("ZIER_CHILD_TOOLS") {
-        eprintln!("[CHILD DEBUG] ZIER_CHILD_TOOLS: {}", child_tools_json);
+        tracing::debug!("[CHILD] ZIER_CHILD_TOOLS: {}", child_tools_json);
         match serde_json::from_str::<Vec<String>>(&child_tools_json) {
             Ok(allowed_tools) => {
-                eprintln!("[CHILD DEBUG] allowed_tools: {:?}", allowed_tools);
+                tracing::debug!("[CHILD] allowed_tools: {:?}", allowed_tools);
                 let initial_tools: Vec<&str> = agent.tools().iter().map(|t| t.name()).collect();
-                eprintln!("[CHILD DEBUG] initial tools: {:?}", initial_tools);
+                tracing::debug!("[CHILD] initial tools: {:?}", initial_tools);
                 let mut filtered = Vec::new();
                 for tool in agent.tools() {
                     if allowed_tools.contains(&tool.name().to_string()) {
@@ -208,21 +208,20 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
                 let filtered_count = filtered.len();
                 agent.set_tools(filtered);
                 let final_tools: Vec<&str> = agent.tools().iter().map(|t| t.name()).collect();
-                eprintln!("[CHILD DEBUG] final tools: {:?}", final_tools);
+                tracing::debug!("[CHILD] final tools: {:?}", final_tools);
                 tracing::info!(
                     "Child tool filtering applied: {} tools remaining",
                     filtered_count
                 );
             }
             Err(e) => {
-                eprintln!("[CHILD DEBUG] Invalid ZIER_CHILD_TOOLS JSON: {}", e);
-                tracing::error!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);
+                tracing::error!("[CHILD] Invalid ZIER_CHILD_TOOLS JSON: {}", e);
                 // Fail hard to prevent security risks (unfiltered tools)
                 anyhow::bail!("Invalid ZIER_CHILD_TOOLS JSON: {}", e);
             }
         }
     } else {
-        eprintln!("[CHILD DEBUG] ZIER_CHILD_TOOLS not set");
+        tracing::debug!("[CHILD] ZIER_CHILD_TOOLS not set");
     }
 
     agent.new_session().await?;
@@ -261,7 +260,7 @@ pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
             "session_id": status.id,
             "status": "success",
             "content": response,
-            "artifacts": [], // TODO: capture artifacts
+            "artifacts": [],
             "usage": usage,
         });
 

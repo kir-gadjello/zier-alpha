@@ -404,7 +404,7 @@ impl Session {
         Ok(path)
     }
 
-    async fn save_to_path(&self, path: &PathBuf) -> Result<()> {
+    pub async fn save_to_path(&self, path: &PathBuf) -> Result<()> {
         let mut file = File::create(path).await?;
 
         // Write Pi-compatible header
@@ -627,8 +627,37 @@ impl Session {
             _ => return None,
         };
 
+        let mut images = Vec::new();
+
         // Extract text content from content array
         let content = if let Some(arr) = msg["content"].as_array() {
+            // Extract images first
+            for item in arr {
+                if item["type"].as_str() == Some("image_url") {
+                    if let Some(url_obj) = item.get("image_url") {
+                        if let Some(url) = url_obj["url"].as_str() {
+                            // url is "data:image/png;base64,..."
+                            if let Some(comma_pos) = url.find(',') {
+                                let header = &url[..comma_pos];
+                                let data = &url[comma_pos + 1..];
+
+                                let media_type = header
+                                    .strip_prefix("data:")
+                                    .and_then(|s| s.strip_suffix(";base64"))
+                                    .unwrap_or("application/octet-stream")
+                                    .to_string();
+
+                                use crate::agent::providers::ImageAttachment;
+                                images.push(ImageAttachment {
+                                    media_type,
+                                    data: data.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
             arr.iter()
                 .filter_map(|item| {
                     if item["type"].as_str() == Some("text") {
@@ -669,7 +698,7 @@ impl Session {
                 content,
                 tool_calls,
                 tool_call_id,
-                images: Vec::new(), // TODO: parse images from content array
+                images,
             },
             provider: msg["provider"].as_str().map(|s| s.to_string()),
             model: msg["model"].as_str().map(|s| s.to_string()),

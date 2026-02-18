@@ -197,7 +197,10 @@ impl DiskMonitor {
             loop {
                 interval.tick().await;
                 if let Some(monitor) = weak_monitor.upgrade() {
-                    monitor.check_disk_space();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        monitor.check_disk_space();
+                    })
+                    .await;
                 } else {
                     break; // Monitor dropped
                 }

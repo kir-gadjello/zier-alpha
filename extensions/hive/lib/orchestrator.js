@@ -150,6 +150,10 @@ export async function runAgent(agentName, task, contextMode, attachments) {
             console.log(`[Hive] CHILD STDERR:\n${result.stderr}`);
         }
 
+        if (result.pid) {
+            console.log(`[Hive] Subagent finished (PID: ${result.pid})`);
+        }
+
         if (result.code !== 0) {
             throw new Error(`Subagent failed with code ${result.code}: ${result.stderr}`);
         }
