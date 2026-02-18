@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
 use tracing::{debug, error};
 
 /// Trait abstracting Telegram client operations for testability.

@@ -3,7 +3,7 @@ use crate::config::{Config, SandboxPolicy, WorkdirStrategy};
 use crate::ingress::IngressBus;
 use crate::scheduler::Scheduler;
 use crate::scripting::deno::{DenoRuntime, DenoToolDefinition};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

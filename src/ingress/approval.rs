@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::{sleep_until, timeout_at, Instant};
-use uuid::Uuid;
 
 /// Decision returned by an approval request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,8 +26,6 @@ pub struct ApprovalUIRequest {
 struct PendingApproval {
     chat_id: i64,
     message_id: i64,
-    tool_name: String,
-    arguments: String,
     tx: oneshot::Sender<ApprovalDecision>,
     timeout_at: Instant,
 }
@@ -95,8 +92,6 @@ impl ApprovalCoordinator {
         let entry = PendingApproval {
             chat_id,
             message_id: msg_id,
-            tool_name: tool,
-            arguments: args,
             tx: tx_decision,
             timeout_at: deadline,
         };

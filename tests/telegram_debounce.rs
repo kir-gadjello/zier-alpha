@@ -84,3 +84,36 @@ async fn test_debounce_limit_integration() {
     let combined = &ready[0];
     assert_eq!(combined.payload, "a\n\nb\n\nc");
 }
+
+#[tokio::test]
+async fn test_debounce_preserves_trust() {
+    // Verify that the combined message inherits the trust level from the first message in the session.
+    let config = IngressDebounceConfig {
+        debounce_seconds: 2,
+        max_debounce_messages: 50,
+        max_debounce_chars: 100_000,
+    };
+    let mut manager = DebounceManager::new(config);
+    let source = "telegram:999".to_string();
+
+    // Ingest first message with TrustLevel::OwnerCommand
+    manager.ingest(IngressMessage::new(
+        source.clone(),
+        "first".to_string(),
+        TrustLevel::OwnerCommand,
+    ));
+    // Subsequent message with different trust (should be ignored, keep first)
+    manager.ingest(IngressMessage::new(
+        source.clone(),
+        "second".to_string(),
+        TrustLevel::UntrustedEvent,
+    ));
+
+    // Advance time to trigger flush
+    let future = Instant::now() + Duration::from_secs(3);
+    let ready = manager.flush_ready(future);
+    assert_eq!(ready.len(), 1);
+    let combined = &ready[0];
+    assert_eq!(combined.trust, TrustLevel::OwnerCommand);
+    assert_eq!(combined.payload, "first\n\nsecond");
+}

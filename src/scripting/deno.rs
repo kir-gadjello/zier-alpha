@@ -4,7 +4,6 @@ use crate::config::{Config, SandboxPolicy, WorkdirStrategy};
 use crate::ingress::{IngressBus, IngressMessage, TrustLevel};
 use crate::scheduler::Scheduler;
 use crate::scripting::safety::{CommandSafety, SafetyPolicy};
-use anyhow::anyhow;
 use deno_core::error::AnyError;
 use deno_core::{op2, v8, JsRuntime, ModuleSpecifier, OpState, RuntimeOptions};
 use serde::{Deserialize, Serialize};

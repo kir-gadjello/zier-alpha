@@ -210,3 +210,209 @@ async fn test_attachment_download_and_injection() {
         received.payload
     );
 }
+
+#[tokio::test]
+async fn test_attachment_oversized_rejected() {
+    // Setup temp directories
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().to_path_buf();
+    let workspace_dir = project_dir.join("workspace");
+    fs::create_dir_all(&workspace_dir).await.unwrap();
+
+    // Config with very small size limit (100 bytes)
+    let mut config = Config::default();
+    config.memory.workspace = workspace_dir.to_string_lossy().into_owned();
+    config.server.attachments.enabled = true;
+    config.server.attachments.max_file_size_bytes = 100; // 100 bytes limit
+    config.server.attachments.base_dir = "attachments".to_string();
+    config.server.telegram_bot_token = Some("test_token".to_string());
+    config.server.owner_telegram_id = Some(123456789_i64);
+    config.agent.default_model = "mock/test".to_string();
+
+    let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), "test-agent")
+        .expect("Failed to create memory manager");
+    let agent_config = AgentConfig {
+        model: "mock/test".to_string(),
+        context_window: 128000,
+        reserve_tokens: 8000,
+    };
+    let _agent = Arc::new(tokio::sync::Mutex::new(
+        Agent::new_with_project(
+            agent_config,
+            &config,
+            memory,
+            ContextStrategy::Stateless,
+            project_dir.clone(),
+            "test-agent",
+        )
+        .await
+        .expect("Failed to create agent"),
+    ));
+
+    let bus = Arc::new(IngressBus::new(100));
+
+    // File content 200 bytes > limit
+    let file_content = vec![b'A'; 200];
+    let mock_client = Arc::new(MockTelegramClient::new(file_content));
+
+    let (approval_ui_tx, _approval_ui_rx) = tokio::sync::mpsc::channel(100);
+    let approval_coord = Arc::new(ApprovalCoordinator::new(approval_ui_tx));
+
+    let service = TelegramPollingService::new(
+        config.clone(),
+        bus.clone(),
+        project_dir.clone(),
+        approval_coord,
+        tokio::sync::mpsc::channel(1).1,
+        Some(mock_client),
+    )
+    .expect("Failed to create service");
+
+    // Create fake message with document whose size exceeds limit
+    let fake_message = TelegramMsg {
+        message_id: 300,
+        from: Some(zier_alpha::ingress::TelegramUser { id: 123456789_i64 }),
+        text: None,
+        photo: None,
+        document: Some(zier_alpha::ingress::TelegramDocument {
+            file_id: "doc_big".to_string(),
+            file_name: Some("big_file.txt".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            file_size: Some(200), // exceeds 100 limit
+        }),
+        audio: None,
+        voice: None,
+        caption: Some("This file is too large".to_string()),
+    };
+
+    // Process the message
+    service
+        .process_message_for_test(fake_message)
+        .await
+        .unwrap();
+
+    // Verify file was NOT saved
+    let expected_path = project_dir
+        .join("attachments")
+        .join("telegram")
+        .join("300_123456789_big_file.txt");
+    assert!(
+        !expected_path.exists(),
+        "Oversized file should not have been saved at {}",
+        expected_path.display()
+    );
+
+    // Verify no message was pushed to the bus
+    let receiver_arc = bus.receiver();
+    let mut receiver = receiver_arc.lock().await;
+    // Try to receive with short timeout; should be none
+    let received =
+        tokio::time::timeout(tokio::time::Duration::from_millis(100), receiver.recv()).await;
+    match received {
+        Ok(Some(_)) => panic!("Expected no message on bus for oversized attachment"),
+        Ok(None) => {} // Channel closed, ok
+        Err(_) => {}   // Timeout, also fine (means no message)
+    }
+}
+
+#[tokio::test]
+async fn test_attachment_exact_size_limit() {
+    // Test that a file exactly at the size limit is accepted
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().to_path_buf();
+    let workspace_dir = project_dir.join("workspace");
+    fs::create_dir_all(&workspace_dir).await.unwrap();
+
+    let mut config = Config::default();
+    config.memory.workspace = workspace_dir.to_string_lossy().into_owned();
+    config.server.attachments.enabled = true;
+    config.server.attachments.max_file_size_bytes = 100;
+    config.server.attachments.base_dir = "attachments".to_string();
+    config.server.telegram_bot_token = Some("test_token".to_string());
+    config.server.owner_telegram_id = Some(123456789_i64);
+    config.agent.default_model = "mock/test".to_string();
+
+    let memory = MemoryManager::new_with_full_config(&config.memory, Some(&config), "test-agent")
+        .expect("Failed to create memory manager");
+    let agent_config = AgentConfig {
+        model: "mock/test".to_string(),
+        context_window: 128000,
+        reserve_tokens: 8000,
+    };
+    let _agent = Arc::new(tokio::sync::Mutex::new(
+        Agent::new_with_project(
+            agent_config,
+            &config,
+            memory,
+            ContextStrategy::Stateless,
+            project_dir.clone(),
+            "test-agent",
+        )
+        .await
+        .expect("Failed to create agent"),
+    ));
+
+    let bus = Arc::new(IngressBus::new(100));
+    // Exactly 100 bytes
+    let file_content = vec![b'B'; 100];
+    let mock_client = Arc::new(MockTelegramClient::new(file_content));
+
+    let (approval_ui_tx, _approval_ui_rx) = tokio::sync::mpsc::channel(100);
+    let approval_coord = Arc::new(ApprovalCoordinator::new(approval_ui_tx));
+
+    let service = TelegramPollingService::new(
+        config.clone(),
+        bus.clone(),
+        project_dir.clone(),
+        approval_coord,
+        tokio::sync::mpsc::channel(1).1,
+        Some(mock_client),
+    )
+    .expect("Failed to create service");
+
+    let fake_message = TelegramMsg {
+        message_id: 301,
+        from: Some(zier_alpha::ingress::TelegramUser { id: 123456789_i64 }),
+        text: None,
+        photo: None,
+        document: Some(zier_alpha::ingress::TelegramDocument {
+            file_id: "doc_exact".to_string(),
+            file_name: Some("exact.txt".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            file_size: Some(100), // exactly at limit
+        }),
+        audio: None,
+        voice: None,
+        caption: None,
+    };
+
+    service
+        .process_message_for_test(fake_message)
+        .await
+        .unwrap();
+
+    // File should be saved
+    let expected_path = project_dir
+        .join("attachments")
+        .join("telegram")
+        .join("301_123456789_exact.txt");
+    assert!(
+        expected_path.exists(),
+        "File exactly at limit should be saved at {}",
+        expected_path.display()
+    );
+
+    // And bus message should contain XML
+    let receiver_arc = bus.receiver();
+    let mut receiver = receiver_arc.lock().await;
+    let received = tokio::time::timeout(tokio::time::Duration::from_secs(1), receiver.recv())
+        .await
+        .unwrap()
+        .expect("No message received on bus");
+
+    let payload = &received.payload;
+    assert!(
+        payload.contains(r#"path="attachments/telegram/301_123456789_exact.txt""#),
+        "Payload missing XML for exact-size file"
+    );
+}

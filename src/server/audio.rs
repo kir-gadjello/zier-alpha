@@ -6,8 +6,13 @@
 /// - Gemini API
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use mime_guess;
+use serde_json;
+use std::io::Write;
 use std::path::Path;
+use tokio::fs;
 use tokio::process::Command as TokioCommand;
+use uuid::Uuid;
 
 #[async_trait]
 pub trait AudioTranscriber: Send + Sync {
@@ -124,19 +129,50 @@ impl GeminiTranscriber {
 #[async_trait]
 impl AudioTranscriber for GeminiTranscriber {
     async fn transcribe(&self, path: &Path) -> Result<String> {
-        // Use OpenAI-compatible multipart transcription endpoint.
-        // Assumes the configured base_url is OpenAI-compatible (e.g., an API proxy for Gemini).
-        let form = reqwest::multipart::Form::new()
-            .file("file", path)
-            .await
-            .context("Failed to attach file to multipart form")?
-            .text("model", self.model.clone());
+        // Read the audio file bytes
+        let file_bytes = fs::read(path).await.context("Failed to read audio file")?;
 
+        // Determine MIME type (simple fallback)
+        let mime = mime_guess::from_path(path)
+            .first_or_else(|| mime_guess::mime::APPLICATION_OCTET_STREAM)
+            .to_string();
+
+        // Build multipart/related body with two parts: config (JSON) and audio (raw bytes)
+        let boundary = format!("----{}", Uuid::new_v4().as_hyphenated());
+        let mut body = Vec::new();
+
+        // Part 1: config JSON
+        writeln!(body, "--{}", boundary)?;
+        writeln!(body, "Content-Type: application/json")?;
+        writeln!(body)?;
+        // Config can be empty or include languageCode, etc. We'll send empty config.
+        let config_json = serde_json::to_vec(&serde_json::json!({}))?;
+        body.extend_from_slice(&config_json);
+        writeln!(body)?;
+
+        // Part 2: audio data
+        writeln!(body, "--{}", boundary)?;
+        writeln!(body, "Content-Type: {}", mime)?;
+        writeln!(body)?;
+        body.extend_from_slice(&file_bytes);
+        writeln!(body)?;
+
+        // Closing boundary
+        writeln!(body, "--{}--", boundary)?;
+
+        // Construct endpoint URL: {base_url}/models/{model}:transcribe
+        let endpoint = format!("{}/models/{}:transcribe", self.base_url, self.model);
+
+        // Send request
         let response = self
             .client
-            .post(&format!("{}/audio/transcriptions", self.base_url))
+            .post(&endpoint)
+            .header(
+                "Content-Type",
+                format!("multipart/related; boundary={}", boundary),
+            )
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .multipart(form)
+            .body(body)
             .send()
             .await?;
 
@@ -146,12 +182,14 @@ impl AudioTranscriber for GeminiTranscriber {
             anyhow::bail!("Gemini transcription API error {}: {}", status, text);
         }
 
+        // Parse response: expects JSON with a "transcription" field containing the text.
         let json: serde_json::Value = response.json().await?;
         let text = json
-            .get("text")
+            .get("transcription")
+            .or_else(|| json.get("text")) // fallback to text
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .context("No 'text' field in Gemini response")?;
+            .context("No 'transcription' or 'text' field in Gemini response")?;
         Ok(text)
     }
 }

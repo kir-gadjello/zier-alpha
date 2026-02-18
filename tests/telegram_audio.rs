@@ -279,3 +279,114 @@ async fn test_audio_fallback_to_attachment_when_no_transcriber() {
         payload
     );
 }
+
+#[tokio::test]
+async fn test_audio_transcription_error_fallback_to_attachment() {
+    // Test that if transcription fails (e.g., API error), the system falls back to saving the audio as attachment.
+    let temp_dir = tempdir().unwrap();
+    let project_dir = temp_dir.path().to_path_buf();
+    let workspace_dir = project_dir.join("workspace");
+    fs::create_dir_all(&workspace_dir).await.unwrap();
+
+    let mut config = Config::default();
+    config.memory.workspace = workspace_dir.to_string_lossy().into_owned();
+    config.server.telegram_bot_token = Some("test_token".to_string());
+    config.server.owner_telegram_id = Some(123456789_i64);
+    config.agent.default_model = "mock/test".to_string();
+
+    // Enable audio with local command that will fail (non-zero exit)
+    config.server.audio.enabled = true;
+    config.server.audio.backend = "local".to_string();
+    config.server.audio.local_command = Some("false".to_string()); // command that fails
+
+    let memory =
+        MemoryManager::new_with_full_config(&config.memory, Some(&config), "test-agent").unwrap();
+    let agent_config = AgentConfig {
+        model: "mock/test".to_string(),
+        context_window: 128000,
+        reserve_tokens: 8000,
+    };
+    let _agent = Arc::new(tokio::sync::Mutex::new(
+        Agent::new_with_project(
+            agent_config,
+            &config,
+            memory,
+            ContextStrategy::Stateless,
+            project_dir.clone(),
+            "test-agent",
+        )
+        .await
+        .unwrap(),
+    ));
+
+    let bus = Arc::new(IngressBus::new(100));
+    // Mock client returns dummy audio bytes
+    let mock_client = Arc::new(MockTelegramClient::new(
+        b"fake audio data that fails".to_vec(),
+    ));
+
+    let (approval_ui_tx, _approval_ui_rx) = tokio::sync::mpsc::channel(100);
+    let approval_coord = Arc::new(ApprovalCoordinator::new(approval_ui_tx));
+
+    let service = TelegramPollingService::new(
+        config.clone(),
+        bus.clone(),
+        project_dir.clone(),
+        approval_coord,
+        tokio::sync::mpsc::channel(1).1,
+        Some(mock_client),
+    )
+    .unwrap();
+
+    let fake_message = TelegramMsg {
+        message_id: 202,
+        from: Some(zier_alpha::ingress::TelegramUser { id: 123456789_i64 }),
+        text: None,
+        photo: None,
+        document: None,
+        audio: None,
+        voice: Some(zier_alpha::ingress::TelegramVoice {
+            file_id: "voice202".to_string(),
+            mime_type: Some("audio/ogg".to_string()),
+            file_size: Some(1234),
+            duration: Some(5),
+        }),
+        caption: Some("Error fallback test".to_string()),
+    };
+
+    service
+        .process_message_for_test(fake_message)
+        .await
+        .unwrap();
+
+    // Because transcription fails, expect fallback to attachment: file saved and XML present.
+    let expected_path = project_dir
+        .join("attachments")
+        .join("telegram")
+        .join("202_123456789_file");
+    assert!(
+        expected_path.exists(),
+        "Fallback attachment file not found at {:?}",
+        expected_path
+    );
+
+    // Check bus message contains XML with path and caption
+    let receiver_arc = bus.receiver().clone();
+    let mut receiver = receiver_arc.lock().await;
+    let received = tokio::time::timeout(tokio::time::Duration::from_secs(1), receiver.recv())
+        .await
+        .unwrap()
+        .expect("No message on bus");
+
+    let payload = &received.payload;
+    assert!(
+        payload.contains("Error fallback test"),
+        "Caption missing in fallback: {}",
+        payload
+    );
+    assert!(
+        payload.contains(r#"path="attachments/telegram/202_123456789_file""#),
+        "XML path missing in fallback: {}",
+        payload
+    );
+}

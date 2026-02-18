@@ -2,12 +2,11 @@ use crate::agent::ImageAttachment;
 use crate::config::Config;
 use crate::ingress::{
     ApprovalCoordinator, ApprovalUIRequest, IngressBus, IngressMessage, RealTelegramClient,
-    TelegramApi, TelegramClient, TrustLevel,
+    TelegramApi, TrustLevel,
 };
 use crate::server::audio::AudioTranscriber;
 use anyhow;
 use base64::{engine::general_purpose, Engine as _};
-use serde_json::json;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -481,7 +480,6 @@ impl TelegramPollingService {
     }
 
     async fn handle_approval_ui_request(&self, req: ApprovalUIRequest) -> anyhow::Result<()> {
-        use crate::ingress::ApprovalDecision;
         // Build text
         let text = format!(
             "Tool `{}` requires approval:\nArguments: `{}`",
