@@ -130,13 +130,11 @@ upx --best --lzma -o target/release/zier-alpha-upx target/release/zier-alpha
 upx --best --force -o target/release/zier-alpha-upx target/release/zier-alpha
 # or
 upx --ultra-brute --lzma -o target/release/zier-alpha-upx target/release/zier-alpha
-
 # Check sizes
 ls -lh target/release/zier-alpha*
 ```
 
 **Note:** UPX may report "Packed 0 files" on some platforms (e.g., macOS ARM64) with the default LZMA method. The script `build_release_upx_packed.sh` automatically tries multiple strategies (`--best --lzma`, `--best --force`, `--best`, `--ultra-brute --lzma`) to maximize chances of compression. If all fail, it leaves the stripped binary (still optimized).
-
 ---
 
 ## One‑Step Packed Build
