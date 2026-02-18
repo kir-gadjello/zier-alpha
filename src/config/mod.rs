@@ -85,6 +85,9 @@ pub struct Config {
     /// Ingress debounce configuration (applies to all ingress sources)
     #[serde(default)]
     pub ingress: IngressDebounceConfig,
+
+    #[serde(default)]
+    pub sandbox: SandboxPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +249,8 @@ pub struct ExternalToolConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub sandbox: bool,
+    #[serde(default)]
+    pub path_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

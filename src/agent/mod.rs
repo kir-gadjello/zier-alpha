@@ -11,6 +11,7 @@ pub mod session_manager;
 pub mod session_store;
 pub mod skills;
 pub mod system_prompt;
+pub mod attachments;
 pub mod tool_executor;
 pub mod tools;
 
@@ -193,6 +194,10 @@ impl Agent {
                 conf.args.clone(),
                 Some(project_dir.clone()),
                 conf.sandbox,
+                Some(app_config.sandbox.clone()),
+                conf.path_args.clone(),
+                Some(app_config.workspace_path()),
+                Some(app_config.workdir.strategy.clone()),
             );
             tools.push(Arc::new(tool));
         }

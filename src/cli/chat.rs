@@ -10,6 +10,7 @@ use crate::cli::common::make_extension_policy;
 use serde_json;
 use std::sync::Arc;
 use zier_alpha::agent::{
+    attachments::{process_attach_command, Attachment},
     extract_tool_detail, get_last_session_id_for_agent, get_skills_summary,
     list_sessions_for_agent, load_skills, parse_skill_command, search_sessions_for_agent, Agent,
     AgentConfig, ContextStrategy, ImageAttachment, ScriptTool, Skill,
@@ -341,11 +342,6 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
     let mut rl = DefaultEditor::new()?;
     let mut stdout = io::stdout();
 
-    // Track pending file attachments (text and images)
-    enum Attachment {
-        Text { name: String, content: String },
-        Image { name: String, data: ImageAttachment },
-    }
     let mut pending_attachments: Vec<Attachment> = Vec::new();
 
     loop {
@@ -378,74 +374,12 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
         if input.starts_with('/') {
             // Special handling for /attach - adds to pending attachments
             if input.starts_with("/attach") {
-                let parts: Vec<&str> = input.split_whitespace().collect();
-                if parts.len() < 2 {
-                    eprintln!("Usage: /attach <file_path>");
-                    continue;
-                }
-                let file_path = parts[1..].join(" ");
-                let expanded = shellexpand::tilde(&file_path).to_string();
-                let path = std::path::Path::new(&expanded);
-                let filename = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(&file_path)
-                    .to_string();
-
-                // Check if it's an image file
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase());
-
-                let is_image = matches!(
-                    ext.as_deref(),
-                    Some("png") | Some("jpg") | Some("jpeg") | Some("gif") | Some("webp")
-                );
-
-                if is_image {
-                    // Read as binary and encode as base64
-                    match tokio::fs::read(&expanded).await {
-                        Ok(bytes) => {
-                            use base64::{engine::general_purpose::STANDARD, Engine as _};
-                            let data = STANDARD.encode(&bytes);
-                            let media_type = match ext.as_deref() {
-                                Some("png") => "image/png",
-                                Some("jpg") | Some("jpeg") => "image/jpeg",
-                                Some("gif") => "image/gif",
-                                Some("webp") => "image/webp",
-                                _ => "application/octet-stream",
-                            }
-                            .to_string();
-
-                            let size = bytes.len();
-                            pending_attachments.push(Attachment::Image {
-                                name: filename.clone(),
-                                data: ImageAttachment { data, media_type },
-                            });
-                            println!("Attached image: {} ({} bytes)", filename, size);
-                            println!("Type your message to send with attachment(s), or /attachments to list.\n");
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to read image file: {}", e);
-                        }
+                match process_attach_command(input, &config, &project_dir, &mut pending_attachments).await {
+                    Ok(msg) => {
+                        println!("{}", msg);
+                        println!("Type your message to send with attachment(s), or /attachments to list.\n");
                     }
-                } else {
-                    // Read as text
-                    match tokio::fs::read_to_string(&expanded).await {
-                        Ok(content) => {
-                            let size = content.len();
-                            pending_attachments.push(Attachment::Text {
-                                name: filename.clone(),
-                                content,
-                            });
-                            println!("Attached: {} ({} bytes)", filename, size);
-                            println!("Type your message to send with attachment(s), or /attachments to list.\n");
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to read file: {}", e);
-                        }
-                    }
+                    Err(e) => eprintln!("{}", e),
                 }
                 continue;
             }
@@ -469,6 +403,9 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                                     data.media_type,
                                     data.data.len()
                                 );
+                            }
+                            Attachment::FileRef { name, path } => {
+                                println!("  {}. [file] {} (path: {})", i + 1, name, path);
                             }
                         }
                     }
@@ -530,6 +467,15 @@ pub async fn run(args: ChatArgs, agent_id: &str) -> Result<()> {
                     }
                     Attachment::Image { data, .. } => {
                         images.push(data);
+                    }
+                    Attachment::FileRef { name, path } => {
+                        let xml = format!(
+                            "<context>\n  <attached-file filename=\"{}\" path=\"{}\"/>\n</context>",
+                            name, path
+                        );
+                        message.push_str("\n\n");
+                        message.push_str(&xml);
+                        message.push_str("\n");
                     }
                 }
             }

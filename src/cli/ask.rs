@@ -45,7 +45,7 @@ pub struct AskArgs {
 pub async fn run(args: AskArgs, agent_id: &str) -> Result<()> {
     // Debug: print received question in child mode
     if args.child {
-        eprintln!("[CHILD] received question: {}", args.question);
+        tracing::debug!("[CHILD] received question: {}", args.question);
     }
 
     let config = Config::load()?;

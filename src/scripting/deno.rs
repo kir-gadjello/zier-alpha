@@ -354,11 +354,11 @@ pub async fn op_zier_exec(
     #[serde] cmd: Vec<String>,
     #[serde] opts: ExecOpts,
 ) -> Result<ExecResult, std::io::Error> {
-    eprintln!(
+    tracing::debug!(
         "[DEBUG op_zier_exec] cmd: {:?}, opts.env: {:?}",
         cmd, opts.env
     );
-    let (policy, project_dir) = {
+    let (safety_result, project_dir, sandbox_policy) = {
         let state = state.borrow();
         let sandbox = state.borrow::<SandboxState>();
         if !sandbox.capabilities.exec {
@@ -375,10 +375,11 @@ pub async fn op_zier_exec(
                     std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
                 })?,
             sandbox.project_dir.clone(),
+            sandbox.policy.clone(),
         )
     };
 
-    match policy {
+    match safety_result {
         CommandSafety::Allowed => {}
         CommandSafety::SoftBlock(msg) => {
             tracing::warn!("Soft block triggered: {}", msg);
@@ -438,27 +439,17 @@ pub async fn op_zier_exec(
         merged_env.extend(overrides.clone());
     }
 
-    let enable_sandbox = {
-        let state = state.borrow();
-        let sandbox = state.borrow::<SandboxState>();
-        sandbox.policy.enable_os_sandbox
-    };
-    let output = if enable_sandbox {
-        use crate::agent::tools::runner::run_sandboxed_command;
-        // Pass merged environment (clone for sandboxed path)
-        run_sandboxed_command(&cmd[0], &args, &target_cwd, Some(merged_env.clone()))
-            .await
-            .map_err(|e| std::io::Error::other(e.to_string()))?
-    } else {
-        // Run directly (unsafe/legacy mode)
-        let mut command = tokio::process::Command::new(&cmd[0]);
-        command.args(&args);
-        command.current_dir(&target_cwd);
-        command.envs(&merged_env);
-
-        // op_zier_exec assumes captured output.
-        command.output().await?
-    };
+    use crate::agent::tools::runner::run_sandboxed_command;
+    // Always use run_sandboxed_command (it handles policy check internally)
+    let output = run_sandboxed_command(
+        &cmd[0],
+        &args,
+        &target_cwd,
+        Some(merged_env.clone()),
+        &sandbox_policy,
+    )
+    .await
+    .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     Ok(ExecResult {
         code: output.status.code().unwrap_or(-1),
@@ -692,7 +683,7 @@ pub fn op_zier_get_parent_context(state: &mut OpState) -> Option<serde_json::Val
 pub fn op_pi_config_get(state: &mut OpState, #[string] key: String) -> Option<serde_json::Value> {
     let sandbox = state.borrow::<SandboxState>();
     let config_opt = sandbox.config.as_ref();
-    eprintln!(
+    tracing::debug!(
         "[DEBUG op_pi_config_get] key={}, config_is_some={:?}",
         key,
         config_opt.is_some()

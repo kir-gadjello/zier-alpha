@@ -59,56 +59,64 @@ impl ApprovalCoordinator {
         args: String,
         timeout: std::time::Duration,
     ) -> Option<ApprovalDecision> {
-        // Channel to receive the UI message_id after it's sent.
+        let (tx_decision, rx_decision) = oneshot::channel();
         let (tx_msg_id, rx_msg_id) = oneshot::channel();
+        let deadline = Instant::now() + timeout;
+
+        // Insert pending entry with placeholder immediately to avoid race
+        {
+            let mut map = self.pending.lock().await;
+            map.insert(call_id.clone(), PendingApproval {
+                chat_id,
+                message_id: -1, // Placeholder
+                tx: tx_decision,
+                timeout_at: deadline,
+            });
+        }
 
         // Build UI request
         let ui_req = ApprovalUIRequest {
             call_id: call_id.clone(),
             chat_id,
-            tool_name: tool.clone(),
-            arguments: args.clone(),
+            tool_name: tool,
+            arguments: args,
             respond_msg_id: tx_msg_id,
         };
 
         // Send UI request to Telegram service
         if self.ui_tx.send(ui_req).await.is_err() {
-            // UI service gone
+            // UI service gone, cleanup
+            let mut map = self.pending.lock().await;
+            map.remove(&call_id);
             return None;
         }
 
-        // Wait for the message_id with overall timeout.
-        let deadline = Instant::now() + timeout;
-        let msg_id = match timeout_at(deadline, rx_msg_id).await {
-            Ok(Ok(id)) => id,
-            _ => {
-                // UI response timed out or channel closed
-                return None;
-            }
-        };
+        let mut msg_id_fut = Box::pin(rx_msg_id);
+        let mut decision_fut = Box::pin(rx_decision);
+        let mut got_msg_id = false;
 
-        // Now create pending entry with the received message_id.
-        let (tx_decision, rx_decision) = oneshot::channel();
-        let entry = PendingApproval {
-            chat_id,
-            message_id: msg_id,
-            tx: tx_decision,
-            timeout_at: deadline,
-        };
-
-        {
-            let mut map = self.pending.lock().await;
-            map.insert(call_id.clone(), entry);
-        }
-
-        // Wait for decision (with remaining time)
-        tokio::select! {
-            res = rx_decision => res.ok(),
-            _ = sleep_until(deadline) => {
-                // Timeout: remove entry
-                let mut map = self.pending.lock().await;
-                map.remove(&call_id);
-                None
+        loop {
+            tokio::select! {
+                res = &mut decision_fut => {
+                    // Decision received
+                    return res.ok();
+                }
+                res = &mut msg_id_fut, if !got_msg_id => {
+                    got_msg_id = true;
+                    if let Ok(id) = res {
+                        // Update entry with real message_id
+                        let mut map = self.pending.lock().await;
+                        if let Some(entry) = map.get_mut(&call_id) {
+                            entry.message_id = id;
+                        }
+                    }
+                }
+                _ = sleep_until(deadline) => {
+                    // Timeout
+                    let mut map = self.pending.lock().await;
+                    map.remove(&call_id);
+                    return None;
+                }
             }
         }
     }

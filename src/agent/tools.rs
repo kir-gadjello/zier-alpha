@@ -8,6 +8,7 @@ use tracing::debug;
 
 pub mod external;
 pub mod mcp;
+pub mod path;
 pub mod registry;
 pub mod runner;
 pub mod script;
@@ -15,9 +16,11 @@ pub mod system;
 
 use super::providers::ToolSchema;
 use crate::agent::DiskMonitor;
-use crate::config::{Config, WorkdirStrategy};
+use crate::config::{Config, SandboxPolicy, WorkdirStrategy};
 use crate::memory::MemoryManager;
 pub use script::ScriptTool;
+
+use path::{check_path_permitted, PermissionMode};
 
 #[derive(Debug, Clone)]
 pub struct ToolResult {
@@ -68,18 +71,21 @@ pub fn create_default_tools_with_project(
             workspace.clone(),
             project_dir.clone(),
             strategy.clone(),
+            config.sandbox.clone(),
         )),
         Arc::new(WriteFileTool::new(
             workspace.clone(),
             project_dir.clone(),
             strategy.clone(),
             disk_monitor.clone(),
+            config.sandbox.clone(),
         )),
         Arc::new(EditFileTool::new(
             workspace.clone(),
             project_dir.clone(),
             strategy.clone(),
             disk_monitor.clone(),
+            config.sandbox.clone(),
         )),
         memory_search_tool,
         Arc::new(MemoryGetTool::new(workspace)),
@@ -214,14 +220,13 @@ impl Tool for BashTool {
 
         // Run command with timeout
         let timeout_duration = std::time::Duration::from_millis(timeout_ms);
-        let output = tokio::time::timeout(
-            timeout_duration,
-            tokio::process::Command::new("bash")
-                .arg("-c")
-                .arg(command)
-                .current_dir(run_dir)
-                .output(),
-        )
+        let mut cmd = tokio::process::Command::new("bash");
+        cmd.arg("-c")
+            .arg(command)
+            .current_dir(run_dir)
+            .kill_on_drop(true);
+
+        let output = tokio::time::timeout(timeout_duration, cmd.output())
         .await
         .map_err(|_| anyhow::anyhow!("Command timed out after {}ms", timeout_ms))??;
 
@@ -257,14 +262,21 @@ pub struct ReadFileTool {
     workspace: PathBuf,
     project_dir: PathBuf,
     strategy: WorkdirStrategy,
+    policy: SandboxPolicy,
 }
 
 impl ReadFileTool {
-    pub fn new(workspace: PathBuf, project_dir: PathBuf, strategy: WorkdirStrategy) -> Self {
+    pub fn new(
+        workspace: PathBuf,
+        project_dir: PathBuf,
+        strategy: WorkdirStrategy,
+        policy: SandboxPolicy,
+    ) -> Self {
         Self {
             workspace,
             project_dir,
             strategy,
+            policy,
         }
     }
 }
@@ -308,6 +320,14 @@ impl Tool for ReadFileTool {
 
         let resolved_path = resolve_path(path, &self.workspace, &self.project_dir, &self.strategy);
 
+        check_path_permitted(
+            &resolved_path,
+            &self.policy,
+            &self.workspace,
+            &self.project_dir,
+            PermissionMode::Read,
+        )?;
+
         debug!("Reading file: {}", resolved_path.display());
 
         let content = fs::read_to_string(&resolved_path)?;
@@ -340,6 +360,7 @@ pub struct WriteFileTool {
     project_dir: PathBuf,
     strategy: WorkdirStrategy,
     disk_monitor: Arc<DiskMonitor>,
+    policy: SandboxPolicy,
 }
 
 impl WriteFileTool {
@@ -348,12 +369,14 @@ impl WriteFileTool {
         project_dir: PathBuf,
         strategy: WorkdirStrategy,
         disk_monitor: Arc<DiskMonitor>,
+        policy: SandboxPolicy,
     ) -> Self {
         Self {
             workspace,
             project_dir,
             strategy,
             disk_monitor,
+            policy,
         }
     }
 }
@@ -402,6 +425,14 @@ impl Tool for WriteFileTool {
 
         let resolved_path = resolve_path(path, &self.workspace, &self.project_dir, &self.strategy);
 
+        check_path_permitted(
+            &resolved_path,
+            &self.policy,
+            &self.workspace,
+            &self.project_dir,
+            PermissionMode::Write,
+        )?;
+
         debug!("Writing file: {}", resolved_path.display());
 
         // Create parent directories if needed
@@ -425,6 +456,7 @@ pub struct EditFileTool {
     project_dir: PathBuf,
     strategy: WorkdirStrategy,
     disk_monitor: Arc<DiskMonitor>,
+    policy: SandboxPolicy,
 }
 
 impl EditFileTool {
@@ -433,12 +465,14 @@ impl EditFileTool {
         project_dir: PathBuf,
         strategy: WorkdirStrategy,
         disk_monitor: Arc<DiskMonitor>,
+        policy: SandboxPolicy,
     ) -> Self {
         Self {
             workspace,
             project_dir,
             strategy,
             disk_monitor,
+            policy,
         }
     }
 }
@@ -498,6 +532,22 @@ impl Tool for EditFileTool {
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
         let resolved_path = resolve_path(path, &self.workspace, &self.project_dir, &self.strategy);
+
+        // Edit requires both Read and Write permission
+        check_path_permitted(
+            &resolved_path,
+            &self.policy,
+            &self.workspace,
+            &self.project_dir,
+            PermissionMode::Read,
+        )?;
+        check_path_permitted(
+            &resolved_path,
+            &self.policy,
+            &self.workspace,
+            &self.project_dir,
+            PermissionMode::Write,
+        )?;
 
         debug!("Editing file: {}", resolved_path.display());
 

@@ -8,6 +8,9 @@ use anyhow::Result;
 use fs2::FileExt;
 use std::fs::{self, File};
 use std::path::PathBuf;
+use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Advisory file lock for the agent workspace.
 ///
@@ -16,16 +19,20 @@ use std::path::PathBuf;
 #[derive(Clone)]
 pub struct WorkspaceLock {
     path: PathBuf,
+    pid_path: PathBuf,
 }
 
 /// RAII guard that releases the lock on drop.
 pub struct WorkspaceLockGuard {
     file: File,
+    pid_path: PathBuf,
 }
 
 impl Drop for WorkspaceLockGuard {
     fn drop(&mut self) {
         let _ = self.file.unlock();
+        // Best effort cleanup of PID file
+        let _ = fs::remove_file(&self.pid_path);
     }
 }
 
@@ -36,27 +43,100 @@ impl WorkspaceLock {
     pub fn new() -> Result<Self> {
         let state_dir = crate::agent::get_state_dir()?;
         let path = state_dir.join("workspace.lock");
+        let pid_path = state_dir.join("workspace.lock.pid");
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        Ok(Self { path })
+        Ok(Self { path, pid_path })
+    }
+
+    /// Create a new WorkspaceLock at a custom path.
+    pub fn at_path(path: PathBuf) -> Result<Self> {
+        let pid_path = path.with_extension("lock.pid");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Ok(Self { path, pid_path })
     }
 
     /// Blocking acquire — waits until the lock is available.
     ///
     /// Returns an RAII guard that releases the lock on drop.
     pub fn acquire(&self) -> Result<WorkspaceLockGuard> {
-        let file = File::create(&self.path)?;
-        file.lock_exclusive()?;
-        Ok(WorkspaceLockGuard { file })
+        let start = Instant::now();
+        let timeout = Duration::from_secs(30);
+
+        loop {
+            let file = File::create(&self.path)?;
+            match file.try_lock_exclusive() {
+                Ok(()) => {
+                    // Write PID
+                    let _ = fs::write(&self.pid_path, std::process::id().to_string());
+                    return Ok(WorkspaceLockGuard {
+                        file,
+                        pid_path: self.pid_path.clone(),
+                    });
+                }
+                Err(ref e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || (cfg!(unix)
+                            && (e.raw_os_error() == Some(35) || e.raw_os_error() == Some(11))) =>
+                {
+                    if start.elapsed() > timeout {
+                        if self.check_stale_lock() {
+                            continue;
+                        } else {
+                            anyhow::bail!("Timed out acquiring workspace lock");
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    fn check_stale_lock(&self) -> bool {
+        if let Ok(content) = fs::read_to_string(&self.pid_path) {
+            if let Ok(pid) = content.trim().parse::<u32>() {
+                if !self.is_process_running(pid) {
+                    tracing::warn!("Breaking stale workspace lock from dead PID {}", pid);
+                    let _ = fs::remove_file(&self.path);
+                    let _ = fs::remove_file(&self.pid_path);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    fn is_process_running(&self, pid: u32) -> bool {
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(true) // Assume running if check fails
+    }
+
+    #[cfg(not(unix))]
+    fn is_process_running(&self, _pid: u32) -> bool {
+        true
     }
 
     /// Non-blocking try-acquire — returns `None` if another process holds it.
     pub fn try_acquire(&self) -> Result<Option<WorkspaceLockGuard>> {
         let file = File::create(&self.path)?;
         match file.try_lock_exclusive() {
-            Ok(()) => Ok(Some(WorkspaceLockGuard { file })),
+            Ok(()) => {
+                let _ = fs::write(&self.pid_path, std::process::id().to_string());
+                Ok(Some(WorkspaceLockGuard {
+                    file,
+                    pid_path: self.pid_path.clone(),
+                }))
+            }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             #[cfg(unix)]
             Err(ref e) if e.raw_os_error() == Some(35) || e.raw_os_error() == Some(11) => {
@@ -77,6 +157,7 @@ mod tests {
     fn test_lock(dir: &std::path::Path) -> WorkspaceLock {
         WorkspaceLock {
             path: dir.join("test.lock"),
+            pid_path: dir.join("test.lock.pid"),
         }
     }
 
