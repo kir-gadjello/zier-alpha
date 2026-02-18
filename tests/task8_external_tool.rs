@@ -1,6 +1,4 @@
 use anyhow::Result;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use zier_alpha::agent::tools::external::ExternalTool;
 use zier_alpha::agent::tools::Tool;
 use zier_alpha::config::{SandboxPolicy, WorkdirStrategy};

@@ -1,7 +1,5 @@
 use anyhow::Result;
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
 use zier_alpha::agent::tools::{ReadFileTool, Tool, WriteFileTool};
 use zier_alpha::config::{SandboxPolicy, WorkdirStrategy};
 use zier_alpha::agent::DiskMonitor;

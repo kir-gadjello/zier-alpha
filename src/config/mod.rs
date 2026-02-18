@@ -995,21 +995,21 @@ impl Config {
             match self.server.audio.backend.as_str() {
                 "local" => {
                     if self.server.audio.local_command.is_none() {
-                        eprintln!("Warning: Audio backend 'local' enabled but no local_command configured; audio transcription will be disabled.");
+                        tracing::warn!("Audio backend 'local' enabled but no local_command configured; audio transcription will be disabled.");
                     }
                 }
                 "openai" => {
                     if self.providers.openai.is_none() {
-                        eprintln!("Warning: Audio backend 'openai' enabled but OpenAI provider not configured; audio transcription will be disabled.");
+                        tracing::warn!("Audio backend 'openai' enabled but OpenAI provider not configured; audio transcription will be disabled.");
                     }
                 }
                 "gemini" => {
                     if self.providers.gemini.is_none() {
-                        eprintln!("Warning: Audio backend 'gemini' enabled but Gemini provider not configured; audio transcription will be disabled.");
+                        tracing::warn!("Audio backend 'gemini' enabled but Gemini provider not configured; audio transcription will be disabled.");
                     }
                 }
                 _ => {
-                    eprintln!("Warning: Unknown audio backend '{}'; audio transcription will be disabled.", self.server.audio.backend);
+                    tracing::warn!("Unknown audio backend '{}'; audio transcription will be disabled.", self.server.audio.backend);
                 }
             }
         }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio::time::{sleep_until, timeout_at, Instant};
+use tokio::time::{sleep_until, Instant};
 
 /// Decision returned by an approval request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

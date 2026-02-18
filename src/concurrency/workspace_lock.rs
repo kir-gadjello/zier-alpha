@@ -84,31 +84,23 @@ impl WorkspaceLock {
                             && (e.raw_os_error() == Some(35) || e.raw_os_error() == Some(11))) =>
                 {
                     if start.elapsed() > timeout {
-                        if self.check_stale_lock() {
-                            continue;
-                        } else {
-                            anyhow::bail!("Timed out acquiring workspace lock");
+                        // Check PID for debugging, but do not delete file (dangerous with fs2)
+                        if let Ok(content) = fs::read_to_string(&self.pid_path) {
+                            if let Ok(pid) = content.trim().parse::<u32>() {
+                                if !self.is_process_running(pid) {
+                                    tracing::warn!("Timeout acquiring lock. Owner PID {} appears dead, but lock is still held (OS issue?).", pid);
+                                } else {
+                                    tracing::warn!("Timeout acquiring lock. Held by running PID {}.", pid);
+                                }
+                            }
                         }
+                        anyhow::bail!("Timed out acquiring workspace lock");
                     }
                     thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => return Err(e.into()),
             }
         }
-    }
-
-    fn check_stale_lock(&self) -> bool {
-        if let Ok(content) = fs::read_to_string(&self.pid_path) {
-            if let Ok(pid) = content.trim().parse::<u32>() {
-                if !self.is_process_running(pid) {
-                    tracing::warn!("Breaking stale workspace lock from dead PID {}", pid);
-                    let _ = fs::remove_file(&self.path);
-                    let _ = fs::remove_file(&self.pid_path);
-                    return true;
-                }
-            }
-        }
-        false
     }
 
     #[cfg(unix)]

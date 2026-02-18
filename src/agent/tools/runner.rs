@@ -4,8 +4,6 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{debug, warn};
 use crate::config::SandboxPolicy;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 
 #[cfg(target_os = "macos")]
 pub async fn run_sandboxed_command(
